@@ -16,6 +16,12 @@ from captum.attr import Saliency
 from captum.attr import DeepLift
 from captum.attr import NoiseTunnel
 from captum.attr import visualization as viz
+from captum.attr import LayerConductance, NeuronConductance
+from captum.metrics import infidelity_perturb_func_decorator, infidelity
+
+from sklearn.cluster import KMeans
+import numpy as np
+
 
 USE_PRETRAINED_MODEL = True
 
@@ -61,6 +67,20 @@ class Net(nn.Module):
         x = self.relu3(self.fc1(x))
         x = self.relu4(self.fc2(x))
         x = self.fc3(x)
+        return x
+
+# Define a new module that combines fc1 and relu3
+class Fc1ReluModule(nn.Module):
+    def __init__(self, net):
+        super(Fc1ReluModule, self).__init__()
+        # Extract the relevant layers from the original model
+        self.fc1 = net.fc1
+        self.relu3 = net.relu3
+
+    def forward(self, x):
+        # Apply fc1 and relu3 in sequence
+        x = self.fc1(x)
+        x = self.relu3(x)
         return x
 
 def train(trainloader, testloader, classes, device='cuda:0'):
@@ -115,6 +135,12 @@ def attribute_image_features(algorithm, input, labels, ind, **kwargs):
                                              )
     
     return tensor_attributions
+
+def perturb_fn(inputs):
+    noise = torch.tensor(np.random.normal(0, 0.003, inputs.shape)).float()
+    breakpoint()
+    return noise, inputs - noise
+    
 
 def test_one(testloader, classes, net):
     dataiter = iter(testloader)
@@ -180,6 +206,124 @@ def test_one(testloader, classes, net):
                             title="Overlayed DeepLift")
     plt.savefig('images/deepLift.png')
 
+def get_neuron_conductance(net, images, labels, classes, neuron_index):
+    # print images
+    imshow(torchvision.utils.make_grid(images))
+    print('GroundTruth: ', ' '.join('%5s' % classes[labels[j]] for j in range(4)))
+
+    outputs = net(images)
+    _, predicted = torch.max(outputs, 1)
+    
+    # target_layer = next(net.children())
+    target_layer = net.fc1
+    neuron_cond = NeuronConductance(net, target_layer)
+    attribution = neuron_cond.attribute(images, neuron_selector=neuron_index, target=labels)
+    
+    return attribution
+
+def get_layer_conductance(net, images, labels, classes):
+    # print images
+    imshow(torchvision.utils.make_grid(images))
+    print('GroundTruth: ', ' '.join('%5s' % classes[labels[j]] for j in range(4)))
+
+    outputs = net(images)
+    _, predicted = torch.max(outputs, 1)
+    
+    # target_layer = next(net.children())
+    target_layer = net.fc1
+    neuron_cond = LayerConductance(net, target_layer)
+    attribution = neuron_cond.attribute(images, target=labels)
+    
+    return attribution
+
+def cluster_important_neurons(importance_scores, n_clusters=5):
+    # Reshape for KMeans (needs 2D input)
+    scores = importance_scores.cpu().detach().numpy().reshape(-1, 1)
+
+    # Perform KMeans clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+    clusters = kmeans.fit_predict(scores)
+
+    return clusters, kmeans.cluster_centers_
+
+def compute_idc_coverage(testloader, model, clusters, centroids, classes, layer_number=4):
+    model.eval()
+    covered_combinations = set()
+
+    for inputs, labels in testloader:
+        for i in range(inputs.size(0)):  # Loop over batch
+            
+            # Get importance scores for the specific input
+            importance_scores = get_layer_conductance(net, inputs, labels, classes)
+            layer_scores = importance_scores[i]
+            
+            # Map the layer's importance scores to clusters
+            layer_clusters = assign_clusters(layer_scores, centroids)
+            
+            # Add the clusters combination (tuple) to the covered_combinations set
+            covered_combinations.add(tuple(layer_clusters))
+
+    # Total possible combinations
+    total_combinations = np.prod([len(centroids)] * len(clusters))
+    
+    # Calculate IDC coverage
+    coverage = len(covered_combinations) / total_combinations
+    return coverage
+
+def assign_clusters(scores, centroids):
+    """Assigns each score to its closest centroid."""
+    clusters = []
+    for score in scores:
+        distances = np.linalg.norm(centroids - score.detach().numpy(), axis=1)  # Calculate distances from centroids
+        clusters.append(np.argmin(distances))  # Assign to closest cluster
+    return clusters
+
+def get_layer_outs(model, inputs, skip=[]):
+        outputs = []
+        hooks = []
+
+        def hook_fn(module, input, output):
+            outputs.append(output)
+        
+        # Register hooks to the layers except those specified in skip
+        for index, layer in enumerate(model.children()):
+            if index not in skip:
+                hooks.append(layer.register_forward_hook(hook_fn))
+
+        # Forward pass to capture the outputs
+        model.eval()
+        with torch.no_grad():
+            _ = model(inputs)
+
+        # Remove hooks
+        for hook in hooks:
+            hook.remove()
+
+        return outputs
+
+def get_activation(name, activation):
+    def hook(model, input, output):
+        activation[name] = output.detach()
+    return hook
+
+def infidelity_metric(net, perturb_fn, inputs, attribution, layer_index=6):
+    
+    from captum.attr import IntegratedGradients
+    
+    train_layer_outs = get_layer_outs(net, inputs)
+    # activation = {}
+    # net.fc1.register_forward_hook(get_activation('fc1', activation))
+    # net.relu3.register_forward_hook(get_activation('relu3', activation))
+    new_inputs = train_layer_outs[layer_index - 1].view(-1, 16 * 5 * 5)
+    
+    # new_inputs = train_layer_outs[layer_index+1]
+    model_new = Fc1ReluModule(net)
+    ig = IntegratedGradients(model_new)
+    attribution_new = ig.attribute(new_inputs, target=0)
+    infid = infidelity(model_new, perturb_fn, new_inputs, attribution_new)
+    
+    return infid
+
 if __name__ == '__main__':
     trainloader, testloader, classes = prepare_data()
     net = Net()
@@ -187,4 +331,24 @@ if __name__ == '__main__':
     net.load_state_dict(torch.load('models/cifar_torchvision.pt'))
     
     # A demo test example
-    test_one(testloader, classes, net)
+    # test_one(testloader, classes, net)
+    
+    # Further example, get each neruone's attribution
+    dataiter = iter(testloader)
+    images, labels = next(dataiter)
+    
+    attribution = get_layer_conductance(net, images, labels, classes)
+    # attribution = get_neuron_conductance(net, images, labels, classes, 2)
+
+    print(attribution.shape)
+    clusters, centroids = cluster_important_neurons(attribution)
+    # print("Clusters:", clusters)
+    print("Cluster Centroids:", centroids)
+    
+    # Compute IDC coverage
+    # idc_coverage = compute_idc_coverage(testloader, net, clusters, centroids, classes)
+    # print(f"IDC Coverage: {idc_coverage * 100:.2f}%")
+    
+    # Infidelity metric
+    infid = infidelity_metric(net, perturb_fn, images, attribution)
+    print(f"Infidelity: {infid:.2f}")
