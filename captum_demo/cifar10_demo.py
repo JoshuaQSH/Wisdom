@@ -20,10 +20,46 @@ from captum.attr import LayerConductance, NeuronConductance
 from captum.metrics import infidelity_perturb_func_decorator, infidelity
 
 from sklearn.cluster import KMeans
-import numpy as np
+from sklearn.metrics import silhouette_score
 
+import json
+import os
 
 USE_PRETRAINED_MODEL = True
+
+def get_class_data(dataloader, classes, target_class):
+    class_index = classes.index(target_class)
+
+    filtered_data = []
+    filtered_labels = []
+    for inputs, labels in dataloader:
+        for i, l in zip(inputs, labels):
+            if l == class_index:
+                filtered_data.append(i)
+                filtered_labels.append(l)
+    
+    if filtered_data:
+        return torch.stack(filtered_data), torch.tensor(filtered_labels)
+    else:
+        return None, None
+
+def save_importance_scores(importance_scores, mean_importance, filename, class_label):
+    scores = importance_scores.cpu().detach().numpy().tolist()
+    mean_scores = mean_importance.cpu().detach().numpy().tolist()
+    data = {
+        "class_label": class_label,
+        "importance_scores": scores,
+        "mean_importance": mean_scores
+    }
+
+    with open(filename, 'w') as f:
+        json.dump(data, f)
+    print(f"Importance scores saved to {filename}")
+
+def load_importance_scores(filename):
+    with open(filename, 'r') as f:
+        data = json.load(f)
+    return torch.tensor(data["importance_scores"]), torch.tensor(data["mean_importance"]), data["class_label"]
 
 def prepare_data():
     transform = transforms.Compose(
@@ -91,7 +127,8 @@ def train(trainloader, testloader, classes, device='cuda:0'):
     
     if USE_PRETRAINED_MODEL:
         print("Using existing trained model")
-        net.load_state_dict(torch.load('models/cifar_torchvision.pt'))
+        # net.load_state_dict(torch.load('models/cifar_torchvision.pt'))
+        net.load_state_dict(torch.load("C:\\Users\\lrr550\\project\\torch-deepimportance\\captum_demo\\models\\cifar_torchvision.pt"))
     else:
         for epoch in tqdm(range(5)):  # loop over the dataset multiple times
             running_loss = 0.0
@@ -124,7 +161,9 @@ def imshow(img):
     img = img / 2 + 0.5     # unnormalize
     npimg = img.numpy()
     plt.imshow(np.transpose(npimg, (1, 2, 0)))
-    plt.savefig('images/cifar10.png')
+    # plt.savefig('images/cifar10.png')
+    plt.savefig("C:\\Users\\lrr550\\project\\torch-deepimportance\\captum_demo\\images\\cifar10.png")
+
     # plt.show()
     
 def attribute_image_features(algorithm, input, labels, ind, **kwargs):
@@ -138,7 +177,6 @@ def attribute_image_features(algorithm, input, labels, ind, **kwargs):
 
 def perturb_fn(inputs):
     noise = torch.tensor(np.random.normal(0, 0.003, inputs.shape)).float()
-    breakpoint()
     return noise, inputs - noise
     
 
@@ -223,8 +261,8 @@ def get_neuron_conductance(net, images, labels, classes, neuron_index):
 
 def get_layer_conductance(net, images, labels, classes):
     # print images
-    imshow(torchvision.utils.make_grid(images))
-    print('GroundTruth: ', ' '.join('%5s' % classes[labels[j]] for j in range(4)))
+    # imshow(torchvision.utils.make_grid(images))
+    print("GroundTruth: {}, Model Layer: {}".format(classes[labels[0]], net.fc1))
 
     outputs = net(images)
     _, predicted = torch.max(outputs, 1)
@@ -234,41 +272,73 @@ def get_layer_conductance(net, images, labels, classes):
     neuron_cond = LayerConductance(net, target_layer)
     attribution = neuron_cond.attribute(images, target=labels)
     
-    return attribution
+    return attribution, torch.mean(attribution, dim=0)
 
-def cluster_important_neurons(importance_scores, n_clusters=5):
-    # Reshape for KMeans (needs 2D input)
-    scores = importance_scores.cpu().detach().numpy().reshape(-1, 1)
+# def cluster_important_neurons_old(importance_scores, n_clusters=5):
+#     # Reshape for KMeans (needs 2D input)
+#     scores = importance_scores.cpu().detach().numpy().reshape(-1, 1)
 
-    # Perform KMeans clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-    clusters = kmeans.fit_predict(scores)
+#     # Perform KMeans clustering
+#     kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+#     clusters = kmeans.fit_predict(scores)
 
-    return clusters, kmeans.cluster_centers_
+#     return clusters, kmeans.cluster_centers_
 
-def compute_idc_coverage(testloader, model, clusters, centroids, classes, layer_number=4):
+# TODO: We choose the the cluster number based on the silhouette score, could be customized in the future
+def find_optimal_clusters(importance_scores, max_k=20):
+    scores = []
+    importance_scores_np = importance_scores.cpu().numpy().reshape(-1, 1)
+    for k in range(2, max_k + 1):
+        kmeans = KMeans(n_clusters=k, random_state=0)
+        labels = kmeans.fit_predict(importance_scores_np)
+        score = silhouette_score(importance_scores_np, labels)
+        scores.append((k, score))
+    # Select k with the highest silhouette score
+    best_k = max(scores, key=lambda x: x[1])[0]
+    print(f"Optimal number of clusters: {best_k}")
+    
+    return best_k
+
+# Assign Test inputs to Clusters
+def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
+    importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
+    cluster_labels = kmeans_model.predict(importance_scores_np)
+    return cluster_labels
+
+# Track Combinations of Clusters Activated
+def compute_idc_coverage(model, inputs_images, labels, classes, kmeans_model, top_m_neurons=None):
     model.eval()
     covered_combinations = set()
-
-    for inputs, labels in testloader:
-        for i in range(inputs.size(0)):  # Loop over batch
-            
-            # Get importance scores for the specific input
-            importance_scores = get_layer_conductance(net, inputs, labels, classes)
-            layer_scores = importance_scores[i]
-            
-            # Map the layer's importance scores to clusters
-            layer_clusters = assign_clusters(layer_scores, centroids)
-            
-            # Add the clusters combination (tuple) to the covered_combinations set
-            covered_combinations.add(tuple(layer_clusters))
-
-    # Total possible combinations
-    total_combinations = np.prod([len(centroids)] * len(clusters))
+    _, layer_importance_scores = get_layer_conductance(model, inputs_images, labels, classes)
+    if top_m_neurons:
+        # Get indices of top m neurons
+        _, indices = torch.topk(layer_importance_scores, top_m_neurons)
+        # Select importance scores for top m neurons
+        selected_scores = layer_importance_scores[indices]
+        # Assign clusters
+        cluster_labels = assign_clusters_to_importance_scores(selected_scores, kmeans_model)
+    else:
+        # Assign clusters to all neurons
+        cluster_labels = assign_clusters_to_importance_scores(layer_importance_scores, kmeans_model)
+        indices = torch.arange(len(layer_importance_scores))
     
-    # Calculate IDC coverage
-    coverage = len(covered_combinations) / total_combinations
-    return coverage
+    # Record the combination (as a tuple) of cluster labels
+    combination = tuple(cluster_labels.tolist())
+    covered_combinations.add(combination)
+    
+    # Compute total possible combinations
+    n_clusters = kmeans_model.n_clusters
+    n_neurons = top_m_neurons if top_m_neurons else len(layer_importance_scores)
+    total_possible_combinations = n_clusters ** n_neurons
+    
+    idc_value = len(covered_combinations) / total_possible_combinations
+    return idc_value, covered_combinations, total_possible_combinations
+
+def cluster_importance_scores(importance_scores, n_clusters): 
+    importance_scores_np = importance_scores.cpu().numpy().reshape(-1, 1) 
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0) 
+    cluster_labels = kmeans.fit_predict(importance_scores_np) 
+    return cluster_labels, kmeans
 
 def assign_clusters(scores, centroids):
     """Assigns each score to its closest centroid."""
@@ -326,29 +396,46 @@ def infidelity_metric(net, perturb_fn, inputs, attribution, layer_index=6):
 
 if __name__ == '__main__':
     trainloader, testloader, classes = prepare_data()
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     net = Net()
-    train(trainloader, testloader, classes)
-    net.load_state_dict(torch.load('models/cifar_torchvision.pt'))
-    
+    train(trainloader, testloader, classes, device=device)
+    # net.load_state_dict(torch.load('models/cifar_torchvision.pt'))
+    net.load_state_dict(torch.load("C:\\Users\\lrr550\\project\\torch-deepimportance\\captum_demo\\models\\cifar_torchvision.pt"))
+
     # A demo test example
     # test_one(testloader, classes, net)
     
     # Further example, get each neruone's attribution
-    dataiter = iter(testloader)
-    images, labels = next(dataiter)
+    # dataiter = iter(testloader)
+    # images, labels = next(dataiter)
     
-    attribution = get_layer_conductance(net, images, labels, classes)
+    if os.path.exists('plane_importance.json'):
+        attribution, mean_attribution, labels = load_importance_scores('plane_importance.json')
+        test_images, test_labels = get_class_data(testloader, classes, 'plane')
+    else:
+        images, labels = get_class_data(trainloader, classes, 'plane')
+        attribution, mean_attribution = get_layer_conductance(net, images, labels, classes)
+        save_importance_scores(attribution, mean_attribution, 'plane_importance.json', 'plane')
     # attribution = get_neuron_conductance(net, images, labels, classes, 2)
-
-    print(attribution.shape)
-    clusters, centroids = cluster_important_neurons(attribution)
-    # print("Clusters:", clusters)
-    print("Cluster Centroids:", centroids)
     
-    # Compute IDC coverage
-    # idc_coverage = compute_idc_coverage(testloader, net, clusters, centroids, classes)
-    # print(f"IDC Coverage: {idc_coverage * 100:.2f}%")
+    optimal_k = find_optimal_clusters(mean_attribution)
+    cluster_labels, kmeans_model = cluster_importance_scores(mean_attribution, optimal_k)
+    
+    # clusters, centroids = cluster_important_neurons_old(mean_attribution)
+    # print("Clusters:", clusters)
+    # print("Cluster Centroids:", centroids)
+    
+    ### Compute IDC coverage
+    idc_value, covered_combinations, total_combinations = compute_idc_coverage(
+        model=net,
+        inputs_images=test_images,
+        labels=test_labels,
+        classes=classes,
+        kmeans_model=kmeans_model,
+        top_m_neurons=None  # Adjust as needed
+    )
+    print(f"IDC Coverage: {idc_value * 100:.6f}%")
     
     # Infidelity metric
-    infid = infidelity_metric(net, perturb_fn, images, attribution)
-    print(f"Infidelity: {infid:.2f}")
+    # infid = infidelity_metric(net, perturb_fn, images, attribution)
+    # print(f"Infidelity: {infid:.2f}")
