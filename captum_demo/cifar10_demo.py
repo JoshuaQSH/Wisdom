@@ -4,12 +4,12 @@ from tqdm import tqdm
 
 import torch
 import torchvision
-import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import models
+from torchvision import transforms
 
 from captum.attr import IntegratedGradients
 from captum.attr import Saliency
@@ -25,7 +25,9 @@ from sklearn.metrics import silhouette_score
 import json
 import os
 
-USE_PRETRAINED_MODEL = True
+from utils import prepare_data_cifa
+from model_hub import LeNet, Net
+from matplotlib.colors import LinearSegmentedColormap
 
 def get_class_data(dataloader, classes, target_class):
     class_index = classes.index(target_class)
@@ -61,50 +63,6 @@ def load_importance_scores(filename):
         data = json.load(f)
     return torch.tensor(data["importance_scores"]), torch.tensor(data["mean_importance"]), data["class_label"]
 
-def prepare_data():
-    transform = transforms.Compose(
-    [transforms.ToTensor(),
-     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
-    trainset = torchvision.datasets.CIFAR10(root='../data', train=True,
-                                            download=True, transform=transform)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
-                                            shuffle=True, num_workers=2)
-
-    testset = torchvision.datasets.CIFAR10(root='../data', train=False,
-                                        download=True, transform=transform)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=4,
-                                            shuffle=False, num_workers=2)
-
-    classes = ('plane', 'car', 'bird', 'cat',
-            'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-    
-    return trainloader, testloader, classes
-
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-        self.relu1 = nn.ReLU()
-        self.relu2 = nn.ReLU()
-        self.relu3 = nn.ReLU()
-        self.relu4 = nn.ReLU()
-
-    def forward(self, x):
-        x = self.pool1(self.relu1(self.conv1(x)))
-        x = self.pool2(self.relu2(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = self.relu3(self.fc1(x))
-        x = self.relu4(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
 # Define a new module that combines fc1 and relu3
 class Fc1ReluModule(nn.Module):
     def __init__(self, net):
@@ -119,18 +77,16 @@ class Fc1ReluModule(nn.Module):
         x = self.relu3(x)
         return x
 
-def train(trainloader, testloader, classes, device='cuda:0'):
-    net = Net()
+def train(net, trainloader, device='cuda:0', model_path='models/cifar_torchvision.pt', pretrained=False, epochs=5):
     net = net.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
     
-    if USE_PRETRAINED_MODEL:
+    if pretrained:
         print("Using existing trained model")
-        # net.load_state_dict(torch.load('models/cifar_torchvision.pt'))
-        net.load_state_dict(torch.load("C:\\Users\\lrr550\\project\\torch-deepimportance\\captum_demo\\models\\cifar_torchvision.pt"))
+        net.load_state_dict(torch.load(model_path))
     else:
-        for epoch in tqdm(range(5)):  # loop over the dataset multiple times
+        for epoch in tqdm(range(epochs)):  # loop over the dataset multiple times
             running_loss = 0.0
             for i, data in enumerate(trainloader, 0):
                 # get the inputs
@@ -155,14 +111,14 @@ def train(trainloader, testloader, classes, device='cuda:0'):
 
         print('Finished Training')
         net = net.cpu()
-        torch.save(net.state_dict(), 'models/cifar_torchvision.pt')
+        torch.save(net.state_dict(), model_path)
                 
-def imshow(img):
+def imshow(img, img_path='images/cifar10.png'):
     img = img / 2 + 0.5     # unnormalize
     npimg = img.numpy()
     plt.imshow(np.transpose(npimg, (1, 2, 0)))
     # plt.savefig('images/cifar10.png')
-    plt.savefig("C:\\Users\\lrr550\\project\\torch-deepimportance\\captum_demo\\images\\cifar10.png")
+    plt.savefig(img_path)
 
     # plt.show()
     
@@ -178,16 +134,22 @@ def attribute_image_features(algorithm, input, labels, ind, **kwargs):
 def perturb_fn(inputs):
     noise = torch.tensor(np.random.normal(0, 0.003, inputs.shape)).float()
     return noise, inputs - noise
+
+def test_one(images, labels, classes, net, device, get_top=100):
+    # dataiter = iter(testloader)
+    # images, labels = next(dataiter)
+
+    print("Getting.. ", classes[labels[0]])
     
-
-def test_one(testloader, classes, net):
-    dataiter = iter(testloader)
-    images, labels = next(dataiter)
-
     # print images
     imshow(torchvision.utils.make_grid(images))
     print('GroundTruth: ', ' '.join('%5s' % classes[labels[j]] for j in range(4)))
-
+    
+    net = net.cpu()
+    # images = images.to(device)
+    if get_top:
+        images = images[:get_top]
+        labels = labels[:get_top]
     outputs = net(images)
     _, predicted = torch.max(outputs, 1)
 
@@ -259,35 +221,38 @@ def get_neuron_conductance(net, images, labels, classes, neuron_index):
     
     return attribution
 
-def get_layer_conductance(net, images, labels, classes):
+def get_layer_conductance(net, images, labels, classes, layer_name='fc1', top_m_images=100):
     # print images
     # imshow(torchvision.utils.make_grid(images))
-    print("GroundTruth: {}, Model Layer: {}".format(classes[labels[0]], net.fc1))
+    net = net.cpu()
+    
+    if top_m_images:
+        images = images[:top_m_images]
+        labels = labels[:top_m_images]
+    
+    net_layer = getattr(net, layer_name)
+    print("GroundTruth: {}, Model Layer: {}".format(classes[labels[0]], net_layer[19]))
 
     outputs = net(images)
     _, predicted = torch.max(outputs, 1)
     
     # target_layer = next(net.children())
-    target_layer = net.fc1
+    # target_layer = net.fc1
+    target_layer = net_layer[19]
     neuron_cond = LayerConductance(net, target_layer)
     attribution = neuron_cond.attribute(images, target=labels)
     
     return attribution, torch.mean(attribution, dim=0)
 
-# def cluster_important_neurons_old(importance_scores, n_clusters=5):
-#     # Reshape for KMeans (needs 2D input)
-#     scores = importance_scores.cpu().detach().numpy().reshape(-1, 1)
-
-#     # Perform KMeans clustering
-#     kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-#     clusters = kmeans.fit_predict(scores)
-
-#     return clusters, kmeans.cluster_centers_
+# Select the top M important neurons based on their importance scores.
+def select_top_neurons(importance_scores, top_m_neurons=5):
+    _, indices = torch.topk(importance_scores, top_m_neurons)
+    return indices
 
 # TODO: We choose the the cluster number based on the silhouette score, could be customized in the future
 def find_optimal_clusters(importance_scores, max_k=20):
     scores = []
-    importance_scores_np = importance_scores.cpu().numpy().reshape(-1, 1)
+    importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
     for k in range(2, max_k + 1):
         kmeans = KMeans(n_clusters=k, random_state=0)
         labels = kmeans.fit_predict(importance_scores_np)
@@ -299,6 +264,17 @@ def find_optimal_clusters(importance_scores, max_k=20):
     
     return best_k
 
+# Assign Test inputs to Clusters (activation values)
+# TODO: Implement this function
+def assign_clusters_to_act_importance_scores(importance_scores, kmeans_model, top_m_neurons=None):
+    if top_m_neurons:
+        # Get indices of top m neurons
+        _, indices = select_top_neurons(importance_scores, top_m_neurons)
+    else:
+        # Cluster based on all the neurons
+        pass
+    pass
+
 # Assign Test inputs to Clusters
 def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
     importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
@@ -306,36 +282,43 @@ def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
     return cluster_labels
 
 # Track Combinations of Clusters Activated
-def compute_idc_coverage(model, inputs_images, labels, classes, kmeans_model, top_m_neurons=None):
+# mode = ['scores', 'activations']
+def compute_idc_coverage(model, inputs_images, labels, classes, kmeans_model, top_m_neurons=None, mode='scores'):
     model.eval()
     covered_combinations = set()
-    _, layer_importance_scores = get_layer_conductance(model, inputs_images, labels, classes)
-    if top_m_neurons:
-        # Get indices of top m neurons
-        _, indices = torch.topk(layer_importance_scores, top_m_neurons)
-        # Select importance scores for top m neurons
-        selected_scores = layer_importance_scores[indices]
-        # Assign clusters
-        cluster_labels = assign_clusters_to_importance_scores(selected_scores, kmeans_model)
+    
+    if mode == 'scores':
+        _, layer_importance_scores = get_layer_conductance(model, inputs_images, labels, classes, layer_name='fc1')
+        if top_m_neurons:
+            # Get indices of top m neurons
+            _, indices = select_top_neurons(layer_importance_scores, top_m_neurons)
+            # Select importance scores for top m neurons
+            selected_scores = layer_importance_scores[indices]
+            # Assign clusters
+            cluster_labels = assign_clusters_to_importance_scores(selected_scores, kmeans_model)
+        else:
+            # Assign clusters to all neurons
+            cluster_labels = assign_clusters_to_importance_scores(layer_importance_scores, kmeans_model)
+            indices = torch.arange(len(layer_importance_scores))
+        
+        # Record the combination (as a tuple) of cluster labels
+        combination = tuple(cluster_labels.tolist())
+        covered_combinations.add(combination)
+        
+        # Compute total possible combinations
+        n_clusters = kmeans_model.n_clusters
+        n_neurons = top_m_neurons if top_m_neurons else len(layer_importance_scores)
+        total_possible_combinations = n_clusters ** n_neurons
+        
+        idc_value = len(covered_combinations) / total_possible_combinations
+    
     else:
-        # Assign clusters to all neurons
-        cluster_labels = assign_clusters_to_importance_scores(layer_importance_scores, kmeans_model)
-        indices = torch.arange(len(layer_importance_scores))
+        raise ValueError(f"Invalid mode: {mode}")
     
-    # Record the combination (as a tuple) of cluster labels
-    combination = tuple(cluster_labels.tolist())
-    covered_combinations.add(combination)
-    
-    # Compute total possible combinations
-    n_clusters = kmeans_model.n_clusters
-    n_neurons = top_m_neurons if top_m_neurons else len(layer_importance_scores)
-    total_possible_combinations = n_clusters ** n_neurons
-    
-    idc_value = len(covered_combinations) / total_possible_combinations
     return idc_value, covered_combinations, total_possible_combinations
 
 def cluster_importance_scores(importance_scores, n_clusters): 
-    importance_scores_np = importance_scores.cpu().numpy().reshape(-1, 1) 
+    importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1) 
     kmeans = KMeans(n_clusters=n_clusters, random_state=0) 
     cluster_labels = kmeans.fit_predict(importance_scores_np) 
     return cluster_labels, kmeans
@@ -394,28 +377,56 @@ def infidelity_metric(net, perturb_fn, inputs, attribution, layer_index=6):
     
     return infid
 
-if __name__ == '__main__':
-    trainloader, testloader, classes = prepare_data()
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    net = Net()
-    train(trainloader, testloader, classes, device=device)
-    # net.load_state_dict(torch.load('models/cifar_torchvision.pt'))
-    net.load_state_dict(torch.load("C:\\Users\\lrr550\\project\\torch-deepimportance\\captum_demo\\models\\cifar_torchvision.pt"))
+def get_model(model_name='vgg16'):
+    if model_name == 'vgg16':
+        model = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
+    elif model_name == 'lenet':
+        model = LeNet()
+    else:
+        model = Net()
+    
+    return model
 
-    # A demo test example
-    # test_one(testloader, classes, net)
+if __name__ == '__main__':
+    
+    # hyperparameters
+    model_path = os.getenv("HOME") + '/torch-deepimportance/captum_demo/models/lenet_cifar10.pt'
+    # model_path = os.getenv("HOME") + '/torch-deepimportance/captum_demo/models/cifar_torchvision.pt'
+
+    data_path = '/data/shenghao/dataset/'
+    importance_file = 'plane_lenet_importance.json'
+    # importance_file = 'plane_importance.json'
+
+    is_cifar10 = True
+    model_name = ['vgg16', 'custom', 'lenet']
+    test_image_name_list = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+    test_image_name = test_image_name_list[0]
+    epochs = 5
+    
+    trainloader, testloader, classes = prepare_data_cifa(data_path=data_path, cifar10=is_cifar10)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    
+    #  Choose the model to use
+    net = get_model(model_name=model_name[2])
+    # Train the model    
+    train(net, trainloader, device=device, model_path=model_path, pretrained=True, epochs=epochs)
+
+    # net.load_state_dict(torch.load('models/cifar_torchvision.pt'))
+    net.load_state_dict(torch.load(model_path))
     
     # Further example, get each neruone's attribution
-    # dataiter = iter(testloader)
-    # images, labels = next(dataiter)
+    images, labels = get_class_data(trainloader, classes, test_image_name)
     
-    if os.path.exists('plane_importance.json'):
-        attribution, mean_attribution, labels = load_importance_scores('plane_importance.json')
-        test_images, test_labels = get_class_data(testloader, classes, 'plane')
+    # A demo test example
+    test_one(images, labels, classes, net, device, 100)
+    
+    if os.path.exists(importance_file):
+        attribution, mean_attribution, labels = load_importance_scores(importance_file)
+        test_images, test_labels = get_class_data(testloader, classes, test_image_name)
     else:
-        images, labels = get_class_data(trainloader, classes, 'plane')
-        attribution, mean_attribution = get_layer_conductance(net, images, labels, classes)
-        save_importance_scores(attribution, mean_attribution, 'plane_importance.json', 'plane')
+        attribution, mean_attribution = get_layer_conductance(net, images, labels, classes, layer_name='features')
+        save_importance_scores(attribution, mean_attribution, importance_file, test_image_name)
+    
     # attribution = get_neuron_conductance(net, images, labels, classes, 2)
     
     optimal_k = find_optimal_clusters(mean_attribution)
@@ -432,7 +443,7 @@ if __name__ == '__main__':
         labels=test_labels,
         classes=classes,
         kmeans_model=kmeans_model,
-        top_m_neurons=None  # Adjust as needed
+        top_m_neurons=2  # Adjust as needed
     )
     print(f"IDC Coverage: {idc_value * 100:.6f}%")
     
