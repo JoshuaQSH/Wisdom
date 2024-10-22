@@ -48,19 +48,24 @@ def save_importance_scores(importance_scores, mean_importance, filename, class_l
         json.dump(data, f)
     print(f"Importance scores saved to {filename}")
 
-def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_m_images=-1):
+# attribution_method = ['lrp', 'ig', 'saliency', 'deeplift']
+def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_m_images=-1, attribution_method='lrp'):
     model = model.cpu()
     
     if top_m_images != -1:
         images = images[:top_m_images]
         labels = labels[:top_m_images]
+        
     net_layer = getattr(model, layer_name)
     print("GroundTruth: {}, Model Layer: {}".format(classes[labels[0]], net_layer))
     outputs = model(images)
     _, predicted = torch.max(outputs, 1)
     
-    neuron_cond = LayerConductance(model, net_layer)
-    attribution = neuron_cond.attribute(images, target=labels)
+    if attribution_method == 'lrp':
+        neuron_cond = LayerConductance(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    else:
+        raise ValueError(f"Invalid attribution method: {attribution}")
     
     return attribution, torch.mean(attribution, dim=0)
 
@@ -114,7 +119,7 @@ def visualize_activation(activation_values, selected_activations, layer_name, th
 def get_activation_values_for_neurons(model, inputs, labels, important_neuron_indices, layer_name='fc1', visualize=False):
     
     activation_values = []
-    print("Getting the Class: {}".format(labels[0]))
+    print("Getting the Class: {}".format(labels))
     
     # Define a forward hook to capture the activations
     def hook_fn(module, input, output):
@@ -136,7 +141,7 @@ def get_activation_values_for_neurons(model, inputs, labels, important_neuron_in
     
     # Remove the hook
     handle.remove()
-    
+        
     # Concatenate all activation values into one tensor
     activation_values = torch.cat(activation_values, dim=0)
     if important_neuron_indices is None:
@@ -170,20 +175,50 @@ def find_optimal_clusters(scores, max_k=100):
     return best_k
 
 # Option - 1: This is used for clustering the importance scores
-def cluster_importance_scores(importance_scores, n_clusters): 
-    importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1) 
-    kmeans = KMeans(n_clusters=n_clusters, random_state=0) 
-    cluster_labels = kmeans.fit_predict(importance_scores_np)
-    save_kmeans_model(kmeans, 'kmeans_model.pkl')
+def cluster_importance_scores(importance_scores, n_clusters, layer_name='fc1'): 
+    if layer_name[:-1] == 'fc':
+        importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1) 
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0) 
+        cluster_labels = kmeans.fit_predict(importance_scores_np)
+    elif layer_name[:-1] == 'conv':
+        importance_scores = torch.mean(importance_scores, dim=[2, 3])
+        importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        cluster_labels = kmeans.fit_predict(importance_scores_np)
+    else:
+        raise ValueError(f"Invalid layer name: {layer_name}")
+        return None, None
+    
+    print("The cluster labels: {}, etc.".format(cluster_labels[:10]))
+    save_kmeans_model(kmeans, 'kmeans_impo_{}.pkl'.format(layer_name))    
+    
     return cluster_labels, kmeans
 
 # Option - 2: This is used for clustering the activation values
-def cluster_activation_values(activation_values, n_clusters):
-    activation_values_np = activation_values.cpu().detach().numpy()
-    kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-    cluster_labels = kmeans.fit_predict(activation_values_np)
-    save_kmeans_model(kmeans, 'kmeans_model.pkl')
-    return cluster_labels, kmeans
+def cluster_activation_values(activation_values, n_clusters, layer_name='fc1'):
+    
+    if layer_name[:-1] == 'fc':
+        n_neurons = activation_values.shape[1]
+        activation_values_np = activation_values.cpu().detach().numpy()
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        kmeans_comb = [KMeans(n_clusters=n_clusters).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)) for i in range(n_neurons)]
+        cluster_labels = kmeans.fit_predict(activation_values_np)
+        
+    elif layer_name[:-1] == 'conv':
+        activation_values = torch.mean(activation_values, dim=[2, 3])
+        n_neurons = activation_values.shape[1]
+        activation_values_np = activation_values.cpu().detach().numpy()
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        kmeans_comb = [KMeans(n_clusters=2).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)) for i in range(n_neurons)]
+        cluster_labels = kmeans.fit_predict(activation_values_np)
+    else:
+        raise ValueError(f"Invalid layer name: {layer_name}")
+        return None, None, None
+        
+    print("The cluster labels: {}, etc., with number of clusters: {}".format(cluster_labels[:10], n_clusters))
+    save_kmeans_model(kmeans, 'kmeans_acti_{}.pkl'.format(layer_name))
+    
+    return cluster_labels, kmeans, kmeans_comb
 
 # Assign Test inputs to Clusters
 def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
@@ -196,76 +231,68 @@ def assign_clusters_to_activation_values(activation_values, kmeans_model):
     cluster_labels = kmeans_model.predict(activation_values_np)
     return cluster_labels
 
+# A for loop to assign clusters to all the neurons
+def assign_clusters(activations, kmeans_models):
+    n_samples, n_neurons = activations.shape
+    cluster_assignments = []
 
-def compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name, top_m_neurons=-1, n_clusters = 5):
-    kmeans_model_path = 'kmeans_model.pkl'
-    _, layer_importance_scores = get_layer_conductance(model, inputs_images, labels, classes, layer_name=layer_name)
+    # Loop over each test sample
+    for i in range(n_samples):
+        # Get the activations for this sample
+        sample_activations = activations[i].cpu().numpy()
+        sample_clusters = []
+        
+        # Loop over each neuron and assign it to a cluster
+        for neuron_idx in range(n_neurons):
+            cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].reshape(-1, 1))
+            sample_clusters.append(cluster[0])  # Append the cluster ID
+        
+        # Convert to tuple for uniqueness
+        cluster_assignments.append(tuple(sample_clusters))  
+    return cluster_assignments
+
+
+def compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name, top_m_neurons=-1, n_clusters = 5, attribution_method='lrp'):
+    
+    _, layer_importance_scores = get_layer_conductance(model, inputs_images, labels, classes, 
+                                                       layer_name=layer_name, attribution_method=attribution_method)
     indices = select_top_neurons(layer_importance_scores, top_m_neurons)
     activation_values, selected_activations = get_activation_values_for_neurons(model, 
                                                                                 inputs_images,
-                                                                                labels, 
+                                                                                classes[int(labels[0])], 
                                                                                 indices, 
                                                                                 layer_name,
                                                                                 False)
-    activation_values_np = activation_values.cpu().numpy()
-    cluster_labels = kmeans.predict(activation_values_np)
-    unique_clusters = np.unique(cluster_labels)
-    coverage_rate = len(unique_clusters) / n_clusters
-    print(f"IDC Score: {coverage_rate}")
-
-# Track Combinations of Clusters Activated
-# mode = ['scores', 'activations']
-def compute_idc_coverage(model, inputs_images, labels, classes, kmeans_model, layer_name, top_m_neurons=None, mode='activations'):
-    model.eval()
-    covered_combinations = set()
     
-    _, layer_importance_scores = get_layer_conductance(model, inputs_images, labels, classes, layer_name=layer_name)
-    if top_m_neurons:
-        # Get indices of top m neurons
-        indices = select_top_neurons(layer_importance_scores, top_m_neurons)
-        # Assign clusters
-        if mode == 'scores':
-            # Select importance scores for top m neurons
-            selected_scores = layer_importance_scores[indices]
-            # Assign clusters
-            cluster_labels = assign_clusters_to_importance_scores(selected_scores, kmeans_model)
-        elif mode == 'activations':
-            activation_values, selected_activations = get_activation_values_for_neurons(model, 
-                                                                                        inputs_images,
-                                                                                        labels, 
-                                                                                        indices, 
-                                                                                        layer_name,
-                                                                                        False)
-            cluster_labels = assign_clusters_to_activation_values(selected_scores, kmeans_model)
-    
-    elif top_m_neurons is None:
-        if mode == 'scores':
-            # Assign clusters to all neurons
-            cluster_labels = assign_clusters_to_importance_scores(layer_importance_scores, kmeans_model)
-            indices = torch.arange(len(layer_importance_scores))            
-        elif mode == 'activations':
-            activation_values, selected_activations = get_activation_values_for_neurons(model, 
-                                                                                        inputs_images,
-                                                                                        labels, 
-                                                                                        None, 
-                                                                                        layer_name,
-                                                                                        False)
-            cluster_labels = assign_clusters_to_activation_values(selected_activations, kmeans_model)
+    if layer_name[:-1] == 'conv':
+        activation_values = torch.mean(activation_values, dim=[2, 3])
     else:
-        raise ValueError(f"Invalid mode: {mode}")
-           
-    # Record the combination (as a tuple) of cluster labels
-    combination = tuple(cluster_labels.tolist())
-    covered_combinations.add(combination)
+        activation_values = selected_activations
         
-    # Compute total possible combinations
-    n_clusters = kmeans_model.n_clusters
-    n_neurons = top_m_neurons if top_m_neurons else len(layer_importance_scores)
-    total_possible_combinations = n_clusters ** n_neurons
-        
-    idc_value = len(covered_combinations) / total_possible_combinations
+    activation_values_np = activation_values.cpu().numpy()
+    cluster_labels = assign_clusters(kmeans_models=kmeans, activations=activation_values)
+    # cluster_labels = kmeans.predict(activation_values_np)
     
-    return idc_value, covered_combinations, total_possible_combinations
+    unique_clusters = set(cluster_labels)    
+    # unique_clusters = np.unique(cluster_labels)
+    
+    total_combination = pow(n_clusters, activation_values_np.shape[1])
+    if activation_values.shape[0] > total_combination:
+        max_coverage = 1
+    else:
+        max_coverage = activation_values.shape[0] / total_combination
+    
+    # n_cluster -> total_combination
+    coverage_rate = len(unique_clusters) / total_combination
+    print(f"Total INCC combinations: {total_combination}")
+    print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
+    print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
+
+def compute_incc_centroids(important_neurons_clusters):
+    centroids = {}
+    for neuron, clusters in important_neurons_clusters.items():
+        centroids[neuron] = [cluster.cluster_centers_ for cluster in clusters]
+    return centroids
 
 if __name__ == '__main__':
     args = parse_args()
@@ -313,37 +340,38 @@ if __name__ == '__main__':
         
     # Clustering based on the importance scores or activation values
     # optimal_k_importance = find_optimal_clusters(mean_attribution)
-    # optimal_k = find_optimal_clusters(activation_values)
-    optimal_k = 5
+    if args.use_silhouette:
+        optimal_k = find_optimal_clusters(activation_values)
+    else:
+        optimal_k = args.n_clusters
     
     if args.cluster_scores:
         ### Option - 1: Cluster the importance scores
         try:
-            kmeans_model = load_kmeans_model('kmeans_model.pkl')
+            kmeans_model = load_kmeans_model('kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
+            print('kmeans_model_{}.pkl Loaded!'.format(module_name[args.layer_index]))
         except FileNotFoundError:
             cluster_labels, kmeans_model = cluster_importance_scores(mean_attribution, optimal_k)
         print("Importance scores clustered.")
     else:
         ### Option - 2: Cluster the activation values
-        try:
-            kmeans_model = load_kmeans_model('kmeans_model.pkl')
-        except FileNotFoundError:
-            cluster_labels, kmeans_model = cluster_activation_values(selected_activations, optimal_k)
+        cluster_labels, kmeans_model, kmeans_comb = cluster_activation_values(selected_activations, optimal_k, module_name[args.layer_index])
+        # try:
+        #     kmeans_model = load_kmeans_model('kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
+        # except FileNotFoundError:
+        #     cluster_labels, kmeans_model = cluster_activation_values(selected_activations, optimal_k, module_name[args.layer_index])
         print("Activation values clustered.")
 
     ### Compute IDC coverage
-    compute_idc_test(model, test_images, test_labels, kmeans_model, classes, module_name[args.layer_index], top_m_neurons=args.top_m_neurons, n_clusters=optimal_k)
-    # idc_value, covered_combinations, total_combinations = compute_idc_coverage(
-    #     model=model,
-    #     inputs_images=test_images,
-    #     labels=test_labels,
-    #     classes=classes,
-    #     kmeans_model=kmeans_model,
-    #     layer_name=module_name[args.layer_index],
-    #     top_m_neurons=2,
-    #     mode='activations'
-    # )
-    # print(f"IDC Coverage: {idc_value * 100:.6f}%")
+    compute_idc_test(model, 
+                     test_images, 
+                     test_labels, 
+                     kmeans_comb, # kmeans_model
+                     classes, 
+                     module_name[args.layer_index], 
+                     top_m_neurons=args.top_m_neurons, 
+                     n_clusters=optimal_k,
+                     attribution_method=args.attr)
     
     ### Infidelity metric
     # infid = infidelity_metric(net, perturb_fn, images, attribution)

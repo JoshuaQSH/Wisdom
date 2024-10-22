@@ -33,6 +33,14 @@ $ ./script.sh fc1
 - Testset comes in (x_1, y_1)
 - Check coverage (See combinations covered by the test set, e.g., 4/6, 1/6 ,....), A.k.a. IDC
 
+## TODO
+
+- [x] IDC reconfigure
+- [x] More attribution methods
+- [x] Unite tests for other CV models
+- [x] Testing with all layers and all dataset
+- [x] More testing dataset
+
 ## Directory information
 
 - `images`: All the saved images, including the example images and the heatmap saved by the running demos
