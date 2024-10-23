@@ -24,7 +24,7 @@ def parse_args():
     parser.add_argument('--is-cifar10', action='store_true', help='Use CIFAR-10 dataset.')
     parser.add_argument('--test-image', type=str, default='plane', choices=['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'], 
                         help='Test image name.')
-    parser.add_argument('--attr', type=str, default='lrp', choices=['lrp', 'ig', 'saliency', 'deeplift'],  help='The attribution method to use.')
+    parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp'],  help='The attribution method to use.')
     parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
     parser.add_argument('--capture-all', action='store_true', help='Capture all the layers.')
     parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')

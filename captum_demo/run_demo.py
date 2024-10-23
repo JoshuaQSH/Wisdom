@@ -14,13 +14,13 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import models
 from torchvision import transforms
-
 from captum.attr import IntegratedGradients
 from captum.attr import Saliency
 from captum.attr import DeepLift
 from captum.attr import NoiseTunnel
+from captum.attr import NeuronConductance
 from captum.attr import visualization as viz
-from captum.attr import LayerConductance, NeuronConductance
+from captum.attr import LayerConductance, LayerActivation, InternalInfluence, LayerGradientXActivation, LayerGradCam, LayerDeepLift, LayerDeepLiftShap, LayerGradientShap, LayerIntegratedGradients, LayerFeatureAblation, LayerLRP
 from captum.metrics import infidelity_perturb_func_decorator, infidelity
 
 from sklearn.cluster import KMeans
@@ -48,7 +48,6 @@ def save_importance_scores(importance_scores, mean_importance, filename, class_l
         json.dump(data, f)
     print(f"Importance scores saved to {filename}")
 
-# attribution_method = ['lrp', 'ig', 'saliency', 'deeplift']
 def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_m_images=-1, attribution_method='lrp'):
     model = model.cpu()
     
@@ -61,8 +60,53 @@ def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_
     outputs = model(images)
     _, predicted = torch.max(outputs, 1)
     
-    if attribution_method == 'lrp':
+    # ['LayerConductance', 'LayerActivation', 'InternalInfluence', 
+    # 'LayerGradientXActivation', 'LayerGradCam', 'LayerDeepLift', 
+    # 'LayerDeepLiftShap', 'LayerGradientShap', 'LayerIntegratedGradients', 
+    # 'LayerFeatureAblation', 'LayerLRP']
+    if attribution_method == 'lc':
+        print("Running with LayerConductance")
         neuron_cond = LayerConductance(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'la':
+        print("Running with LayerActivation")
+        neuron_cond = LayerActivation(model, net_layer)
+        attribution = neuron_cond.attribute(images)
+    elif attribution_method == 'ii':
+        print("Running with InternalInfluence")
+        neuron_cond = InternalInfluence(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'lgxa':
+        print("Running with LayerGradientXActivation")
+        neuron_cond = LayerGradientXActivation(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'lgc':
+        print("Running with LayerGradCam")
+        neuron_cond = LayerGradCam(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'ldl':
+        print("Running with LayerDeepLift")
+        neuron_cond = LayerDeepLift(model, net_layer)
+        attribution = neuron_cond.attribute(images, baselines=torch.zeros_like(images), target=labels)
+    elif attribution_method == 'ldls':
+        print("Running with LayerDeepLiftShap")
+        neuron_cond = LayerDeepLiftShap(model, net_layer)
+        attribution = neuron_cond.attribute(images,  baselines=torch.zeros_like(images), target=labels)
+    elif attribution_method == 'lgs':
+        print("Running with LayerGradientShap")
+        neuron_cond = LayerGradientShap(model, net_layer)
+        attribution = neuron_cond.attribute(images, baselines=torch.zeros_like(images), target=labels)
+    elif attribution_method == 'lig':
+        print("Running with LayerIntegratedGradients")
+        neuron_cond = LayerIntegratedGradients(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'lfa':
+        print("Running with LayerFeatureAblation")
+        neuron_cond = LayerFeatureAblation(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'lrp':
+        print("Running with LayerLRP")
+        neuron_cond = LayerLRP(model, net_layer)
         attribution = neuron_cond.attribute(images, target=labels)
     else:
         raise ValueError(f"Invalid attribution method: {attribution}")
@@ -275,7 +319,7 @@ def compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name, 
     
     unique_clusters = set(cluster_labels)    
     # unique_clusters = np.unique(cluster_labels)
-    
+    breakpoint()
     total_combination = pow(n_clusters, activation_values_np.shape[1])
     if activation_values.shape[0] > total_combination:
         max_coverage = 1
@@ -317,18 +361,24 @@ if __name__ == '__main__':
     # Get the importance scores - LRP
     if os.path.exists(args.importance_file):
         attribution, mean_attribution, labels = load_importance_scores(args.importance_file)
-        test_images, test_labels = get_class_data(testloader, classes, args.test_image)
     else:
         if args.capture_all:
             for name in module_name[1:]:
-                attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, layer_name=name, top_m_images=-1)
+                attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, 
+                                                                      layer_name=name, 
+                                                                      top_m_images=-1, 
+                                                                      attribution_method=args.attr)
                 filename = args.importance_file.replace('.json', f'_{name}.json')
                 save_importance_scores(attribution, mean_attribution, filename, args.test_image)
                 print("{} Saved".format(filename))
         else:
-            attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, layer_name=module_name[args.layer_index], top_m_images=-1)
+            attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, 
+                                                                  layer_name=module_name[args.layer_index], 
+                                                                  top_m_images=-1, attribution_method=args.attr)
             save_importance_scores(attribution, mean_attribution, args.importance_file, args.test_image)
 
+    # Get the test data
+    test_images, test_labels = get_class_data(testloader, classes, args.test_image)
     # Obtain the important neuron indices 
     important_neuron_indices = select_top_neurons(mean_attribution, args.top_m_neurons)
     activation_values, selected_activations = get_activation_values_for_neurons(model, 
