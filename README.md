@@ -35,14 +35,16 @@ $ ./script.sh fc1
 
 ## TODO
 
-- [x] IDC reconfigure
-- [x] More attribution methods
-- [x] Unite tests for other CV models
-- [x] Testing with all layers and all dataset
-- [x] More testing dataset
+- [ ] `find_optimal_clusters` requires fixing, compute the silhouette score with row by row
+- [ ] Add more dataset and models
+- [ ] SOTA methods to compare
+- [ ] Selector + runtime + attention
+
 
 ## Directory information
 
 - `images`: All the saved images, including the example images and the heatmap saved by the running demos
-- `models`: Pre-trained model files (*.pt) and also the model architecture visualisations
+- `models_info`: Pre-trained model files (*.pt) and also the model architecture visualisations
 - `saved_files`: Saved JSON files for the model importances
+- `logs`: Saved the log files
+- `examples`: Small example testing captum
