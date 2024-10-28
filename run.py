@@ -1,258 +1,449 @@
-import argparse
 import os
+import json
+import sys
+from pathlib import Path
 
 import torch
 import torch.nn as nn
-import torchvision.models as models
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
-from utils import load_MNIST, load_CIFAR, get_trainable_layers, filter_correct_classifications, filter_val_set
-from model_nn.lenet5 import LeNet5
-from coverages.idc import ImportanceDrivenCoverage
-from TorchLRP.lrp import Sequential, Linear, Conv2d, MaxPool2d, convert_vgg
-from TorchLRP import lrp
+import torch
+import torchvision
+import torchvision.transforms.functional as TF
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torchvision import models
+from torchvision import transforms
+from captum.attr import IntegratedGradients
+from captum.attr import Saliency
+from captum.attr import DeepLift
+from captum.attr import NoiseTunnel
+from captum.attr import NeuronConductance
+from captum.attr import visualization as viz
+from captum.attr import LayerConductance, LayerActivation, InternalInfluence, LayerGradientXActivation, LayerGradCam, LayerDeepLift, LayerDeepLiftShap, LayerGradientShap, LayerIntegratedGradients, LayerFeatureAblation, LayerLRP
+from captum.metrics import infidelity_perturb_func_decorator, infidelity
 
-from coverages import coverage, tool
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 
-__version__ = 0.9
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model
 
-def nc_demo(args):
-    train_loader, test_loader = load_CIFAR(batch_size=args.batch_size)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
-    model.classifier[6] = nn.Sequential(
-        nn.Linear(4096, 512), 
-        nn.ReLU(), 
-        nn.Dropout(0.5),
-        nn.Linear(512, 10))
-    model = model.to(device)
-    img_rows, img_cols = 224, 224
-    input_size = (1, 3, img_rows, img_cols)
-    random_input = torch.randn(input_size).to(device)
-    layer_size_dict = tool.get_layer_output_sizes(model, random_input)
-    criterion = coverage.NLC(model, layer_size_dict, hyper=None)
-    criterion.build(train_loader)
-    criterion.assess(test_loader)
-    cov = criterion.current
-    print(cov.cpu().numpy())
+# Add src directory to sys.path
+src_path = Path(__file__).resolve().parent / "src"
+sys.path.append(str(src_path))
 
 
-def load_model(model, model_path):
-    model.load_state_dict(torch.load(model_path))
-    model.eval()  # Set the model to evaluation mode
-    print("Model loaded from", model_path)
-    return model
+def load_importance_scores(filename):
+    with open(filename, 'r') as f:
+        data = json.load(f)
+    return torch.tensor(data["importance_scores"]), torch.tensor(data["mean_importance"]), data["class_label"]
 
-def get_mnist_model():
-    model = Sequential(
-        Conv2d(1, 32, 3, 1, 1),
-        nn.ReLU(),
-        Conv2d(32, 64, 3, 1, 1),
-        nn.ReLU(),
-        MaxPool2d(2,2),
-        nn.Flatten(),
-        Linear(14*14*64, 512),
-        nn.ReLU(),
-        Linear(512, 84),
-        nn.ReLU(),
-        Linear(84, 10)
-    )
-    return model
+def save_importance_scores(importance_scores, mean_importance, filename, class_label):
+    scores = importance_scores.cpu().detach().numpy().tolist()
+    mean_scores = mean_importance.cpu().detach().numpy().tolist()
+    data = {
+        "class_label": class_label,
+        "importance_scores": scores,
+        "mean_importance": mean_scores
+    }
 
-def get_lenet5_model():
-    model = Sequential(
-        Conv2d(in_channels=1, out_channels=6, kernel_size=5),
-        nn.ReLU(),
-        MaxPool2d(2, 2),
-        Conv2d(in_channels=6, out_channels=16, kernel_size=5),
-        nn.ReLU(),
-        MaxPool2d(2, 2),
-        nn.Flatten(),
-        Linear(in_features=16*4*4, out_features=120),
-        nn.ReLU(),
-        Linear(in_features=120, out_features=84),
-        nn.ReLU(),
-        Linear(in_features=84, out_features=10)
-        # nn.Softmax(dim=1)
-    )
-    return model
+    with open(filename, 'w') as f:
+        json.dump(data, f)
+    print(f"Importance scores saved to {filename}")
 
-def prepare_mnist_model(model, train_loader, test_loader, model_path="./examples/mnist_model.pth", epochs=1, lr=1e-3, train_new=False, device="cpu", is_test=False):
-
-    if os.path.exists(model_path): 
-        state_dict = torch.load(model_path, map_location=device)
-        model.load_state_dict(state_dict)
-    if train_new: 
-        model = model.to(device)
-        loss_fn = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        model.train()
-        for e in range(epochs):
-            for i, (x, y) in enumerate(train_loader):
-                x = x.to(device)
-                y = y.to(device)
-                y_hat = model(x)
-                loss  = loss_fn(y_hat, y)
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
-
-                acc = (y == y_hat.max(1)[1]).float().sum() / x.size(0)
-                if i%10 == 0: 
-                    print("\r[%i/%i, %i/%i] loss: %.4f acc: %.4f" % (e, epochs, i, len(train_loader), loss.item(), acc.item()), end="", flush=True)
-        torch.save(model.state_dict(), model_path)
+def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_m_images=-1, attribution_method='lrp'):
+    model = model.cpu()
     
-    if is_test:
-        model.eval()
-        for i, (x, y) in enumerate(test_loader):
-            x = x.to(device)
-            y = y.to(device)
-            y_hat = model(x)
-            acc = (y == y_hat.max(1)[1]).float().sum() / x.size(0)
-            print("Testing Accuracy: %.4f" % acc.item())
-    else:
-        print("Skipping testing...")
-    
-    return model
-
-def parse_arguments():
-    """
-    Parse command line argument and construct the DNN
-    :return: a dictionary comprising the command-line arguments
-    """
-
-    # define the program description
-    text = 'Coverage Analyzer for DNNs'
-
-    # initiate the parser
-    parser = argparse.ArgumentParser(description=text)
-
-    # add new command-line arguments
-    parser.add_argument("-V", "--version",  help="show program version",
-                        action="version", version="DeepFault %f" % __version__)
-    parser.add_argument("-M", "--model", default="mnist", help="Model name.\
-                        The specified model will be used. choices=['mnist', 'lenet1','lenet4', 'lenet5']")
-    parser.add_argument("-MP", "--model-path", default="./model_nn/lenet5_mnist.pth", help="Path to the model to be loaded.")
-    parser.add_argument("-DS", "--dataset", default="mnist", help="The dataset to be used (mnist\
-                        or cifar10).", choices=["mnist","cifar10"])
-    parser.add_argument("-A", "--approach", default="idc", help="the approach to be employed \
-                        to measure coverage", choices=['idc','nc','kmnc',
-                        'nbc','snac','tknc','ssc', 'lsa', 'dsa'])
-    parser.add_argument("-C", "--selected-class", default=-1, help="the selected class", type=int)
-    parser.add_argument("-Q", "--quantize", default=3, help="quantization granularity for \
-                        combinatorial other_coverage_metrics. (default: 3)", type= int)
-    parser.add_argument("-L", "--layer", default=-1, help="the subject layer's index for \
-                        combinatorial cov. NOTE THAT ONLY TRAINABLE LAYERS CAN \
-                        BE SELECTED", type= int)
-    parser.add_argument("-KS", "--k-sections", default=1000, help="number of sections used in \
-                        k multisection other_coverage_metrics (default: 1000)", type=int)
-    parser.add_argument("-KN", "--k-neurons", default=3, help="number of neurons used in \
-                        top k neuron other_coverage_metrics (default: 3)", type=int)
-    parser.add_argument("-RN", "--rel-neurons", default=10, help="number of neurons considered\
-                        as relevant in combinatorial other_coverage_metrics (default: 2)", type=int)
-    parser.add_argument("-AT", "--act-threshold", help="a threshold value used\
-                        to consider if a neuron is activated or not.", type=float)
-    parser.add_argument("-R", "--repeat", default=1, help="index of the repeating. (for\
-                        the cases where you need to run the same experiments \
-                        multiple times) (default: 1)", type=int)
-    parser.add_argument("-B", "--batch-size", type=int, default=256)
-    parser.add_argument("-E", "--epochs", type=int, default=5)
-    parser.add_argument("-LOG", "--logfile", default="result.log", help="path to log file")
-    parser.add_argument("-ADV", "--advtype", default="fgsm", help="path to log file")
-    parser.add_argument("--train-new", action="store_true", help="Train a new model")
-
-    # parse command-line arguments
-    args = parser.parse_args()
-
-    return args
-
-if __name__ == "__main__":
-    args = parse_arguments()
-    print(vars(args))
-
-    logfile = open(args.logfile, 'a')
-    num_samples_plot = min(args.batch_size, 9)
-
-    ####################
-    # 0) Load data
-    if args.dataset == 'mnist':
-        train_loader, test_loader = load_MNIST(batch_size=args.batch_size, channel_first=False, train_all=True)
-        img_rows, img_cols = 28, 28
-    else:
-        train_loader, test_loader = load_CIFAR(batch_size=args.batch_size)
-        img_rows, img_cols = 224, 224
-
-    ####################
-    # 1) Setup the model
-    if args.model == 'lenet5':
-        model = get_lenet5_model()
-        model = prepare_mnist_model(model, train_loader, test_loader, model_path="./examples/lenet5_model.pth", epochs=args.epochs, train_new=args.train_new)
-            
-    # Load a simple cnn (mnist training) for testing
-    elif args.model == 'mnist':
-        model = get_mnist_model()
-        model = prepare_mnist_model(model, train_loader, test_loader, epochs=args.epochs, train_new=args.train_new)
-    
-    # Load a vgg16 for testing
-    else:
-        model = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
-        model.classifier[6] = nn.Sequential(
-                      nn.Linear(4096, 512), 
-                      nn.ReLU(), 
-                      nn.Dropout(0.5),
-                      nn.Linear(512, 10))
-        model.eval()
-        model = lrp.convert_vgg(model)
-
-    # For viewing
-    trainable_layers, non_trainable_layers = get_trainable_layers(model)
-    print("Trainable layers: ", trainable_layers)
-    print("Non-trainable layers: ", non_trainable_layers)
-
-
-    ####################
-    # 3) Analyze Coverages
-    if args.approach == 'nc':
-        # A demo testing the Neuron Coverage [PASS]
-        nc_demo(args)
-
-    elif args.approach == 'idc':
-        print("Running IDC for relevant neurons")
-        idc = ImportanceDrivenCoverage(model=model, 
-            batch_size=args.batch_size, 
-            train_loader=train_loader, 
-            test_loader=test_loader,
-            subject_layer=args.layer,
-            num_rel=args.rel_neurons,
-            rule="epsilon",
-            is_plot=False,
-            device='cpu')
-        all_patterns_path = None
-        pos_patterns_path = None
-        if args.model == 'mnist':
-            all_patterns_path = "./examples/patterns/pattern_all.pkl"
-            pos_patterns_path = "./examples/patterns/pattern_pos.pkl"
-        elif args.model == 'lenet5':
-            all_patterns_path = "./examples/patterns/lenet5_pattern_all.pkl"
-            pos_patterns_path = "./examples/patterns/lenet5_pattern_pos.pkl"
-        coverage, covered_combinations = idc.test(all_patterns_path=all_patterns_path, pos_patterns_path=pos_patterns_path)
+    if top_m_images != -1:
+        images = images[:top_m_images]
+        labels = labels[:top_m_images]
         
-        coverage, covered_combinations = idc.test(X_test)
-        print("Your test set's coverage is: ", coverage)
-        print("Number of covered combinations: ", len(covered_combinations))
-
-        idc.set_measure_state(covered_combinations)
+    net_layer = getattr(model, layer_name)
+    print("GroundTruth: {}, Model Layer: {}".format(classes[labels[0]], net_layer))
+    outputs = model(images)
+    _, predicted = torch.max(outputs, 1)
     
-    elif args.approach == 'kmnc' or args.approach == 'nbc' or args.approach == 'snac':
-        pass
+    # ['LayerConductance', 'LayerActivation', 'InternalInfluence', 
+    # 'LayerGradientXActivation', 'LayerGradCam', 'LayerDeepLift', 
+    # 'LayerDeepLiftShap', 'LayerGradientShap', 'LayerIntegratedGradients', 
+    # 'LayerFeatureAblation', 'LayerLRP']
+    if attribution_method == 'lc':
+        print("Running with LayerConductance")
+        neuron_cond = LayerConductance(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'la':
+        print("Running with LayerActivation")
+        neuron_cond = LayerActivation(model, net_layer)
+        attribution = neuron_cond.attribute(images)
+    elif attribution_method == 'ii':
+        print("Running with InternalInfluence")
+        neuron_cond = InternalInfluence(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'lgxa':
+        print("Running with LayerGradientXActivation")
+        neuron_cond = LayerGradientXActivation(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'lgc':
+        print("Running with LayerGradCam")
+        neuron_cond = LayerGradCam(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'ldl':
+        print("Running with LayerDeepLift")
+        neuron_cond = LayerDeepLift(model, net_layer)
+        attribution = neuron_cond.attribute(images, baselines=torch.zeros_like(images), target=labels)
+    elif attribution_method == 'ldls':
+        print("Running with LayerDeepLiftShap")
+        neuron_cond = LayerDeepLiftShap(model, net_layer)
+        attribution = neuron_cond.attribute(images,  baselines=torch.zeros_like(images), target=labels)
+    elif attribution_method == 'lgs':
+        print("Running with LayerGradientShap")
+        neuron_cond = LayerGradientShap(model, net_layer)
+        attribution = neuron_cond.attribute(images, baselines=torch.zeros_like(images), target=labels)
+    elif attribution_method == 'lig':
+        print("Running with LayerIntegratedGradients")
+        neuron_cond = LayerIntegratedGradients(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'lfa':
+        print("Running with LayerFeatureAblation")
+        neuron_cond = LayerFeatureAblation(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    elif attribution_method == 'lrp':
+        print("Running with LayerLRP")
+        neuron_cond = LayerLRP(model, net_layer)
+        attribution = neuron_cond.attribute(images, target=labels)
+    else:
+        raise ValueError(f"Invalid attribution method: {attribution}")
     
-    elif args.approach == 'tknc':
-        pass
+    return attribution, torch.mean(attribution, dim=0)
 
-    elif args.approach == 'ssc':
-        pass
+def select_top_neurons(importance_scores, top_m_neurons=5):
+    if top_m_neurons == -1:
+        print("Selecting all neurons.")
+        if importance_scores.dim() == 1:
+            _, indices = torch.sort(importance_scores, descending=True)
+            return indices
+        else:
+            return None
+    else:
+        if importance_scores.dim() == 1:
+            print("Selecting top {} neurons (FC layer).".format(top_m_neurons))
+            _, indices = torch.topk(importance_scores, top_m_neurons)
+            return indices
+        else:
+            # TODO: Conv by default will select all the neurons
+            print("Selecting all the neurons (Conv2D layer).")
+            return None
+
+def visualize_activation(activation_values, selected_activations, layer_name, threshold=0, mode='fc'):
+    saved_file = f'./images/mean_activation_values_{layer_name}.pdf'
+    if mode == 'fc':
+        mean_activation = activation_values.mean(dim=0)
+        mean_selected_activation = selected_activations.mean(dim=0)
+        plt.figure(figsize=(12, 6))
+        plt.plot(range(len(activation_values[1])), mean_activation.numpy(), marker='o')
+        plt.plot(range(len(selected_activations[1])), mean_selected_activation.numpy(), marker='p')
+        plt.xlabel('Neuron Index')
+        plt.ylabel('Mean Activation Value')
+        plt.title('Mean Activation Values of Neurons')
+        plt.grid(True)
+        plt.legend(['All Neurons', 'Selected Neurons'])
+        plt.savefig(saved_file, dpi=1500)
+        print("Mean Activation Values plotted, saved to {}".format(saved_file))
+        # plt.show()
+    elif mode == 'conv':
+        mean_activation = torch.mean(selected_activations, dim=[2, 3]).mean(dim=0)
+        plt.plot(range(len(mean_activation)), mean_activation.numpy(), marker='o')
+        plt.xlabel('Neuron Index')
+        plt.ylabel('Mean Activation Value')
+        plt.title('Mean Activation Values of Neurons')
+        plt.grid(True)
+        plt.savefig(saved_file, dpi=1500)
+        print("Mean Activation Values plotted, saved to {}".format(saved_file))
+        # plt.show()
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
+
+def get_activation_values_for_neurons(model, inputs, labels, important_neuron_indices, layer_name='fc1', visualize=False):
     
-    elif args.approach == 'lsa' or args.approach == 'dsa':
-        pass
+    activation_values = []
+    print("Getting the Class: {}".format(labels))
+    
+    # Define a forward hook to capture the activations
+    def hook_fn(module, input, output):
+        activation_values.append(output.detach())
+    
+    # Register the hook on the specified layer
+    handle = None
+    for name, module in model.named_modules():
+        if name == layer_name:
+            handle = module.register_forward_hook(hook_fn)
+            break
+    
+    if handle is None:
+        raise ValueError(f"Layer {layer_name} not found in the model.")
 
-    logfile.close()
+    model.eval()
+    with torch.no_grad():
+        outputs = model(inputs)
+    
+    # Remove the hook
+    handle.remove()
+        
+    # Concatenate all activation values into one tensor
+    activation_values = torch.cat(activation_values, dim=0)
+    if important_neuron_indices is None:
+        selected_activations = activation_values
+    elif type(important_neuron_indices) == torch.Tensor and important_neuron_indices.shape[0] > 0:
+        # Select only the activations for the important neurons
+        selected_activations = activation_values[:, important_neuron_indices]
+    else:
+        raise ValueError(f"Invalid important_neuron_indices: {important_neuron_indices}")
+    
+    if visualize:
+        visualize_activation(activation_values, selected_activations, layer_name, threshold=0, mode=layer_name[:-1])
+        
+    return activation_values, selected_activations
 
+# TODO: We choose the the cluster number based on the silhouette score, could be customized in the future
+# score could be importance scores or activation values, using silhouette score to find the optimal cluster number
+def find_optimal_clusters(scores, max_k=100):
+    scores_silhouette = []
+    scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
+    for k in range(2, max_k + 1):
+        kmeans = KMeans(n_clusters=k, random_state=0)
+        labels = kmeans.fit_predict(scores_np)
+        scores_t = silhouette_score(scores_np, labels)
+        scores_silhouette.append((k, scores_t))
+    
+    # Select k with the highest silhouette score
+    best_k = max(scores_silhouette, key=lambda x: x[1])[0]
+    print(f"Optimal number of clusters: {best_k}")
+    
+    return best_k
+
+# Option - 1: This is used for clustering the importance scores
+def cluster_importance_scores(importance_scores, n_clusters, layer_name='fc1'): 
+    if layer_name[:-1] == 'fc':
+        importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1) 
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0) 
+        cluster_labels = kmeans.fit_predict(importance_scores_np)
+    elif layer_name[:-1] == 'conv':
+        importance_scores = torch.mean(importance_scores, dim=[2, 3])
+        importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        cluster_labels = kmeans.fit_predict(importance_scores_np)
+    else:
+        raise ValueError(f"Invalid layer name: {layer_name}")
+        return None, None
+    
+    print("The cluster labels: {}, etc.".format(cluster_labels[:10]))
+    save_kmeans_model(kmeans, 'kmeans_impo_{}.pkl'.format(layer_name))    
+    
+    return cluster_labels, kmeans
+
+# Option - 2: This is used for clustering the activation values
+def cluster_activation_values(activation_values, n_clusters, layer_name='fc1'):
+    
+    if layer_name[:-1] == 'fc':
+        n_neurons = activation_values.shape[1]
+        activation_values_np = activation_values.cpu().detach().numpy()
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        kmeans_comb = [KMeans(n_clusters=n_clusters).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)) for i in range(n_neurons)]
+        cluster_labels = kmeans.fit_predict(activation_values_np)
+        
+    elif layer_name[:-1] == 'conv':
+        activation_values = torch.mean(activation_values, dim=[2, 3])
+        n_neurons = activation_values.shape[1]
+        activation_values_np = activation_values.cpu().detach().numpy()
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        kmeans_comb = [KMeans(n_clusters=2).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)) for i in range(n_neurons)]
+        cluster_labels = kmeans.fit_predict(activation_values_np)
+    else:
+        raise ValueError(f"Invalid layer name: {layer_name}")
+        return None, None, None
+        
+    print("The cluster labels: {}, etc., with number of clusters: {}".format(cluster_labels[:10], n_clusters))
+    save_kmeans_model(kmeans, 'kmeans_acti_{}.pkl'.format(layer_name))
+    
+    return cluster_labels, kmeans, kmeans_comb
+
+# Assign Test inputs to Clusters
+def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
+    importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
+    cluster_labels = kmeans_model.predict(importance_scores_np)
+    return cluster_labels
+
+def assign_clusters_to_activation_values(activation_values, kmeans_model):
+    activation_values_np = activation_values.cpu().numpy()
+    cluster_labels = kmeans_model.predict(activation_values_np)
+    return cluster_labels
+
+# A for loop to assign clusters to all the neurons
+def assign_clusters(activations, kmeans_models):
+    n_samples, n_neurons = activations.shape
+    cluster_assignments = []
+
+    # Loop over each test sample
+    for i in range(n_samples):
+        # Get the activations for this sample
+        sample_activations = activations[i].cpu().numpy()
+        sample_clusters = []
+        
+        # Loop over each neuron and assign it to a cluster
+        for neuron_idx in range(n_neurons):
+            cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].reshape(-1, 1))
+            sample_clusters.append(cluster[0])  # Append the cluster ID
+        
+        # Convert to tuple for uniqueness
+        cluster_assignments.append(tuple(sample_clusters))  
+    return cluster_assignments
+
+
+def compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name, top_m_neurons=-1, n_clusters = 5, attribution_method='lrp'):
+    
+    _, layer_importance_scores = get_layer_conductance(model, inputs_images, labels, classes, 
+                                                       layer_name=layer_name, attribution_method=attribution_method)
+    indices = select_top_neurons(layer_importance_scores, top_m_neurons)
+    activation_values, selected_activations = get_activation_values_for_neurons(model, 
+                                                                                inputs_images,
+                                                                                classes[int(labels[0])], 
+                                                                                indices, 
+                                                                                layer_name,
+                                                                                False)
+    
+    if layer_name[:-1] == 'conv':
+        activation_values = torch.mean(activation_values, dim=[2, 3])
+    else:
+        activation_values = selected_activations
+        
+    activation_values_np = activation_values.cpu().numpy()
+    cluster_labels = assign_clusters(kmeans_models=kmeans, activations=activation_values)
+    # cluster_labels = kmeans.predict(activation_values_np)
+    
+    unique_clusters = set(cluster_labels)    
+    # unique_clusters = np.unique(cluster_labels)
+    total_combination = pow(n_clusters, activation_values_np.shape[1])
+    if activation_values.shape[0] > total_combination:
+        max_coverage = 1
+    else:
+        max_coverage = activation_values.shape[0] / total_combination
+    
+    # n_cluster -> total_combination
+    coverage_rate = len(unique_clusters) / total_combination
+    print(f"Total INCC combinations: {total_combination}")
+    print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
+    print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
+
+def compute_incc_centroids(important_neurons_clusters):
+    centroids = {}
+    for neuron, clusters in important_neurons_clusters.items():
+        centroids[neuron] = [cluster.cluster_centers_ for cluster in clusters]
+    return centroids
+
+if __name__ == '__main__':
+    args = parse_args()
+    
+    ### Model settings
+    if args.model_path != 'None':
+        model_path = args.model_path
+    else:
+        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/'
+    model_path += args.saved_model
+    
+    ### Dataset settings
+    if args.dataset == 'cifar10':
+        trainloader, testloader, classes = load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
+    elif args.dataset == 'mnist':
+        trainloader, testloader, classes = load_MNIST(batch_size=args.batch_size, root=args.data_path)
+    elif args.dataset == 'imagenet':
+        # batch_size=32, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False
+        trainloader, testloader, classes = load_ImageNet(batch_size=args.batch_size, 
+                                                         root=args.data_path + '/ImageNet', 
+                                                         num_workers=2, 
+                                                         use_val=False)
+    else:
+        raise ValueError(f"Invalid dataset: {args.dataset}")
+    
+    ### Device settings    
+    if torch.cuda.is_available() and args.device != 'cpu':
+        device = torch.device(args.device)
+    else:
+        device = torch.device("cpu")
+    
+    model, module_name, module = get_model(model_name=args.model)
+    model.load_state_dict(torch.load(model_path))
+    
+    #  Get the specific class data
+    images, labels = get_class_data(trainloader, classes, args.test_image)
+    
+    # Get the importance scores - LRP
+    if os.path.exists(args.importance_file):
+        attribution, mean_attribution, labels = load_importance_scores(args.importance_file)
+    else:
+        if args.capture_all:
+            for name in module_name[1:]:
+                attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, 
+                                                                      layer_name=name, 
+                                                                      top_m_images=-1, 
+                                                                      attribution_method=args.attr)
+                filename = args.importance_file.replace('.json', f'_{name}.json')
+                save_importance_scores(attribution, mean_attribution, filename, args.test_image)
+                print("{} Saved".format(filename))
+        else:
+            attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, 
+                                                                  layer_name=module_name[args.layer_index], 
+                                                                  top_m_images=-1, attribution_method=args.attr)
+            save_importance_scores(attribution, mean_attribution, args.importance_file, args.test_image)
+
+    # Get the test data
+    test_images, test_labels = get_class_data(testloader, classes, args.test_image)
+    # Obtain the important neuron indices 
+    important_neuron_indices = select_top_neurons(mean_attribution, args.top_m_neurons)
+    activation_values, selected_activations = get_activation_values_for_neurons(model, 
+                                                                                images, 
+                                                                                labels, 
+                                                                                important_neuron_indices, 
+                                                                                module_name[args.layer_index],
+                                                                                args.viz)
+        
+    # Clustering based on the importance scores or activation values
+    # optimal_k_importance = find_optimal_clusters(mean_attribution)
+    if args.use_silhouette:
+        optimal_k = find_optimal_clusters(activation_values)
+    else:
+        optimal_k = args.n_clusters
+    
+    if args.cluster_scores:
+        ### Option - 1: Cluster the importance scores
+        try:
+            kmeans_model = load_kmeans_model('kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
+            print('kmeans_model_{}.pkl Loaded!'.format(module_name[args.layer_index]))
+        except FileNotFoundError:
+            cluster_labels, kmeans_model = cluster_importance_scores(mean_attribution, optimal_k)
+        print("Importance scores clustered.")
+    else:
+        ### Option - 2: Cluster the activation values
+        cluster_labels, kmeans_model, kmeans_comb = cluster_activation_values(selected_activations, optimal_k, module_name[args.layer_index])
+        # try:
+        #     kmeans_model = load_kmeans_model('kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
+        # except FileNotFoundError:
+        #     cluster_labels, kmeans_model = cluster_activation_values(selected_activations, optimal_k, module_name[args.layer_index])
+        print("Activation values clustered.")
+
+    ### Compute IDC coverage
+    compute_idc_test(model, 
+                     test_images, 
+                     test_labels, 
+                     kmeans_comb, # kmeans_model
+                     classes, 
+                     module_name[args.layer_index], 
+                     top_m_neurons=args.top_m_neurons, 
+                     n_clusters=optimal_k,
+                     attribution_method=args.attr)
+    
+    ### Infidelity metric
+    # infid = infidelity_metric(net, perturb_fn, images, attribution)
+    # print(f"Infidelity: {infid:.2f}")

@@ -1,52 +1,179 @@
+import numpy as np
+import argparse
+import joblib
+import os
+import sys
+from pathlib import Path
+import urllib.request
+import json
+
 import torch
-import torch.nn as nn
+import torchvision
 import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10, MNIST
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
+import torchvision.datasets as datasets
 import torchvision.models as models
-import torchvision.transforms as transforms
-from PIL import Image
-import requests
-from io import BytesIO
-import os
-import numpy as np
+import torch.nn.functional as F
+from torch.utils.data import Subset
 
+from sklearn.model_selection import train_test_split
 
-def load_CIFAR(batch_size=32, one_hot=True):
-    # Default
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
+# Add src directory to sys.path
+src_path = Path(__file__).resolve().parent / "src"
+sys.path.append(str(src_path))
+
+from model_hub import LeNet, Net
+
+def parse_args():
     
-    transform_train = transforms.Compose([
-            transforms.Resize(224),
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=str, default='lenet', choices=['lenet', 'vgg16', 'custom'], help='Model to use for training.')
+    parser.add_argument('--model-path', type=str, default='None', help='Path to the trained model.')
+    parser.add_argument('--saved-model', type=str, default='lenet_cifar10.pt', help='Saved model name.')
+    parser.add_argument('--dataset', type=str, default='cifar10', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
+    parser.add_argument('--data-path', type=str, default='/data/shenghao/dataset/', help='Path to the data directory.')
+    parser.add_argument('--importance-file', type=str, default='./saved_files/plane_lenet_importance.json', help='The file to save the importance scores.')
+    parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Device to use for training.')
+    parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset.')
+    parser.add_argument('--test-image', type=str, default='plane', choices=['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'], 
+                        help='Test image name.')
+    parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp'],  help='The attribution method to use.')
+    parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
+    parser.add_argument('--capture-all', action='store_true', help='Capture all the layers.')
+    parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
+    parser.add_argument('--n-clusters', type=int, default=5, help='Number of clusters to use for KMeans.')
+    parser.add_argument('--cluster-scores', action='store_true', help='Cluserting the importance scores rather than using actiation values.')
+    parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
+    parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
+    
+    args = parser.parse_args()
+    print(args)
+    
+    return args
+
+def train_val_dataset(dataset, val_split=0.25):
+    train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split)
+    datasets = {}
+    datasets['train'] = Subset(dataset, train_idx)
+    datasets['val'] = Subset(dataset, val_idx)
+    return datasets
+
+def data_loader(root, batch_size=256, workers=1, pin_memory=True):
+    traindir = os.path.join(root, 'train')
+    valdir = os.path.join(root, 'val')
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+    train_dataset = datasets.ImageFolder(
+        traindir,
+        transforms.Compose([
+            transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),])
+            normalize
+        ])
+    )
+
+    val_dataset = datasets.ImageFolder(
+        valdir,
+        transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            normalize
+        ])
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=workers,
+        pin_memory=pin_memory,
+        sampler=None
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=pin_memory
+    )
+
+    return train_loader, val_loader
+
+# Load the ImageNet dataset
+def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False):
     
-    transform_test = transforms.Compose([
-        transforms.Resize(224),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),])
+    val_path = os.path.join(root, 'val/')
+    url = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"
+    urllib.request.urlretrieve(url, "imagenet_labels.json")
 
-    train_dataset = CIFAR10(root='./data', train=True, download=True, transform=transform_train)
-    test_dataset = CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+    # Load the labels from the JSON file
+    with open("imagenet_labels.json") as f:
+        classes = json.load(f)
+    
+    if use_val:
+        # Optional: use val_dataset as the training dataset for shorter training time
+        transform = transforms.Compose([
+            transforms.Resize(224),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
+        ])
+        val_dataset = torchvision.datasets.ImageFolder(root=val_path, transform=transform)
+        datasets = train_val_dataset(val_dataset, val_split=0.25)
+        dataloaders = {x: DataLoader(datasets[x], batch_size=batch_size, shuffle=True, num_workers=num_workers)
+                       for x in ['train', 'val']}
+        trainloader = dataloaders['train']
+        testloader = dataloaders['val']
+    else:
+        trainloader, testloader = data_loader(root, batch_size, num_workers, True)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    return trainloader, testloader, classes
 
-    return train_loader, test_loader
+#  Load the CIFAR-10 dataset
+def load_CIFAR(batch_size=32, root='./data', large_image=True):
 
-def load_MNIST(batch_size=32, one_hot=True, channel_first=True, train_all=False):
+    if large_image:
+        transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),])
+    else:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+
+    train_dataset = CIFAR10(root=root, train=True, download=True, transform=transform)
+    test_dataset = CIFAR10(root=root, train=False, download=True, transform=transform)
+
+    trainloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    testloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    
+    classes = ('plane', 'car', 'bird', 'cat',
+            'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+    
+    return trainloader, testloader, classes
+
+
+#  Load the MNIST dataset
+def load_MNIST(batch_size=32, root='./data', channel_first=True, train_all=False):
     transform_list = [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
     if channel_first:
         transform_list.append(transforms.Lambda(lambda x: x.repeat(3, 1, 1)))  # If you want 3 channels
     transform = transforms.Compose(transform_list)
 
-    train_dataset = MNIST(root='./data', train=True, download=True, transform=transform)
-    test_dataset = MNIST(root='./data', train=False, download=True, transform=transform)
+    train_dataset = MNIST(root=root, train=True, download=True, transform=transform)
+    test_dataset = MNIST(root=root, train=False, download=True, transform=transform)
     
     if train_all:
         train_loader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
@@ -57,387 +184,186 @@ def load_MNIST(batch_size=32, one_hot=True, channel_first=True, train_all=False)
 
     return train_loader, test_loader
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+# Save the torch (DNN) model
 def save_model(model, model_name):
     torch.save(model.state_dict(), model_name + '.pth')
     print("Model saved as", model_name + '.pth')
 
-def load_model(model_class, model_name):
-    model = model_class()
-    model.load_state_dict(torch.load(model_name + '.pth'))
-    model.eval()  # Set the model to evaluation mode
-    print("Model structure loaded from", model_name)
-    return model
 
-def get_layer_outputs(model, x, layers_to_skip=[]):
-    outputs = []
-    hooks = []
+# Save the k-means model
+def save_kmeans_model(kmeans, filename='kmeans_model.pkl'):
+    joblib.dump(kmeans, filename)
 
-    def hook_fn(module, input, output):
-        outputs.append(output)
+# Load the k-means model
+def load_kmeans_model(filename='kmeans_model.pkl'):
+    return joblib.load(filename)
 
-    # Register hooks to the layers you want to inspect
-    for i, layer in enumerate(model.children()):
-        if i not in layers_to_skip:
-            hooks.append(layer.register_forward_hook(hook_fn))
+# TODO: Adding more models
+def get_model(model_name='vgg16'):
+    # Hardcoded model names for now
+    offer_moder_name = ['lenet', 'custom', 
+                        'vgg16', 
+                        'convnext_base', 
+                        'efficientnet_v2_s', 
+                        'efficientnet_v2_m', 
+                        'mnasnet1_0', 
+                        'googlenet',
+                        'inception_v3',
+                        'mobilenet_v3_small',
+                        'resnet18',
+                        'resnet152',
+                        'resnext101_32x8d',
+                        'vit_b_16']
+    module_name = []
+    module = []
+    # Check if model_name is in the list
+    if model_name in offer_moder_name:
+        if model_name == 'lenet':
+            model = LeNet()
+        elif model_name == 'custom':
+            model = Net()
+        else:
+            # Dynamically get the model function from torchvision.models
+            model_func = getattr(models, model_name)
+        
+            # Dynamically get the weights attribute for the model
+            # "IMAGENET1K_V2", "IMAGENET1K_V1"
+            model = model_func(weights="IMAGENET1K_V1")        
+            print(f"{model_name} model loaded with weights.")
+    else:
+        raise(f"{model_name} not in the list of available models.")
 
+    # Alternatively, to get all submodule names (including nested ones)
+    for name, layer in model.named_modules():
+        module_name.append(name)
+        module.append(layer)
+        
+    return model, module_name, module
+
+def get_class_data(dataloader, classes, target_class):
+    class_index = classes.index(target_class)
+
+    filtered_data = []
+    filtered_labels = []
+    for inputs, labels in dataloader:
+        for i, l in zip(inputs, labels):
+            if l == class_index:
+                filtered_data.append(i)
+                filtered_labels.append(l)
+    
+    if filtered_data:
+        return torch.stack(filtered_data), torch.tensor(filtered_labels)
+    else:
+        return None, None
+
+def prepare_data_cifa(data_path='../data', cifar10=True):
+    
+    if cifar10:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+    else:
+        transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor()
+        ])
+
+    trainset = torchvision.datasets.CIFAR10(root=data_path, train=True,
+                                            download=True, transform=transform)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
+                                            shuffle=True, num_workers=2)
+
+    testset = torchvision.datasets.CIFAR10(root=data_path, train=False,
+                                        download=True, transform=transform)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=4,
+                                            shuffle=False, num_workers=2)
+
+    classes = ('plane', 'car', 'bird', 'cat',
+            'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+    
+    return trainloader, testloader, classes
+
+# See if a neuron is activated
+def is_neuron_activated(activation_value, threshold=0):
+    return activation_value > threshold
+
+def is_conv2d_neuron_activated(activation_map, threshold=0):
+    """
+    Check if any neuron in the Conv2D activation map is activated.
+    
+    Parameters:
+    - activation_map (torch.Tensor): The activation map of shape (output_height, output_width).
+    - threshold (float): The threshold to determine activation (default: 0 for ReLU).
+    
+    Returns:
+    - activated (bool): True if the neuron is activated, False otherwise.
+    """
+    return (activation_map > threshold).any().item()
+
+# Generate Adversarial Examples
+def fgsm_attack(model, inputs, labels, epsilon):
+    """
+    Generate adversarial examples using the FGSM method.
+    
+    Parameters:
+    - model (torch.nn.Module): The trained model.
+    - inputs (torch.Tensor): Original input images.
+    - labels (torch.Tensor): True labels for the inputs.
+    - epsilon (float): The perturbation strength.
+    
+    Returns:
+    - adv_examples (torch.Tensor): Generated adversarial examples.
+    """
+    inputs.requires_grad = True
+    
     # Forward pass
-    model.eval()
-    with torch.no_grad():
-        _ = model(x)
-
-    # Remove hooks
-    for hook in hooks:
-        hook.remove()
-
-    return outputs
-
-def calc_major_func_regions(model, train_inputs, skip=None):
-    if skip is None:
-        skip = []
-
-    outputs = get_layer_outputs(model, train_inputs, layers_to_skip=skip)
-    major_regions = []
-
-    for output in outputs:
-        output = output.mean(dim=tuple(range(1, output.ndim - 1)))
-        major_regions.append((output.min(dim=0).values, output.max(dim=0).values))
-
-    return major_regions
-
-def get_layer_outputs_by_layer_name(model, test_input, skip=None):
-    if skip is None:
-        skip = []
-
-    outputs = {}
-    hooks = []
-
-    def hook_fn(name):
-        def hook(module, input, output):
-            outputs[name] = output
-        return hook
-
-    for name, layer in model.named_children():
-        if name not in skip and 'input' not in name:
-            hooks.append(layer.register_forward_hook(hook_fn(name)))
-
-    model.eval()
-    with torch.no_grad():
-        _ = model(test_input)
-
-    for hook in hooks:
-        hook.remove()
-
-    return outputs
-
-# TODO: Test not pass
-def get_layer_inputs(model, test_input, skip=None):
-    if skip is None:
-        skip = []
-
-    inputs = []
-    previous_output = test_input
-
-    for i, layer in enumerate(model.features):
-        if i not in skip:
-            if isinstance(layer, (nn.Conv2d, nn.Linear)):
-                weights = layer.weight.data
-                biases = layer.bias.data if layer.bias is not None else None
-                layer_inputs = []
-                for input_index in range(len(test_input)):
-                    if biases is not None:
-                        input_for_layer = torch.add(torch.matmul(previous_output[input_index].view(-1), weights.view(weights.size(0), -1).t()), biases)
-                    else:
-                        input_for_layer = torch.matmul(previous_output[input_index].view(-1), weights.view(weights.size(0), -1).t())
-                    layer_inputs.append(input_for_layer)
-
-                inputs.append(layer_inputs)
-            previous_output = layer(test_input)
-
-    return inputs
-
-def filter_correct_classifications(model, X, Y):
-    X_corr = []
-    Y_corr = []
-    X_misc = []
-    Y_misc = []
+    outputs = model(inputs)
+    loss = F.nll_loss(outputs, labels)
     
-    model.eval()
-    with torch.no_grad():
-        outputs = model(X)
+    # Backward pass (calculate gradients)
+    model.zero_grad()
+    loss.backward()
     
-    # preds = torch.argmax(preds, dim=1)
-    # Y_true = torch.argmax(Y, dim=1)
-
-    _, preds = outputs.max(1)
-
-    for idx, (x, y, pred) in enumerate(zip(X, Y, preds)):
-        if pred == Y[idx]:
-            X_corr.append(x)
-            Y_corr.append(y)
-        else:
-            X_misc.append(x)
-            Y_misc.append(y)
-
-    return X_corr, Y_corr, X_misc, Y_misc
-
-def filter_val_set(desired_class, X, Y):
-    X_class = []
-    Y_class = []
-
-    for idx, (x, y) in enumerate(zip(X, Y)):
-        if y == desired_class:
-            X_class.append(x)
-            Y_class.append(y)
-            
-    print(f"Validation set filtered for desired class: {desired_class}")
-    return X_class, Y_class
-
-def normalize(x):
-    # utility function to normalize a tensor by its L2 norm
-    return x / (torch.sqrt(torch.mean(x ** 2)) + 1e-5)
-
-def create_dir(dir_name):
-    if not os.path.exists(dir_name):
-        os.makedirs(dir_name)
-
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-def get_layer_outs(model, inputs, skip=[]):
-    outputs = []
-    hooks = []
-
-    def hook_fn(module, input, output):
-        outputs.append(output)
-
-    # Register hooks to the layers except those specified in skip
-    for index, layer in enumerate(model.features):  # Adjust if your model structure differs
-        if index not in skip:
-            hooks.append(layer.register_forward_hook(hook_fn))
-
-    # Forward pass to capture the outputs
-    model.eval()
-    with torch.no_grad():
-        _ = model(inputs)
-
-    # Remove hooks
-    for hook in hooks:
-        hook.remove()
-
-    return outputs
-
-def get_trainable_layers(model, parent_name=''):
-    trainable_layers = []
-    non_trainable_layers = []
-    for name, layer in model.named_children():
-        current_name = f"{parent_name}.{name}" if parent_name else name
-        if isinstance(layer, (nn.Conv2d, nn.Linear)):
-            trainable_layers.append(current_name)
-        else:
-            non_trainable_layers.append(current_name)
-            if isinstance(layer, nn.Sequential):
-                trainable, non_trainable = get_trainable_layers(layer, current_name)
-                trainable_layers.extend(trainable)
-                non_trainable_layers.extend(non_trainable)
+    # Create adversarial perturbations
+    perturbation = epsilon * inputs.grad.sign()
     
-    return trainable_layers, non_trainable_layers
+    # Create adversarial examples by adding perturbations to original inputs
+    adv_examples = inputs + perturbation
     
-    # for idx, layer in enumerate(model.children()):
-    #     try:
-    #         for idx_, layer_module in enumerate(layer):
-    #             layer_name = layer_module.__class__.__name__.lower()
-    #             if 'input' not in layer_name and 'softmax' not in layer_name and \
-    #                     'pred' not in layer_name and 'dropout' not in layer_name:
-    #                 for param in layer.parameters():
-    #                     if param.requires_grad:
-    #                         trainable_layers[idx][idx_] = 1
-    #                         break
-    #     except:
-    #         pass
-    # return trainable_layers
-
-def test_get_layers_out():
-    model = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
-    model.eval()
-    inputs = torch.randn(10, 3, 224, 224)
-    layer_outputs = get_layer_outs(model, inputs)
-    for i, output in enumerate(layer_outputs):
-        print(f"Output of layer {i}: {output.shape}")
-
-def test_get_trainable_layers():
-    model = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
-    model.classifier[6] = nn.Sequential(
-                      nn.Linear(4096, 512), 
-                      nn.ReLU(), 
-                      nn.Dropout(0.5),
-                      nn.Linear(512, 10))
-    trainable_layers = get_trainable_layers(model)
-    print("------ get trainable layer PASS ------")
-
-def test_filter():
-    # Load a pre-trained VGG16 model
-    model = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
-    model.classifier[6] = nn.Sequential(
-                      nn.Linear(4096, 512), 
-                      nn.ReLU(), 
-                      nn.Dropout(0.5),
-                      nn.Linear(512, 10))
-    model.eval()
-
-    train_loader, test_loader = load_CIFAR()
-
-    X, Y = next(iter(train_loader))
-    # Y_one_hot = F.one_hot(Y, num_classes=10).float()  # Convert labels to one-hot encoding
-
-    # Filter correct and incorrect classifications
-    X_corr, Y_corr, X_misc, Y_misc = filter_correct_classifications(model, X, Y)
-    print(f"Correctly classified samples: {len(X_corr)}")
-    print(f"Misclassified samples: {len(X_misc)}")
-    print("------ Filter correct PASS ------")
-
-    # Filter validation set for a desired class
-    desired_class = 0
-    X_class, Y_class = filter_val_set(desired_class, X, Y)
-    print(f"Filtered samples for class {desired_class}: {len(X_class)}")
-    print("------ Filter val PASS ------")
-
-    # Normalize a tensor
-    x_normalized = normalize(X[0])
-    # print(f"Normalized tensor: {x_normalized}")
-    print("------ Normalized PASS ------")
-
-
-def test_get_layers():
-    # Load a pre-trained VGG16 model
-    vgg16 = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
-
-    # Example input image
-    url = "https://cdn.mos.cms.futurecdn.net/ASHH5bDmsp6wnK6mEfZdcU-650-80.jpg"
-    response = requests.get(url)
-    img = Image.open(BytesIO(response.content))
-    # img = Image.open(requests.get(url, stream=True).raw)
-
-
-    # Preprocess the image
-    preprocess = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-
-    img_t = preprocess(img)
-    batch_t = torch.unsqueeze(img_t, 0)  # Create a mini-batch as expected by the model
-
-    # Get layer outputs
-    layer_outputs = get_layer_outputs(vgg16, batch_t, layers_to_skip=[])
-
-    # Print the shapes of the outputs from each layer
-    for i, output in enumerate(layer_outputs):
-        print(f"Output of layer {i}: {output.shape}")
+    # Clip the values to stay within valid image range (0-1)
+    adv_examples = torch.clamp(adv_examples, 0, 1)
     
-    print("------ get layer outputs PASS ------")
+    return adv_examples
 
-# TODO: Test not pass
-def test_get_inputs():
-    # Load a pre-trained VGG16 model
-    vgg16 = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
+def test_model():
+    offer_moder_name = ['vgg16', 
+                        'convnext_base', 
+                        'efficientnet_v2_s', 
+                        'efficientnet_v2_m', 
+                        'mnasnet1_0', 
+                        'googlenet',
+                        'inception_v3',
+                        'mobilenet_v3_small',
+                        'resnet18',
+                        'resnet152',
+                        'resnext101_32x8d',
+                        'vit_b_16']
+    
+    for model_name in offer_moder_name:
+         model, module_name, module = get_model(model_name=model_name)
+         print(model_name, len(module_name))
+    
 
-    # Example input image
-    url = "https://cdn.mos.cms.futurecdn.net/ASHH5bDmsp6wnK6mEfZdcU-650-80.jpg"
-    response = requests.get(url)
-    img = Image.open(BytesIO(response.content))
-
-    # Preprocess the image
-    preprocess = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-
-    img_t = preprocess(img)
-    batch_t = torch.unsqueeze(img_t, 0)  # Create a mini-batch as expected by the model
-
-    # Calculate major functional regions
-    major_regions = calc_major_func_regions(vgg16, batch_t)
-    print("Major Functional Regions:")
-    for i, region in enumerate(major_regions):
-        print(f"Layer {i}: Min {region[0].shape}, Max {region[1].shape}")
-
-    # Get layer outputs by layer name
-    layer_outputs = get_layer_outputs_by_layer_name(vgg16, batch_t)
-    print("\nLayer Outputs by Layer Name:")
-    for name, output in layer_outputs.items():
-        print(f"{name}: {output.shape}")
-
-    print("------ get layer by name PASS ------")
-
-    # Get layer inputs
-    # TODO: Issues here, test not pass
-    # layer_inputs = get_layer_inputs(vgg16, batch_t)
-    # print("\nLayer Inputs:")
-    # for i, input_layer in enumerate(layer_inputs):
-    #     print(f"Layer {i} Inputs: {len(input_layer)}")
-
-
-
-def test_module():
-    origin_module = ["load_CIFAR", 
-        "load_MNIST", 
-        "load_driving_data", 
-        "data_generator",
-        "preprocess_image",
-        "deprocess_image",
-        "load_dave_model",
-        "load_model",
-        "get_layer_outs_old",
-        "get_layer_outs_new",
-        "calc_major_func_regions",
-        "get_layer_outputs_by_layer_name", 
-        "get_layer_inputs", 
-        "get_python_version", 
-        "save_quantization", 
-        "load_quantization", 
-        "save_data", 
-        "load_data",
-        "save_layerwise_relevances",
-        "load_layerwise_relevances",
-        "save_perturbed_test",
-        "load_perturbed_test",
-        "save_perturbed_test_groups",
-        "load_perturbed_test_groups",
-        "create_experiment_dir",
-        "save_classifications",
-        "load_classifications",
-        "save_totalR",
-        "load_totalR",
-        "save_layer_outs",
-        "load_layer_outs",
-        "filter_correct_classifications",
-        "filter_val_set",
-        "normalize",
-        "get_trainable_layers",
-        "weight_analysis",
-        "percent_str",
-        "generate_adversarial",
-        "find_relevant_pixels",
-        "save_relevant_pixels",
-        "load_relevant_pixels",
-        "create_dir"]
-
-    print("Origin Module: ", len(origin_module))
-
-    # Example usage:
-    cifar_train_loader, cifar_test_loader = load_CIFAR()
-    print("------ CIFAR10 Loading PASS ------")
-    mnist_train_loader, mnist_test_loader = load_MNIST()
-    print("------ MNIST Loading PASS ------")
-
-    # test_get_inputs()
-    # test_get_layers()
-    # test_filter()
-    # test_get_trainable_layers()
-    test_get_layers_out()
-
-### Testing for the modules
-if __name__ == "__main__":
-    test_module()
+if __name__ == '__main__':
+    # unit test - model
+    args = parse_args()
+    # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
+    # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
+    trainloader, testloader = load_ImageNet()
+    # test_model()
+    
