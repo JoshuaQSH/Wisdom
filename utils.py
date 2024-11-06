@@ -195,12 +195,19 @@ def save_model(model, model_name):
 
 # Save the k-means model
 def save_kmeans_model(kmeans, filename='kmeans_model.pkl'):
-    joblib.dump(kmeans, filename)
+    # joblib.dump(kmeans, filename)
+    import pickle
+    with open(filename, "wb") as file:
+        pickle.dump(kmeans, file)
 
 # Load the k-means model
 def load_kmeans_model(filename='kmeans_model.pkl'):
-    return joblib.load(filename)
-
+    # return joblib.load(filename)
+    import pickle
+    with open(filename, "rb") as file:
+        kmeans_models_loaded = pickle.load(file)
+    return kmeans_models_loaded
+    
 # TODO: Adding more models
 def get_model(model_name='vgg16'):
     # Hardcoded model names for now
@@ -353,10 +360,11 @@ def test_model():
                         'resnet152',
                         'resnext101_32x8d',
                         'vit_b_16']
-    
+    offer_moder_name = ['resnet18']
     for model_name in offer_moder_name:
          model, module_name, module = get_model(model_name=model_name)
          print(model_name, len(module_name))
+         print(model_name, module_name)
     
 
 if __name__ == '__main__':
@@ -364,6 +372,6 @@ if __name__ == '__main__':
     args = parse_args()
     # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
     # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
-    trainloader, testloader = load_ImageNet()
-    # test_model()
+    trainloader, testloader, classes = load_ImageNet()
+    test_model()
     

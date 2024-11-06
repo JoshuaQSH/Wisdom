@@ -21,6 +21,7 @@ then
         --model lenet \
         --top-m-neurons 10 \
         --n-clusters 2 \
+        --use-silhouette \
         --attr $TEST_ATTR
 
 elif [ $RUN_TEST == "conv1" ]

@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 from matplotlib.colors import LinearSegmentedColormap
 
 import torch
@@ -27,7 +28,7 @@ from captum.attr import LayerConductance, LayerActivation, InternalInfluence, La
 from captum.metrics import infidelity_perturb_func_decorator, infidelity
 
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_samples, silhouette_score
 
 from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model
 
@@ -207,22 +208,127 @@ def get_activation_values_for_neurons(model, inputs, labels, important_neuron_in
         
     return activation_values, selected_activations
 
-# TODO: We choose the the cluster number based on the silhouette score, could be customized in the future
-# score could be importance scores or activation values, using silhouette score to find the optimal cluster number
-def find_optimal_clusters(scores, max_k=100):
-    scores_silhouette = []
+
+## TODO: bugs here, scatter plot is not working, for the shape of X
+def plot_cluster_info(n_clusters, silhouette_avg, X, clusterer, cluster_labels):
+    # Create a subplot with 1 row and 2 columns
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    fig.set_size_inches(18, 7)
+    # The silhouette coefficient can range from -0.1, 1
+    ax1.set_xlim([-0.1, 1])
+    y_lower = 10
+    sample_silhouette_values = silhouette_samples(X, cluster_labels)
+    for i in range(n_clusters):
+        # Aggregate the silhouette scores for samples belonging to
+        # cluster i, and sort them
+        ith_cluster_silhouette_values = sample_silhouette_values[cluster_labels == i]
+        ith_cluster_silhouette_values.sort()
+        size_cluster_i = ith_cluster_silhouette_values.shape[0]
+        y_upper = y_lower + size_cluster_i
+        color = cm.nipy_spectral(float(i) / n_clusters)
+        ax1.fill_betweenx(
+            np.arange(y_lower, y_upper),
+            0,
+            ith_cluster_silhouette_values,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.7,
+        )
+
+        # Label the silhouette plots with their cluster numbers at the middle
+        ax1.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
+
+        # Compute the new y_lower for next plot
+        y_lower = y_upper + 10  # 10 for the 0 samples
+    
+    ax1.set_title("The silhouette plot for the various clusters.")
+    ax1.set_xlabel("The silhouette coefficient values")
+    ax1.set_ylabel("Cluster label")
+    
+    # The vertical line for average silhouette score of all the values
+    ax1.axvline(x=silhouette_avg, color="red", linestyle="--")
+    ax1.set_yticks([])  # Clear the yaxis labels / ticks
+    ax1.set_xticks([-0.1, 0, 0.2, 0.4, 0.6, 0.8, 1])
+    
+    # 2nd Plot showing the actual clusters formed
+    colors = cm.nipy_spectral(cluster_labels.astype(float) / n_clusters)
+    # [5000, 1] for CIFAR-10 here
+    ax2.scatter(
+        X[:, 0], X[:, 1], marker=".", s=30, lw=0, alpha=0.7, c=colors, edgecolor="k"
+    )
+
+    # Labeling the clusters
+    centers = clusterer.cluster_centers_
+    # Draw white circles at cluster centers
+    ax2.scatter(
+        centers[:, 0],
+        centers[:, 1],
+        marker="o",
+        c="white",
+        alpha=1,
+        s=200,
+        edgecolor="k",
+    )
+    
+    for i, c in enumerate(centers):
+        ax2.scatter(c[0], c[1], marker="$%d$" % i, alpha=1, s=50, edgecolor="k")
+
+    ax2.set_title("The visualization of the clustered data.")
+    ax2.set_xlabel("Feature space for the 1st feature")
+    ax2.set_ylabel("Feature space for the 2nd feature")
+
+    plt.suptitle(
+        "Silhouette analysis for KMeans clustering on sample data with n_clusters = %d"
+        % n_clusters,
+        fontsize=14,
+        fontweight="bold",
+    )
+    
+    plt.savefig('./images/silhouette_n_{}.pdf'.format(n_clusters), dpi=1500)
+
+
+def find_optimal_clusters(scores, max_k=10):
     scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
-    for k in range(2, max_k + 1):
-        kmeans = KMeans(n_clusters=k, random_state=0)
-        labels = kmeans.fit_predict(scores_np)
-        scores_t = silhouette_score(scores_np, labels)
-        scores_silhouette.append((k, scores_t))
+    silhouette_list = []
+    for n_clusters  in range(2, max_k):
+        
+        # Initialize the clusterer with n_clusters value and a random generator
+        clusterer = KMeans(n_clusters=n_clusters, random_state=10)
+        cluster_labels = clusterer.fit_predict(scores_np)
+        
+        silhouette_avg = silhouette_score(scores_np, cluster_labels)
+        silhouette_list.append(silhouette_avg)
+        print("For n_clusters =", n_clusters, "The average silhouette_score is :", silhouette_avg)
+        sample_silhouette_values = silhouette_samples(scores_np, cluster_labels)
+        
+        #  Plot the cluster info
+        # plot_cluster_info(n_clusters, silhouette_avg, scores_np, clusterer, cluster_labels)
+        
+        ## Get the samples for each cluster
+        for i in range(n_clusters):
+            # Aggregate the silhouette scores for samples belonging to cluster i, and sort them
+            ith_cluster_silhouette_values = sample_silhouette_values[cluster_labels == i]
+            ith_cluster_silhouette_values.sort()
+            
     
-    # Select k with the highest silhouette score
-    best_k = max(scores_silhouette, key=lambda x: x[1])[0]
-    print(f"Optimal number of clusters: {best_k}")
-    
+    best_k = max(silhouette_list, key=lambda x: x[1])[0]
     return best_k
+
+
+# def find_optimal_clusters(scores, max_k=100):
+#     scores_silhouette = []
+#     scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
+#     for k in range(2, max_k + 1):
+#         kmeans = KMeans(n_clusters=k, random_state=0)
+#         labels = kmeans.fit_predict(scores_np)
+#         scores_t = silhouette_score(scores_np, labels)
+#         scores_silhouette.append((k, scores_t))
+    
+#     # Select k with the highest silhouette score
+#     best_k = max(scores_silhouette, key=lambda x: x[1])[0]
+#     print(f"Optimal number of clusters: {best_k}")
+    
+#     return best_k
 
 # Option - 1: This is used for clustering the importance scores
 def cluster_importance_scores(importance_scores, n_clusters, layer_name='fc1'): 
@@ -240,35 +346,50 @@ def cluster_importance_scores(importance_scores, n_clusters, layer_name='fc1'):
         return None, None
     
     print("The cluster labels: {}, etc.".format(cluster_labels[:10]))
-    save_kmeans_model(kmeans, 'kmeans_impo_{}.pkl'.format(layer_name))    
+    save_kmeans_model(kmeans, './saved_files/kmeans_impo_{}.pkl'.format(layer_name))    
     
     return cluster_labels, kmeans
 
-# Option - 2: This is used for clustering the activation values
-def cluster_activation_values(activation_values, n_clusters, layer_name='fc1'):
+# Option - 2: This is used for clustering the activation values [MAIN]
+def cluster_activation_values(activation_values, n_clusters, layer_name='fc1', use_silhouette=False):
+    
+    kmeans_comb = []
     
     if layer_name[:-1] == 'fc':
         n_neurons = activation_values.shape[1]
-        activation_values_np = activation_values.cpu().detach().numpy()
-        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-        kmeans_comb = [KMeans(n_clusters=n_clusters).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)) for i in range(n_neurons)]
-        cluster_labels = kmeans.fit_predict(activation_values_np)
+        # kmeans = KMeans(n_clusters=optimal_k, random_state=0)
+        for i in range(n_neurons):
+            if use_silhouette:
+                optimal_k = find_optimal_clusters(activation_values)
+            else:
+                optimal_k = n_clusters
+                
+            kmeans_comb.append(KMeans(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
+        
+        # kmeans_comb = [KMeans(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)) for i in range(n_neurons)]
+        # cluster_labels = kmeans.fit_predict(activation_values_np)
         
     elif layer_name[:-1] == 'conv':
         activation_values = torch.mean(activation_values, dim=[2, 3])
         n_neurons = activation_values.shape[1]
-        activation_values_np = activation_values.cpu().detach().numpy()
-        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-        kmeans_comb = [KMeans(n_clusters=2).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)) for i in range(n_neurons)]
-        cluster_labels = kmeans.fit_predict(activation_values_np)
+        # kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        for i in range(n_neurons):
+            if use_silhouette:
+                optimal_k = find_optimal_clusters(activation_values)
+            else:
+                optimal_k = n_clusters
+                
+            kmeans_comb.append(KMeans(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
+        
+        # kmeans_comb = [KMeans(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)) for i in range(n_neurons)]
+        # cluster_labels = kmeans.fit_predict(activation_values_np)
     else:
         raise ValueError(f"Invalid layer name: {layer_name}")
-        return None, None, None
         
     print("The cluster labels: {}, etc., with number of clusters: {}".format(cluster_labels[:10], n_clusters))
-    save_kmeans_model(kmeans, 'kmeans_acti_{}.pkl'.format(layer_name))
+    save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
     
-    return cluster_labels, kmeans, kmeans_comb
+    return cluster_labels, kmeans_comb
 
 # Assign Test inputs to Clusters
 def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
@@ -408,29 +529,23 @@ if __name__ == '__main__':
                                                                                 important_neuron_indices, 
                                                                                 module_name[args.layer_index],
                                                                                 args.viz)
-        
-    # Clustering based on the importance scores or activation values
-    # optimal_k_importance = find_optimal_clusters(mean_attribution)
-    if args.use_silhouette:
-        optimal_k = find_optimal_clusters(activation_values)
-    else:
-        optimal_k = args.n_clusters
     
     if args.cluster_scores:
         ### Option - 1: Cluster the importance scores
         try:
-            kmeans_model = load_kmeans_model('kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
+            kmeans_model = load_kmeans_model('./saved_files/kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
             print('kmeans_model_{}.pkl Loaded!'.format(module_name[args.layer_index]))
         except FileNotFoundError:
-            cluster_labels, kmeans_model = cluster_importance_scores(mean_attribution, optimal_k)
+            cluster_labels, kmeans_model = cluster_importance_scores(mean_attribution, args.n_clusters)
         print("Importance scores clustered.")
     else:
         ### Option - 2: Cluster the activation values
-        cluster_labels, kmeans_model, kmeans_comb = cluster_activation_values(selected_activations, optimal_k, module_name[args.layer_index])
+        # cluster_labels, kmeans_comb = cluster_activation_values(selected_activations, optimal_k, module_name[args.layer_index])
         # try:
-        #     kmeans_model = load_kmeans_model('kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
+        #     kmeans_model = load_kmeans_model('./saved_files/kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
         # except FileNotFoundError:
-        #     cluster_labels, kmeans_model = cluster_activation_values(selected_activations, optimal_k, module_name[args.layer_index])
+        #     cluster_labels, kmeans_comb = cluster_activation_values(selected_activations, args.n_clusters, module_name[args.layer_index], args.use_silhouette)
+        cluster_labels, kmeans_comb = cluster_activation_values(selected_activations, args.n_clusters, module_name[args.layer_index], args.use_silhouette)
         print("Activation values clustered.")
 
     ### Compute IDC coverage
@@ -441,7 +556,7 @@ if __name__ == '__main__':
                      classes, 
                      module_name[args.layer_index], 
                      top_m_neurons=args.top_m_neurons, 
-                     n_clusters=optimal_k,
+                     n_clusters=args.n_clusters,
                      attribution_method=args.attr)
     
     ### Infidelity metric
