@@ -30,7 +30,7 @@ from captum.metrics import infidelity_perturb_func_decorator, infidelity
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, visualize_idc_scores
 
 # Add src directory to sys.path
 src_path = Path(__file__).resolve().parent / "src"
@@ -120,6 +120,22 @@ def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_
     
     return attribution, torch.mean(attribution, dim=0)
 
+def evaluate_attribution_methods(model, inputs_images, labels, kmeans, classes, layer_name, attribution_methods, top_m_neurons=-1, n_clusters=5):
+    idc_scores = {}
+    for method in attribution_methods:
+        print(f"Evaluating method: {method}")
+        # Compute IDC for the given attribution method
+        _, idc_score = compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name,
+                                        top_m_neurons=top_m_neurons, n_clusters=n_clusters,
+                                        attribution_method=method)
+        
+        print(f"IDC score for {method}: {idc_score}")
+        # Store the IDC score for this method
+        idc_scores[method] = idc_score
+    
+    visualize_idc_scores(idc_scores)
+    return idc_scores
+
 def select_top_neurons(importance_scores, top_m_neurons=5):
     if top_m_neurons == -1:
         print("Selecting all neurons.")
@@ -154,6 +170,7 @@ def visualize_activation(activation_values, selected_activations, layer_name, th
         plt.savefig(saved_file, dpi=1500)
         print("Mean Activation Values plotted, saved to {}".format(saved_file))
         # plt.show()
+        
     elif mode == 'conv':
         mean_activation = torch.mean(selected_activations, dim=[2, 3]).mean(dim=0)
         plt.plot(range(len(mean_activation)), mean_activation.numpy(), marker='o')
@@ -287,10 +304,10 @@ def plot_cluster_info(n_clusters, silhouette_avg, X, clusterer, cluster_labels):
     plt.savefig('./images/silhouette_n_{}.pdf'.format(n_clusters), dpi=1500)
 
 
-def find_optimal_clusters(scores, max_k=10):
+def find_optimal_clusters(scores, min_k=2, max_k=10):
     scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
     silhouette_list = []
-    for n_clusters  in range(2, max_k):
+    for n_clusters  in range(min_k, max_k):
         
         # Initialize the clusterer with n_clusters value and a random generator
         clusterer = KMeans(n_clusters=n_clusters, random_state=10)
@@ -310,25 +327,8 @@ def find_optimal_clusters(scores, max_k=10):
             ith_cluster_silhouette_values = sample_silhouette_values[cluster_labels == i]
             ith_cluster_silhouette_values.sort()
             
-    
-    best_k = max(silhouette_list, key=lambda x: x[1])[0]
+    best_k = silhouette_list.index(max(silhouette_list)) + min_k
     return best_k
-
-
-# def find_optimal_clusters(scores, max_k=100):
-#     scores_silhouette = []
-#     scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
-#     for k in range(2, max_k + 1):
-#         kmeans = KMeans(n_clusters=k, random_state=0)
-#         labels = kmeans.fit_predict(scores_np)
-#         scores_t = silhouette_score(scores_np, labels)
-#         scores_silhouette.append((k, scores_t))
-    
-#     # Select k with the highest silhouette score
-#     best_k = max(scores_silhouette, key=lambda x: x[1])[0]
-#     print(f"Optimal number of clusters: {best_k}")
-    
-#     return best_k
 
 # Option - 1: This is used for clustering the importance scores
 def cluster_importance_scores(importance_scores, n_clusters, layer_name='fc1'): 
@@ -360,7 +360,7 @@ def cluster_activation_values(activation_values, n_clusters, layer_name='fc1', u
         # kmeans = KMeans(n_clusters=optimal_k, random_state=0)
         for i in range(n_neurons):
             if use_silhouette:
-                optimal_k = find_optimal_clusters(activation_values)
+                optimal_k = find_optimal_clusters(activation_values, 2, 10)
             else:
                 optimal_k = n_clusters
                 
@@ -375,7 +375,7 @@ def cluster_activation_values(activation_values, n_clusters, layer_name='fc1', u
         # kmeans = KMeans(n_clusters=n_clusters, random_state=0)
         for i in range(n_neurons):
             if use_silhouette:
-                optimal_k = find_optimal_clusters(activation_values)
+                optimal_k = find_optimal_clusters(activation_values, 2, 10)
             else:
                 optimal_k = n_clusters
                 
@@ -386,10 +386,10 @@ def cluster_activation_values(activation_values, n_clusters, layer_name='fc1', u
     else:
         raise ValueError(f"Invalid layer name: {layer_name}")
         
-    print("The cluster labels: {}, etc., with number of clusters: {}".format(cluster_labels[:10], n_clusters))
     save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
+    print("KMeans model saved! Name: kmeans_acti_{}.pkl".format(layer_name))
     
-    return cluster_labels, kmeans_comb
+    return kmeans_comb
 
 # Assign Test inputs to Clusters
 def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
@@ -457,6 +457,8 @@ def compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name, 
     print(f"Total INCC combinations: {total_combination}")
     print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
     print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
+    
+    return unique_clusters, coverage_rate
 
 def compute_incc_centroids(important_neurons_clusters):
     centroids = {}
@@ -521,6 +523,7 @@ if __name__ == '__main__':
 
     # Get the test data
     test_images, test_labels = get_class_data(testloader, classes, args.test_image)
+
     # Obtain the important neuron indices 
     important_neuron_indices = select_top_neurons(mean_attribution, args.top_m_neurons)
     activation_values, selected_activations = get_activation_values_for_neurons(model, 
@@ -545,20 +548,40 @@ if __name__ == '__main__':
         #     kmeans_model = load_kmeans_model('./saved_files/kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
         # except FileNotFoundError:
         #     cluster_labels, kmeans_comb = cluster_activation_values(selected_activations, args.n_clusters, module_name[args.layer_index], args.use_silhouette)
-        cluster_labels, kmeans_comb = cluster_activation_values(selected_activations, args.n_clusters, module_name[args.layer_index], args.use_silhouette)
+        kmeans_comb = cluster_activation_values(selected_activations, args.n_clusters, module_name[args.layer_index], args.use_silhouette)
         print("Activation values clustered.")
 
-    ### Compute IDC coverage
-    compute_idc_test(model, 
-                     test_images, 
-                     test_labels, 
-                     kmeans_comb, # kmeans_model
-                     classes, 
-                     module_name[args.layer_index], 
-                     top_m_neurons=args.top_m_neurons, 
-                     n_clusters=args.n_clusters,
-                     attribution_method=args.attr)
     
+    ### Evaluate the attribution methods
+    if args.vis_attributions:
+        
+        # List of available attribution methods
+        attribution_methods = [
+            'lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 
+            'ldls', 'lgs', 'lig', 'lfa', 'lrp'
+        ]
+        evaluate_attribution_methods(model, 
+                                    test_images, 
+                                    test_labels, 
+                                    kmeans_comb, 
+                                    classes, 
+                                    module_name[args.layer_index], 
+                                    attribution_methods, 
+                                    top_m_neurons=args.top_m_neurons, 
+                                    n_clusters=args.n_clusters)
+    
+    else:
+        ### Compute IDC coverage
+        unique_cluster, coverage_rate = compute_idc_test(model, 
+                         test_images, 
+                         test_labels, 
+                         kmeans_comb, # kmeans_model
+                         classes, 
+                         module_name[args.layer_index], 
+                         top_m_neurons=args.top_m_neurons, 
+                         n_clusters=args.n_clusters,
+                         attribution_method=args.attr)
+
     ### Infidelity metric
     # infid = infidelity_metric(net, perturb_fn, images, attribution)
     # print(f"Infidelity: {infid:.2f}")

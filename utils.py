@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import urllib.request
 import json
+import matplotlib.pyplot as plt
 
 import torch
 import torchvision
@@ -48,6 +49,8 @@ def parse_args():
     parser.add_argument('--cluster-scores', action='store_true', help='Cluserting the importance scores rather than using actiation values.')
     parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
+    parser.add_argument('--vis-attributions', action='store_true', help='Visualize the attributions.')
+
     
     args = parser.parse_args()
     print(args)
@@ -365,7 +368,22 @@ def test_model():
          model, module_name, module = get_model(model_name=model_name)
          print(model_name, len(module_name))
          print(model_name, module_name)
+
+def visualize_idc_scores(idc_scores, filename='./logs/idc_scores.pdf'):
+    methods = list(idc_scores.keys())
+    scores = [idc_scores[method] for method in methods]
     
+    plt.figure(figsize=(12, 6))
+    plt.bar(methods, scores, color='skyblue')
+    plt.xlabel('Attribution Method')
+    plt.ylabel('IDC Score (%)')
+    plt.title('Comparison of IDC Scores for Different Attribution Methods')
+    plt.xticks(rotation=45)
+    plt.grid(axis='y', linestyle='--')
+    plt.tight_layout()
+    plt.savefig(filename, format='pdf', dpi=1200)
+    # plt.show()
+
 
 if __name__ == '__main__':
     # unit test - model

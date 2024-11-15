@@ -2,27 +2,28 @@
 
 RUN_TEST=$@
 CLASSES=('plane' 'car' 'bird' 'cat' 'deer' 'dog' 'frog' 'horse' 'ship' 'truck')
+# Check "lgc"
 METHODS=('lc' 'la' 'ii' 'lgxa' 'lgc' 'ldl' 'ldls' 'lgs' 'lig' 'lfa' 'lrp')
-TEST_ATTR="lrp"
+TEST_ATTR="lfa"
 TEST_CLASS="plane"
 TEST_MODEL="lenet"
 NUM_CLUSTERS=2
-NUM_NEURONS=5
+NUM_NEURONS=10
 I_PATH=/home/shenghao/torch-deepimportance
 
 if [ $RUN_TEST == "fc1" ]
 then
     echo "Running LeNet with fc1 layer"
+    # layer-index 3 is the fc1 layer
     python run.py \
         --dataset cifar10 \
         --batch-size 4 \
         --importance-file ${I_PATH}/saved_files/plane_lenet_${TEST_ATTR}_fc1.json \
         --layer-index 3 \
         --model lenet \
-        --top-m-neurons 10 \
-        --n-clusters 2 \
-        --use-silhouette \
-        --attr $TEST_ATTR
+        --top-m-neurons $NUM_NEURONS \
+        --n-clusters $NUM_CLUSTERS \
+        --attr la
 
 elif [ $RUN_TEST == "conv1" ]
 then
@@ -32,9 +33,10 @@ then
     --large-image \
     --importance-file ${I_PATH}/saved_files/plane_lenet_${TEST_ATTR}_conv1.json \
     --layer-index 1 \
-    --top-m-neurons -1 \
+    --top-m-neurons 10 \
     --model lenet \
     --attr $TEST_ATTR
+
 elif [ $RUN_TEST == "fc2" ]
 then
     echo "Running LeNet with fc2 layer"
@@ -58,6 +60,7 @@ then
         --top-m-neurons -1 \
         --model lenet \
         --attr $TEST_ATTR
+
 elif [ $RUN_TEST == "cifartest" ]
 then
     echo "Running LeNet with fc1 layer"
@@ -75,6 +78,7 @@ then
             --test-image $class \
             --attr $TEST_ATTR
     done
+
 elif [ $RUN_TEST == "cifarmethods" ]
 then
     echo "Running LeNet with fc1 layer"
@@ -93,6 +97,7 @@ then
             --attr $attribution >> ${TEST_MODEL}_${TEST_CLASS}_N-${NUM_NEURONS}_C-${NUM_CLUSTERS}.log
         echo "Done with $attribution"
     done
+
 elif [ $RUN_TEST == "imagenet" ]
 then
     echo "Running ImageNet with vgg16"
@@ -104,6 +109,36 @@ then
         --top-m-neurons 5 \
         --n-clusters 2 \
         --test-image $TEST_CLASS \
+        --attr $TEST_ATTR
+
+elif [ $RUN_TEST == "attrtest" ]
+then
+    echo "Running CIFAR10 with LeNet and test each attributions"
+    python eval_attr.py \
+        --dataset cifar10 \
+        --batch-size 128 \
+        --importance-file ${I_PATH}/saved_files/plane_lenet_${TEST_ATTR}_fc1.json \
+        --layer-index 3 \
+        --model lenet \
+        --top-m-neurons 10 \
+        --n-clusters 2 \
+        --vis-attributions \
+        --attr $TEST_ATTR
+
+elif [ $RUN_TEST == "attr4class" ]
+then
+    echo "Running CIFAR10 with LeNet and test each attributions"
+    python eval_attr.py \
+        --dataset cifar10 \
+        --batch-size 128 \
+        --importance-file ${I_PATH}/saved_files/${class}_lenet_${TEST_ATTR}_fc1.json \
+        --layer-index 3 \
+        --model lenet \
+        --capture-all \
+        --top-m-neurons 10 \
+        --n-clusters 2 \
+        --vis-attributions \
+        --test-image $class \
         --attr $TEST_ATTR
 else
     echo "Running a custom model with fixed layer"
