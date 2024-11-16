@@ -30,7 +30,7 @@ from captum.metrics import infidelity_perturb_func_decorator, infidelity
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, visualize_idc_scores
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model
 
 # Add src directory to sys.path
 src_path = Path(__file__).resolve().parent / "src"
@@ -531,7 +531,7 @@ if __name__ == '__main__':
                                                                                 labels, 
                                                                                 important_neuron_indices, 
                                                                                 module_name[args.layer_index],
-                                                                                args.viz)
+                                                                                args.vis_inputs)
     
     if args.cluster_scores:
         ### Option - 1: Cluster the importance scores

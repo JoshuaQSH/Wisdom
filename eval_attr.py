@@ -1,24 +1,14 @@
 import os
-import json
-import sys
 from pathlib import Path
+import time
 
 import torch
-import torch.nn as nn
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from matplotlib.colors import LinearSegmentedColormap
-
-import torch
-import torchvision
 import torchvision.transforms.functional as TF
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.nn.utils.prune as prune
 
-from torchvision import models
 from captum.attr import visualization as viz
 from captum.attr import LayerConductance, LayerActivation, InternalInfluence, LayerGradientXActivation, LayerGradCam, LayerDeepLift, LayerDeepLiftShap, LayerGradientShap, LayerIntegratedGradients, LayerFeatureAblation, LayerLRP
 from captum.metrics import infidelity_perturb_func_decorator, infidelity
@@ -26,7 +16,7 @@ from captum.metrics import infidelity_perturb_func_decorator, infidelity
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, visualize_idc_scores
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, Logger
 
 def ramdon_prune_fc(model, layer_name='fc1', num_neurons=5):
     net_layer = getattr(model, layer_name)
@@ -72,7 +62,7 @@ def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_
     _, predicted = torch.max(outputs, 1)
     
     # ['LayerConductance', 'LayerActivation', 'InternalInfluence', 
-    # 'LayerGradientXActivation', 'LayerGradCam', 'LayerDeepLift', 
+    # 'LayerGradientXActivation', 'LayerGradCam', 'LayerDeepLift',
     # 'LayerDeepLiftShap', 'LayerGradientShap', 'LayerIntegratedGradients', 
     # 'LayerFeatureAblation', 'LayerLRP']
     if attribution_method == 'lc':
@@ -276,10 +266,10 @@ def offer_kmeans_model(args, model, images, labels, classes, module_name):
     important_neuron_indices = select_top_neurons(mean_attribution, args.top_m_neurons)
     activation_values, selected_activations = get_activation_values_for_neurons(model, 
                                                                                 images, 
-                                                                                labels, 
+                                                                                labels,
                                                                                 important_neuron_indices, 
                                                                                 module_name[args.layer_index],
-                                                                                args.viz)
+                                                                                args.vis_inputs)
     
 
     kmeans_comb = cluster_activation_values(selected_activations, args.n_clusters, module_name[args.layer_index], args.use_silhouette)
@@ -305,11 +295,12 @@ def test_model(model, inputs, labels):
 def test_attributions(args,
                       model, 
                       train_inputs, 
-                      train_labels, 
+                      train_labels,
                       test_inputs,
                       test_labels,
                       classes,
                       layer_name,
+                      log,
                       random_prune=False):
     
     top_m_neurons = args.top_m_neurons
@@ -336,6 +327,16 @@ def test_attributions(args,
 if __name__ == '__main__':
     args = parse_args()
     
+    ### Logging settings
+    if args.logging:
+        start_time = int(round(time.time()*1000))
+        timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
+        saved_log_name = args.log_path + '{}-{}-{}.log'.format(args.model, args.dataset, timestamp)
+        log = Logger(saved_log_name, level='debug')
+        log.logger.debug("[=== Model: {} Layer: {} Dataset: {} ===]".format(args.model, args.layer_index, args.dataset))
+    else:
+        log = None
+
     ### Model settings
     if args.model_path != 'None':
         model_path = args.model_path
@@ -343,7 +344,7 @@ if __name__ == '__main__':
         model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/'
     model_path += args.saved_model
     
-    ### Device settings    
+    ### Device settings   
     if torch.cuda.is_available() and args.device != 'cpu':
         device = torch.device(args.device)
     else:
@@ -358,16 +359,47 @@ if __name__ == '__main__':
     
     ### Test all the model layer and also the each of the attribution methods
     if args.capture_all:
-        pass
+        attribution_methods = ['lc', 'la', 'ii', 'lgxa', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
+        if args.dataset == 'cifar10':
+            classes = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+            for single_class in classes:
+                train_images, train_labels = get_class_data(trainloader, classes, single_class)
+                test_images, test_labels = get_class_data(testloader, classes, single_class)
+                for attribution in attribution_methods:
+                    test_attributions(args,
+                                attribution,
+                                model, 
+                                train_images,
+                                train_labels,
+                                test_images,
+                                test_labels,
+                                classes, 
+                                module_name[args.layer_index],
+                                log,
+                                False)
+        elif args.dataset == 'mnist':
+            classes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+        elif args.dataset == 'imagenet':
+            url = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"
+            urllib.request.urlretrieve(url, "imagenet_labels.json")
+            # Load the labels from the JSON file
+            with open("imagenet_labels.json") as f:
+                classes = json.load(f)
+        else:
+            raise ValueError(f"Invalid dataset: {args.dataset}")
+
     else:
         #  Get the specific class data
         images, labels = get_class_data(trainloader, classes, args.test_image)
+
+        ### Kmeans model for calculating the IDC [Optional]
         # kmeans_comb = offer_kmeans_model(args, model, images, labels, classes, module_name)
         # print("Kmeans Model done!")
         
         # Get the test data
         test_images, test_labels = get_class_data(testloader, classes, args.test_image)
         test_attributions(args,
+                        attribution,
                         model, 
                         images,
                         labels,
@@ -375,4 +407,5 @@ if __name__ == '__main__':
                         test_labels,
                         classes, 
                         module_name[args.layer_index],
+                        log,
                         False)

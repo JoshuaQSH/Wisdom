@@ -4,7 +4,7 @@ RUN_TEST=$@
 CLASSES=('plane' 'car' 'bird' 'cat' 'deer' 'dog' 'frog' 'horse' 'ship' 'truck')
 # Check "lgc"
 METHODS=('lc' 'la' 'ii' 'lgxa' 'lgc' 'ldl' 'ldls' 'lgs' 'lig' 'lfa' 'lrp')
-TEST_ATTR="lfa"
+TEST_ATTR="lrp"
 TEST_CLASS="plane"
 TEST_MODEL="lenet"
 NUM_CLUSTERS=2
@@ -23,7 +23,7 @@ then
         --model lenet \
         --top-m-neurons $NUM_NEURONS \
         --n-clusters $NUM_CLUSTERS \
-        --attr la
+        --attr ldls
 
 elif [ $RUN_TEST == "conv1" ]
 then
@@ -137,8 +137,7 @@ then
         --capture-all \
         --top-m-neurons 10 \
         --n-clusters 2 \
-        --vis-attributions \
-        --test-image $class \
+        --logging \
         --attr $TEST_ATTR
 else
     echo "Running a custom model with fixed layer"
