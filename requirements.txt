@@ -15,4 +15,7 @@ setuptools==70.2.0
 six==1.16.0
 tqdm==4.66.4
 transformers==4.42.4
+tennsorboard
+pycocotools
+opencv-python
 captum
