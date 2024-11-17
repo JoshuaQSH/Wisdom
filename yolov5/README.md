@@ -1,22 +1,21 @@
-## This repository contains code for <a href="https://medium.com/@mihir_rajput/yolo-v5-is-here-custom-object-detection-tutorial-with-yolo-v5-12666ee1774e">this</a> tutorial.
-
-## Model Training Matrix
-<p align="center">
-  <img width="700" height="400" src="https://github.com/mihir135/yolov5/blob/master/weights_elephant/results.png">
-</p>
-
-## Output
-<p align="center">
-  <img width="700" height="500" src="https://github.com/mihir135/yolov5/blob/master/output_elephant_img/output_.gif">
-</p>
+# YOLOv5 Analysis
 
 ## Licence
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-## Credits
-https://ultralytics.com/ <br/>
-https://roboflow.ai/
+This repository is forked from [Mihir Rajput](https://github.com/mihir135), I only did a small changes for the model and the dataset to fit the latest `torch` and `numpy`, please refer to the origin [repository](https://github.com/mihir135/yolov5) for more details.
 
+For the tutorial, please visit [here](https://pub.towardsai.net/yolo-v5-is-here-custom-object-detection-tutorial-with-yolo-v5-12666ee1774e).
+
+## Model Training Matrix Example (elephant)
+<p align="center">
+  <img width="700" height="400" src="https://github.com/JoshuaQSH/torch-deepimportance/tree/yolo/weights_elephant/results.png">
+</p>
+
+## Output Example (elephant)
+<p align="center">
+  <img width="700" height="500" src="https://github.com/JoshuaQSH/torch-deepimportance/tree/yolo/output_elephant_img/output_.gif">
+</p> 
 
 ## The YOLO format for annotations
 
@@ -42,10 +41,7 @@ Refer to [HERE](https://github.com/AlexeyAB/Yolo_mark/issues/60)
 CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --batch 8 --epochs 30 --data ./data/elephant.yaml --cfg ./models/yolov5s.yaml --weights './pretrained_weights/yolov5s.pt' --device 0
 ```
 
-```shell
-datasets.py: 277
-datasets.py: 407
-datasets.py: 326
-yolo.py: 122
-utils.py: 59
-```
+## Credits
+https://ultralytics.com/ <br/>
+https://roboflow.ai/ <br/>
+https://github.com/mihir135/yolov5/tree/master?tab=readme-ov-file
