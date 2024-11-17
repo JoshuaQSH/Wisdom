@@ -1,11 +1,11 @@
-import numpy as np
 import argparse
-import joblib
 import os
 import sys
 from pathlib import Path
 import urllib.request
 import json
+import logging
+from logging import handlers
 import matplotlib.pyplot as plt
 
 import torch
@@ -26,6 +26,33 @@ sys.path.append(str(src_path))
 
 from model_hub import LeNet, Net
 
+class Logger(object):
+    level_relations = {
+        'debug':logging.DEBUG,
+        'info':logging.INFO,
+        'warning':logging.WARNING,
+        'error':logging.ERROR,
+        'crit':logging.CRITICAL
+    }
+    def __init__(self, 
+                 filename, 
+                 level='info',
+                 when='D',
+                 backCount=3,
+                 fmt='%(asctime)s - %(pathname)s - %(levelname)s: %(message)s'):
+        self.logger = logging.getLogger(filename)
+        format_str = logging.Formatter(fmt)
+        self.logger.setLevel(self.level_relations.get(level))
+        sh = logging.StreamHandler()
+        sh.setFormatter(format_str)
+        th = handlers.TimedRotatingFileHandler(filename=filename,
+                                               when=when,
+                                               backupCount=backCount,
+                                               encoding='utf-8')
+        th.setFormatter(format_str)
+        self.logger.addHandler(sh) 
+        self.logger.addHandler(th)
+
 def parse_args():
     
     parser = argparse.ArgumentParser()
@@ -35,7 +62,6 @@ def parse_args():
     parser.add_argument('--dataset', type=str, default='cifar10', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
     parser.add_argument('--data-path', type=str, default='/data/shenghao/dataset/', help='Path to the data directory.')
     parser.add_argument('--importance-file', type=str, default='./saved_files/plane_lenet_importance.json', help='The file to save the importance scores.')
-    parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device to use for training.')
     parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset.')
@@ -49,7 +75,14 @@ def parse_args():
     parser.add_argument('--cluster-scores', action='store_true', help='Cluserting the importance scores rather than using actiation values.')
     parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
+    
+    # General arguments
     parser.add_argument('--vis-attributions', action='store_true', help='Visualize the attributions.')
+    parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
+    parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
+    parser.add_argument('--log-path', type=str, default='./logs/', help='Path to save the log file.')
+
+
 
     
     args = parser.parse_args()

@@ -1,6 +1,8 @@
 import os
 import json
-import sys
+import urllib
+import urllib.request
+import time
 from pathlib import Path
 
 import torch
@@ -26,7 +28,7 @@ from captum.metrics import infidelity_perturb_func_decorator, infidelity
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, visualize_idc_scores
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, Logger
 
 def ramdon_prune_fc(model, layer_name='fc1', num_neurons=5):
     net_layer = getattr(model, layer_name)
@@ -302,20 +304,23 @@ def test_model(model, inputs, labels):
     
     return accuracy, total_loss
 
-def test_attributions(args,
-                      model, 
+def test_attributions(log,
+                      model,
+                      top_m_neurons,
                       train_inputs, 
                       train_labels, 
                       test_inputs,
                       test_labels,
                       classes,
                       layer_name,
-                      random_prune=False):
+                      random_prune=False,
+                      before_prune=False):
     
-    top_m_neurons = args.top_m_neurons
-    # b_accuracy, b_total_loss = test_model(model, test_inputs, test_labels)
-    # print("Before pruning Accuracy: {:.2f}%, Loss: {:.2f}".format(b_accuracy, b_total_loss))
+    if before_prune:
+        b_accuracy, b_total_loss = test_model(model, test_inputs, test_labels)
+        print("Before pruning Accuracy: {:.2f}%, Loss: {:.2f}".format(b_accuracy, b_total_loss))
     
+    # TODO: Now using the torch random prune, but should be pruned by the specific neurons
     if random_prune:
         ramdon_prune_fc(model, layer_name=layer_name, num_neurons=top_m_neurons)
     else:
@@ -335,6 +340,16 @@ def test_attributions(args,
     
 if __name__ == '__main__':
     args = parse_args()
+
+    ### Logger settings
+    if args.logging:
+        start_time = int(round(time.time()*1000))
+        timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
+        saved_log_name = args.log_path + 'AttriTest-{}-{}-{}.log'.format(args.model, args.dataset, timestamp)
+        log = Logger(saved_log_name, level='debug')
+        log.logger.debug("[=== Model: {}, Dataset: {}, Layers_Index: {} ==]".format(args.model, args.dataset, args.layer_index))
+    else:
+        log = None
     
     ### Model settings
     if args.model_path != 'None':
@@ -342,6 +357,8 @@ if __name__ == '__main__':
     else:
         model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/'
     model_path += args.saved_model
+    model, module_name, module = get_model(model_name=args.model)
+    model.load_state_dict(torch.load(model_path))
     
     ### Device settings    
     if torch.cuda.is_available() and args.device != 'cpu':
@@ -350,29 +367,55 @@ if __name__ == '__main__':
         device = torch.device("cpu")
     
     ### Data settings
-    trainloader, testloader, classes = prepare_data(args)
-    
-    
-    model, module_name, module = get_model(model_name=args.model)
-    model.load_state_dict(torch.load(model_path))
+    trainloader, testloader, classes = prepare_data(args)    
     
     ### Test all the model layer and also the each of the attribution methods
     if args.capture_all:
-        pass
+        attributions = ['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
+        if args.dataset == 'cifar10':
+            classes = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+            for single_class in classes:
+                train_images, train_labels = get_class_data(trainloader, classes, single_class)
+                test_images, test_labels = get_class_data(testloader, classes, single_class)
+                test_attributions(log=log,
+                      model=model,
+                      top_m_neurons=args.top_m_neurons,
+                      train_inputs=train_images, 
+                      train_labels=train_labels, 
+                      test_inputs=test_images,
+                      test_labels=test_labels,
+                      classes=classes,
+                      layer_name=module_name[args.layer_index],
+                      random_prune=False,
+                      before_prune=False)
+                
+        elif args.dataset == 'mnist':
+            classes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+        elif args.dataset == 'imagenet':
+            url = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"
+            urllib.request.urlretrieve(url, "imagenet_labels.json")
+            # Load the labels from the JSON file
+            with open("imagenet_labels.json") as f:
+                classes = json.load(f)
+        else:
+            raise ValueError(f"Invalid dataset: {args.dataset}")
     else:
         #  Get the specific class data
-        images, labels = get_class_data(trainloader, classes, args.test_image)
+        train_images, train_labels = get_class_data(trainloader, classes, args.test_image)
         # kmeans_comb = offer_kmeans_model(args, model, images, labels, classes, module_name)
         # print("Kmeans Model done!")
         
         # Get the test data
         test_images, test_labels = get_class_data(testloader, classes, args.test_image)
-        test_attributions(args,
-                        model, 
-                        images,
-                        labels,
-                        test_images,
-                        test_labels,
-                        classes, 
-                        module_name[args.layer_index],
-                        False)
+        
+        test_attributions(log=log,
+                      model=model,
+                      top_m_neurons=args.top_m_neurons,
+                      train_inputs=train_images, 
+                      train_labels=train_labels, 
+                      test_inputs=test_images,
+                      test_labels=test_labels,
+                      classes=classes,
+                      layer_name=module_name[args.layer_index],
+                      random_prune=False,
+                      before_prune=False)

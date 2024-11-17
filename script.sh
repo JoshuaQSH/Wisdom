@@ -134,12 +134,8 @@ then
         --importance-file ${I_PATH}/saved_files/${class}_lenet_${TEST_ATTR}_fc1.json \
         --layer-index 3 \
         --model lenet \
-        --capture-all \
         --top-m-neurons 10 \
-        --n-clusters 2 \
-        --vis-attributions \
-        --test-image $class \
-        --attr $TEST_ATTR
+        --n-clusters 2 
 else
     echo "Running a custom model with fixed layer"
     python run.py --model custom --large-image --importance-file /home/shenghao/torch-deepimportance/saved_files/plane_importance.json
