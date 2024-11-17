@@ -9,12 +9,12 @@ For the tutorial, please visit [here](https://pub.towardsai.net/yolo-v5-is-here-
 
 ## Model Training Matrix Example (elephant)
 <p align="center">
-  <img width="700" height="400" src="https://github.com/JoshuaQSH/torch-deepimportance/tree/yolo/weights_elephant/results.png">
+  <img width="700" height="400" src="https://github.com/JoshuaQSH/torch-deepimportance/tree/yolo/yolov5/weights_elephant/results.png">
 </p>
 
 ## Output Example (elephant)
 <p align="center">
-  <img width="700" height="500" src="https://github.com/JoshuaQSH/torch-deepimportance/tree/yolo/output_elephant_img/output_.gif">
+  <img width="700" height="500" src="https://github.com/JoshuaQSH/torch-deepimportance/tree/yolo/yolov5/output_elephant_img/output_.gif">
 </p> 
 
 ## The YOLO format for annotations
