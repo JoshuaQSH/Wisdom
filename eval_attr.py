@@ -372,7 +372,7 @@ if __name__ == '__main__':
     ### Test all the model layer and also the each of the attribution methods
     if args.capture_all:
         # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
-        attributions = ['ldl', 'lgs', 'lig', 'lfa', 'lrp']
+        attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp', 'ldls']
         # Save the original model state (Before pruning)
         original_state = copy.deepcopy(model.state_dict())
 

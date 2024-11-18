@@ -86,8 +86,7 @@ then
     for attribution in "${METHODS[@]}"
     do
         echo "--- Processing class: $attribution ---"
-        python run.py --capture-all \
-            --dataset cifar10 \
+        python run.py --dataset cifar10 \
             --large-image \
             --importance-file ${I_PATH}/saved_files/plane_lenet_${attribution}_fc1.json \
             --layer-index 3 \
@@ -95,7 +94,7 @@ then
             --top-m-neurons $NUM_NEURONS \
             --n-clusters $NUM_CLUSTERS \
             --test-image $TEST_CLASS \
-            --attr $attribution >> ${TEST_MODEL}_${TEST_CLASS}_N-${NUM_NEURONS}_C-${NUM_CLUSTERS}.log
+            --attr $attribution
         echo "Done with $attribution"
     done
 
@@ -114,17 +113,20 @@ then
 
 elif [ $RUN_TEST == "attrtest" ]
 then
-    echo "Running CIFAR10 with LeNet and test each attributions"
-    python eval_attr.py \
-        --dataset cifar10 \
-        --batch-size 128 \
-        --importance-file ${I_PATH}/saved_files/plane_lenet_${TEST_ATTR}_fc1.json \
-        --layer-index 3 \
-        --model lenet \
-        --top-m-neurons 10 \
-        --n-clusters 2 \
-        --vis-attributions \
-        --attr $TEST_ATTR
+    echo "Running LeNet with fc1 layer in different attributions"
+    for attribution in "${METHODS[@]}"
+    do
+        echo "--- Processing class: $attribution ---"
+        python run.py --dataset cifar10 \
+            --importance-file ${I_PATH}/saved_files/plane_lenet_${attribution}_fc1.json \
+            --layer-index 3 \
+            --model $TEST_MODEL \
+            --top-m-neurons $NUM_NEURONS \
+            --n-clusters $NUM_CLUSTERS \
+            --test-image $TEST_CLASS \
+            --attr $attribution
+        echo "Done with $attribution"
+    done
 
 elif [ $RUN_TEST == "attr4class" ]
 then
@@ -137,7 +139,8 @@ then
         --model $TEST_MODEL \
         --top-m-neurons 10 \
         --n-clusters 2 \
-        --capture-all
+        --capture-all \
+        --logging
 else
     echo "Running a custom model with fixed layer"
     python run.py --model custom --large-image --importance-file /home/shenghao/torch-deepimportance/saved_files/plane_importance.json
