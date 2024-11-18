@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+import urllib
 import urllib.request
 import json
 import logging

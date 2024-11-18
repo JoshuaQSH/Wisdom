@@ -3,6 +3,7 @@ import json
 import urllib
 import urllib.request
 import time
+import copy
 from pathlib import Path
 
 import torch
@@ -304,8 +305,8 @@ def test_model(model, inputs, labels):
     
     return accuracy, total_loss
 
-def test_attributions(log,
-                      model,
+def test_attributions(model,
+                      attribution_method,
                       top_m_neurons,
                       train_inputs, 
                       train_labels, 
@@ -313,18 +314,12 @@ def test_attributions(log,
                       test_labels,
                       classes,
                       layer_name,
-                      random_prune=False,
-                      before_prune=False):
-    
-    if before_prune:
-        b_accuracy, b_total_loss = test_model(model, test_inputs, test_labels)
-        print("Before pruning Accuracy: {:.2f}%, Loss: {:.2f}".format(b_accuracy, b_total_loss))
-    
+                      random_prune=False):
+
     # TODO: Now using the torch random prune, but should be pruned by the specific neurons
     if random_prune:
         ramdon_prune_fc(model, layer_name=layer_name, num_neurons=top_m_neurons)
     else:
-        attribution_method = args.attr
         _, layer_importance_scores = get_layer_conductance(model, 
                                                            train_inputs, 
                                                            train_labels, 
@@ -335,7 +330,12 @@ def test_attributions(log,
         prune_neurons_fc(model, layer_name=layer_name, neurons_to_prune = indices)
 
     a_accuracy, a_total_loss = test_model(model, test_inputs, test_labels)
-    print("After pruning Accuracy: {:.2f}%, Loss: {:.2f}".format(a_accuracy, a_total_loss))
+    
+    # Restore the model state
+    model.load_state_dict(original_state)
+    print("Model restored to original state.")
+    
+    return a_accuracy, a_total_loss
 
     
 if __name__ == '__main__':
@@ -371,23 +371,43 @@ if __name__ == '__main__':
     
     ### Test all the model layer and also the each of the attribution methods
     if args.capture_all:
-        attributions = ['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
+        # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
+        attributions = ['ldl', 'lgs', 'lig', 'lfa', 'lrp']
+        # Save the original model state (Before pruning)
+        original_state = copy.deepcopy(model.state_dict())
+
         if args.dataset == 'cifar10':
             classes = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
             for single_class in classes:
                 train_images, train_labels = get_class_data(trainloader, classes, single_class)
                 test_images, test_labels = get_class_data(testloader, classes, single_class)
-                test_attributions(log=log,
-                      model=model,
-                      top_m_neurons=args.top_m_neurons,
-                      train_inputs=train_images, 
-                      train_labels=train_labels, 
-                      test_inputs=test_images,
-                      test_labels=test_labels,
-                      classes=classes,
-                      layer_name=module_name[args.layer_index],
-                      random_prune=False,
-                      before_prune=False)
+                b_accuracy, b_total_loss = test_model(model, test_images, test_labels)
+                if args.logging:
+                    log.logger.info("Class: {} Before Accuracy: {:.2f}%, Loss: {:.2f}".format(single_class, b_accuracy, b_total_loss))
+                else:
+                    print("Class: {} Before Acc: {:.2f}%, Before Loss: {:.2f}".format(single_class, b_accuracy, b_total_loss))
+
+                for attr in attributions:
+                    a_accuracy, a_total_loss = test_attributions(model=model,
+                        attribution_method=attr,
+                        top_m_neurons=args.top_m_neurons,
+                        train_inputs=train_images, 
+                        train_labels=train_labels, 
+                        test_inputs=test_images,
+                        test_labels=test_labels,
+                        classes=classes,
+                        layer_name=module_name[args.layer_index],
+                        random_prune=False)
+                    
+                    if args.logging:
+                        log.logger.info("Attribution: {}, Accuracy: {:.2f}%, Loss: {:.2f}".format(attr, a_accuracy, a_total_loss))
+                    else:
+                        print("Attribution: {}, Accuracy: {:.2f}%, Loss: {:.2f}".format(attr, a_accuracy, a_total_loss))
+
+                    # Restore the model state
+                    model.load_state_dict(original_state)
+                    print("Model restored to original state.")
+
                 
         elif args.dataset == 'mnist':
             classes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
@@ -408,8 +428,8 @@ if __name__ == '__main__':
         # Get the test data
         test_images, test_labels = get_class_data(testloader, classes, args.test_image)
         
-        test_attributions(log=log,
-                      model=model,
+        a_accuracy, a_total_loss = test_attributions(model=model,
+                      attribution_method=args.attr,
                       top_m_neurons=args.top_m_neurons,
                       train_inputs=train_images, 
                       train_labels=train_labels, 
@@ -417,5 +437,4 @@ if __name__ == '__main__':
                       test_labels=test_labels,
                       classes=classes,
                       layer_name=module_name[args.layer_index],
-                      random_prune=False,
-                      before_prune=False)
+                      random_prune=False)

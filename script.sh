@@ -5,6 +5,7 @@ CLASSES=('plane' 'car' 'bird' 'cat' 'deer' 'dog' 'frog' 'horse' 'ship' 'truck')
 # Check "lgc"
 METHODS=('lc' 'la' 'ii' 'lgxa' 'lgc' 'ldl' 'ldls' 'lgs' 'lig' 'lfa' 'lrp')
 TEST_ATTR="lfa"
+DATASET="cifar10"
 TEST_CLASS="plane"
 TEST_MODEL="lenet"
 NUM_CLUSTERS=2
@@ -23,7 +24,7 @@ then
         --model lenet \
         --top-m-neurons $NUM_NEURONS \
         --n-clusters $NUM_CLUSTERS \
-        --attr la
+        --attr ldls
 
 elif [ $RUN_TEST == "conv1" ]
 then
@@ -127,15 +128,16 @@ then
 
 elif [ $RUN_TEST == "attr4class" ]
 then
-    echo "Running CIFAR10 with LeNet and test each attributions"
+    echo "Running ${DATASET} with ${TEST_MODEL} and test each attribution"
     python eval_attr.py \
-        --dataset cifar10 \
-        --batch-size 128 \
+        --dataset $DATASET \
+        --batch-size 4 \
         --importance-file ${I_PATH}/saved_files/${class}_lenet_${TEST_ATTR}_fc1.json \
         --layer-index 3 \
-        --model lenet \
+        --model $TEST_MODEL \
         --top-m-neurons 10 \
-        --n-clusters 2 
+        --n-clusters 2 \
+        --capture-all
 else
     echo "Running a custom model with fixed layer"
     python run.py --model custom --large-image --importance-file /home/shenghao/torch-deepimportance/saved_files/plane_importance.json
