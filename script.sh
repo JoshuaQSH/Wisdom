@@ -137,6 +137,34 @@ then
         --n-clusters 2 \
         --capture-all \
         --logging
+
+elif [ $RUN_TEST == "attr4class2" ]
+then
+    echo "Running ${DATASET} with ${TEST_MODEL} and test each attribution"
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --importance-file ${I_PATH}/saved_files/${class}_${TEST_MODEL}_${TEST_ATTR}_conv2.json \
+        --layer-index 2 \
+        --model $TEST_MODEL \
+        --top-m-neurons 2 \
+        --n-clusters 2 \
+        --capture-all \
+        --logging
+
+elif [ $RUN_TEST == "attr4class3" ]
+then
+    echo "Running ${DATASET} with ${TEST_MODEL} and test each attribution"
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --importance-file ${I_PATH}/saved_files/${class}_${TEST_MODEL}_${TEST_ATTR}_fc2.json \
+        --layer-index 4 \
+        --model $TEST_MODEL \
+        --top-m-neurons 10 \
+        --n-clusters 2 \
+        --capture-all \
+        --logging
 else
     echo "Running a custom model with fixed layer"
     python run.py --model custom --large-image --importance-file /home/shenghao/torch-deepimportance/saved_files/plane_importance.json
