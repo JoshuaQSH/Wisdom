@@ -135,7 +135,8 @@ then
         --model $TEST_MODEL \
         --top-m-neurons 2 \
         --n-clusters 2 \
-        --capture-all
+        --capture-all \
+        --logging
 else
     echo "Running a custom model with fixed layer"
     python run.py --model custom --large-image --importance-file /home/shenghao/torch-deepimportance/saved_files/plane_importance.json

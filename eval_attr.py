@@ -52,7 +52,6 @@ def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7
             if layer.bias is not None:
                 layer.bias[neurons_to_prune] = 0
         elif isinstance(layer, nn.Conv2d):
-            breakpoint()
             # Set the weights of the selected filters to zero
             for f in neurons_to_prune:
                 layer.weight[f] = 0
