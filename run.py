@@ -150,9 +150,13 @@ def select_top_neurons(importance_scores, top_m_neurons=5):
             _, indices = torch.topk(importance_scores, top_m_neurons)
             return indices
         else:
-            # TODO: Conv by default will select all the neurons
-            print("Selecting all the neurons (Conv2D layer).")
-            return None
+            mean_attribution = torch.mean(importance_scores, dim=[1, 2])
+            if mean_attribution.shape[0] < top_m_neurons:
+                print("Selecting all the neurons (Conv2D layer).")
+                return None
+            else:
+                _, indices = torch.topk(mean_attribution, top_m_neurons)
+                return indices
 
 def visualize_activation(activation_values, selected_activations, layer_name, threshold=0, mode='fc'):
     saved_file = f'./images/mean_activation_values_{layer_name}.pdf'
@@ -434,9 +438,8 @@ def compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name, 
                                                                                 indices, 
                                                                                 layer_name,
                                                                                 False)
-    
     if layer_name[:-1] == 'conv':
-        activation_values = torch.mean(activation_values, dim=[2, 3])
+        activation_values = torch.mean(selected_activations, dim=[2, 3])
     else:
         activation_values = selected_activations
         
@@ -501,7 +504,6 @@ if __name__ == '__main__':
     
     #  Get the specific class data
     images, labels = get_class_data(trainloader, classes, args.test_image)
-    
     # Get the importance scores - LRP
     if os.path.exists(args.importance_file):
         attribution, mean_attribution, labels = load_importance_scores(args.importance_file)
@@ -524,7 +526,7 @@ if __name__ == '__main__':
     # Get the test data
     test_images, test_labels = get_class_data(testloader, classes, args.test_image)
 
-    # Obtain the important neuron indices 
+    # Obtain the important neuron indices
     important_neuron_indices = select_top_neurons(mean_attribution, args.top_m_neurons)
     activation_values, selected_activations = get_activation_values_for_neurons(model, 
                                                                                 images, 

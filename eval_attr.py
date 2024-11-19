@@ -331,10 +331,6 @@ def test_attributions(model,
 
     a_accuracy, a_total_loss = test_model(model, test_inputs, test_labels)
     
-    # Restore the model state
-    model.load_state_dict(original_state)
-    print("Model restored to original state.")
-    
     return a_accuracy, a_total_loss
 
     
@@ -372,7 +368,7 @@ if __name__ == '__main__':
     ### Test all the model layer and also the each of the attribution methods
     if args.capture_all:
         # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
-        attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp', 'ldls']
+        attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
         # Save the original model state (Before pruning)
         original_state = copy.deepcopy(model.state_dict())
 
