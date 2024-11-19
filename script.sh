@@ -133,7 +133,7 @@ then
         --importance-file ${I_PATH}/saved_files/${class}_${TEST_MODEL}_${TEST_ATTR}_conv1.json \
         --layer-index 1 \
         --model $TEST_MODEL \
-        --top-m-neurons 10 \
+        --top-m-neurons 2 \
         --n-clusters 2 \
         --capture-all
 else

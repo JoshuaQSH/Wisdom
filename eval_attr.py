@@ -42,7 +42,7 @@ def ramdon_prune_fc(model, layer_name='fc1', num_neurons=5):
         )
     )
     
-def prune_neurons_fc(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
     layer = getattr(model, layer_name)
     
     with torch.no_grad():
@@ -51,15 +51,21 @@ def prune_neurons_fc(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6
             layer.weight[neurons_to_prune, :] = 0
             if layer.bias is not None:
                 layer.bias[neurons_to_prune] = 0
+        elif isinstance(layer, nn.Conv2d):
+            breakpoint()
+            # Set the weights of the selected filters to zero
+            for f in neurons_to_prune:
+                layer.weight[f] = 0
+                if layer.bias is not None:
+                    layer.bias[f] = 0
         else:
-            raise ValueError(f"Pruning is only implemented for Linear layers. Given: {type(layer)}")
+            raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
     print(
         "Sparsity in weight: {:.2f}%".format(
             100. * float(torch.sum(layer.weight == 0))
             / float(layer.weight.nelement())
         )
     )
-
 
 def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_m_images=-1, attribution_method='lrp'):
     model = model.cpu()
@@ -141,9 +147,13 @@ def select_top_neurons(importance_scores, top_m_neurons=5):
             _, indices = torch.topk(importance_scores, top_m_neurons)
             return indices
         else:
-            # TODO: Conv by default will select all the neurons
-            print("Selecting all the neurons (Conv2D layer).")
-            return None
+            mean_attribution = torch.mean(importance_scores, dim=[1, 2])
+            if mean_attribution.shape[0] < top_m_neurons:
+                print("Selecting all the neurons (Conv2D layer).")
+                return None
+            else:
+                _, indices = torch.topk(mean_attribution, top_m_neurons)
+                return indices
 
 def prepare_data(args):
     ### Dataset settings
@@ -327,7 +337,7 @@ def test_attributions(model,
                                                            layer_name=layer_name, 
                                                            attribution_method=attribution_method)
         indices = select_top_neurons(layer_importance_scores, top_m_neurons)
-        prune_neurons_fc(model, layer_name=layer_name, neurons_to_prune = indices)
+        prune_neurons(model, layer_name=layer_name, neurons_to_prune = indices)
 
     a_accuracy, a_total_loss = test_model(model, test_inputs, test_labels)
     
