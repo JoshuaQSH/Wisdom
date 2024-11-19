@@ -37,6 +37,8 @@ Refer to [HERE](https://github.com/AlexeyAB/Yolo_mark/issues/60)
 
 ## How to run
 
+- Need to change the path in the YAML file (e.g., `coco.yaml`)
+
 ```shell
 # Training - with elephant dataset [PASS]
 CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --batch 8 --epochs 30 --data ./data/elephant.yaml --cfg ./models/yolov5s.yaml --weights '' --device 0
@@ -45,7 +47,7 @@ CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --batch 8 --epochs 30 --data ./
 python detect.py --source ./data/image  --weights weights/best_s_elephant.pt --conf 0.4
 
 # Training - with COCO
-CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --data ./data/coco128.yaml --epochs 30 --batch 64 --cfg ./models/yolov5l.yaml --weights './pretrained_weights/yolov5l.pt' --device 0
+CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --data ./data/coco.yaml --epochs 30 --batch 12 --cfg ./models/yolov5l.yaml --weights '' --device 0
 ```
 
 ## Credits
