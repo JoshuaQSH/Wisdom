@@ -8,14 +8,11 @@ This repository is forked from [Mihir Rajput](https://github.com/mihir135), I on
 For the tutorial, please visit [here](https://pub.towardsai.net/yolo-v5-is-here-custom-object-detection-tutorial-with-yolo-v5-12666ee1774e).
 
 ## Model Training Matrix Example (elephant)
-<p align="center">
-  <img width="700" height="400" src="https://github.com/JoshuaQSH/torch-deepimportance/tree/yolo/yolov5/weights_elephant/results.png">
-</p>
+![image](./logs/weights_elephant/results.png)
 
 ## Output Example (elephant)
-<p align="center">
-  <img width="700" height="500" src="https://github.com/JoshuaQSH/torch-deepimportance/tree/yolo/yolov5/output_elephant_img/output_.gif">
-</p> 
+![image](./logs/elephant_showcase/output_.gif)
+
 
 ## The YOLO format for annotations
 
@@ -49,6 +46,14 @@ python detect.py --source ./data/image  --weights weights/best_s_elephant.pt --c
 # Training - with COCO
 CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --data ./data/coco.yaml --epochs 30 --batch 12 --cfg ./models/yolov5l.yaml --weights '' --device 0
 ```
+
+## Directory and files describtion
+
+`data`: YAML files with both COCO dataset and a test class (elephant) dataset
+`model`: Basic model files, including the yolo YAML
+`logs`: log files and the showcase files
+`utils`: dataset and other basic settings
+`hubconf.py`: Accessing YOLOv5 models via PyTorch Hub
 
 ## Credits
 https://ultralytics.com/ <br/>
