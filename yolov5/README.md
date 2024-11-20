@@ -49,11 +49,11 @@ CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --data ./data/coco.yaml --epoch
 
 ## Directory and files describtion
 
-`data`: YAML files with both COCO dataset and a test class (elephant) dataset
-`model`: Basic model files, including the yolo YAML
-`logs`: log files and the showcase files
-`utils`: dataset and other basic settings
-`hubconf.py`: Accessing YOLOv5 models via PyTorch Hub
+- `./data`: YAML files with both COCO dataset and a test class (elephant) dataset
+- `./model`: Basic model files, including the yolo YAML
+- `logs`: log files and the showcase files
+- `./utils`: dataset and other basic settings
+- `hubconf.py`: Accessing YOLOv5 models via PyTorch Hub
 
 ## Credits
 https://ultralytics.com/ <br/>
