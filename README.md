@@ -35,16 +35,19 @@ $ ./script.sh fc1
 
 ## TODO
 
-- [x] `find_optimal_clusters` requires fixing, compute the silhouette score with row by row
-- [ ] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or YOLOv5) in pytorch, with COCO dataset
-- [ ] End to End analyze
-- [ ] Selectors for different attributors (using the accuracy as the guide)
+- [x] [**IDC**] `find_optimal_clusters` requires fixing, compute the silhouette score with row by row
+- [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
+  - [ ] Architecture analysation block by block, YOLOv5s
+- [ ] [**IDC**] End to End layer analyze, LeNet and others
+- [ ] [**IDC**] Include the results for the random pruning
+- [ ] [**IDC**] Pickup the common neurons per method-class
+- [ ] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
     - [ ] Rankings, plots
     - [ ] Voting
-- [ ] Add more dataset and models
-- [ ] SOTA methods to compare
-- [ ] runtime version + attention
-- [ ] YOLO v11
+- [ ] [**IDC**] Add more dataset and models
+- [ ] [**IDC**] SOTA methods to compare
+- [ ] [**IDC**] runtime version + attention
+- [ ] [**YOLO**] YOLO v11
 
 
 ## Directory information
