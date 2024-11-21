@@ -1,6 +1,7 @@
 import glob
 import math
 import os
+import argparse
 import random
 import shutil
 import subprocess
@@ -29,6 +30,32 @@ matplotlib.rc('font', **{'size': 11})
 # Prevent OpenCV from multithreading (to use PyTorch DataLoader)
 cv2.setNumThreads(0)
 
+def parse_args():
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--cfg', type=str, default='models/yolov5s.yaml', help='*.cfg path')
+    parser.add_argument('--data', type=str, default='data/coco128.yaml', help='*.data path')
+    parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='train,test sizes')
+    parser.add_argument('--rect', action='store_true', help='rectangular training')
+    parser.add_argument('--resume', action='store_true', help='resume training from last.pt')
+    parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
+    parser.add_argument('--notest', action='store_true', help='only test final epoch')
+    parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
+    parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
+    parser.add_argument('--cache-images', action='store_true', help='cache images for faster training')
+    parser.add_argument('--weights', type=str, default='', help='initial weights path')
+    parser.add_argument('--name', default='', help='renames results.txt to results_name.txt if supplied')
+    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--adam', action='store_true', help='use adam optimizer')
+    parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%')
+    parser.add_argument('--single-cls', action='store_true', help='train as single-class dataset')
+
+    args = parser.parse_args()
+    print(args)
+
+    return args
 
 def init_seeds(seed=0):
     random.seed(seed)

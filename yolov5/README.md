@@ -18,12 +18,12 @@ For the tutorial, please visit [here](https://pub.towardsai.net/yolo-v5-is-here-
 
 Refer to [HERE](https://github.com/AlexeyAB/Yolo_mark/issues/60)
 
-.txt-file for each .jpg-image-file - in the same directory and with the same name, but with .txt-extension, and put to file: object number and object coordinates on this image, for each object in new line: <object-class> <x> <y> <width> <height>
+.txt-file for each .jpg-image-file - in the same directory and with the same name, but with .txt-extension, and put to file: object number and object coordinates on this image, for each object in new line: `<object-class> <x> <y> <width> <height>`
 
-- <object-class> - integer number of object from 0 to (classes-1)
-- <x> <y> <width> <height> - float values relative to width and height of image, it can be equal from (0.0 to 1.0]
-- for example: <x> = <absolute_x> / <image_width> or <height> = <absolute_height> / <image_height>
-- atention: <x> <y> - are center of rectangle (are not top-left corner)
+- `<object-class>` - integer number of object from 0 to (classes-1)
+- `<x> <y> <width> <height>` - float values relative to width and height of image, it can be equal from (0.0 to 1.0]
+- for example: `<x> = <absolute_x> / <image_width>` or `<height> = <absolute_height> / <image_height>`
+- atention: `<x> <y>` - are center of rectangle (are not top-left corner)
 
 `img1.txt` for `img1.jpg` would be like:
 ```txt
@@ -37,6 +37,14 @@ Refer to [HERE](https://github.com/AlexeyAB/Yolo_mark/issues/60)
 - Need to change the path in the YAML file (e.g., `coco.yaml`)
 
 ```shell
+# Download the dataset first [COCO2017]
+wget https://github.com/ultralytics/assets/releases/download/v0.0.0/coco2017labels.zip
+wget http://images.cocodataset.org/zips/train2017.zip
+wget http://images.cocodataset.org/zips/val2017.zip
+wget http://images.cocodataset.org/zips/test2017.zip
+
+# Unzip and move all the dataset to the new dir under `data`, e.g., data/coco/images/train2017
+
 # Training - with elephant dataset [PASS]
 CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --batch 8 --epochs 30 --data ./data/elephant.yaml --cfg ./models/yolov5s.yaml --weights '' --device 0
 
@@ -45,6 +53,10 @@ python detect.py --source ./data/image  --weights weights/best_s_elephant.pt --c
 
 # Training - with COCO
 CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --data ./data/coco.yaml --epochs 30 --batch 12 --cfg ./models/yolov5l.yaml --weights '' --device 0
+
+
+# testing
+python analysis_demo.py --img 640 --batch 8 --epochs 30 --data ./data/elephant.yaml --cfg ./models/yolov5s.yaml --weights '' --device 1
 ```
 
 ## Directory and files describtion
@@ -54,6 +66,14 @@ CUDA_VISIBLE_DEVICES=1 python train.py --img 640 --data ./data/coco.yaml --epoch
 - `logs`: log files and the showcase files
 - `./utils`: dataset and other basic settings
 - `hubconf.py`: Accessing YOLOv5 models via PyTorch Hub
+
+## COCO dataset
+
+For one iter of the dataloader (3D):
+
+D-1: `[batch_size, channel, width, height]`
+D-2: `[ID, class, x_center, y_center, width, height]`
+
 
 ## Credits
 https://ultralytics.com/ <br/>
