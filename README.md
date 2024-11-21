@@ -42,7 +42,7 @@ $ ./script.sh fc1
 - [ ] [**IDC**] Include the results for the random pruning
 - [ ] [**IDC**] Pickup the common neurons per method-class
 - [ ] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
-    - [ ] Rankings, plots
+    - [x] Rankings, plots
     - [ ] Voting
 - [ ] [**IDC**] Add more dataset and models
 - [ ] [**IDC**] SOTA methods to compare
