@@ -135,9 +135,8 @@ then
         --model $TEST_MODEL \
         --top-m-neurons 2 \
         --n-clusters 2 \
-        --capture-all \
-        --logging
-
+        --capture-all
+        
 elif [ $RUN_TEST == "attr4class2" ]
 then
     echo "Running ${DATASET} with ${TEST_MODEL} and test each attribution"

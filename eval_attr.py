@@ -4,6 +4,7 @@ import urllib
 import urllib.request
 import time
 import copy
+import random
 from pathlib import Path
 
 import torch
@@ -31,14 +32,69 @@ from sklearn.metrics import silhouette_samples, silhouette_score
 
 from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, Logger
 
-def ramdon_prune_fc(model, layer_name='fc1', num_neurons=5):
-    net_layer = getattr(model, layer_name)
-    amount = num_neurons / net_layer.weight.shape[0]
-    prune.random_unstructured(net_layer, name="weight", amount=amount)
+def ramdon_prune(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], num_neurons=5, sparse_prune=False):
+    layer = getattr(model, layer_name)
+    
+    ## Use the torch pruning for the random prune
+    if sparse_prune:
+        amount = num_neurons / layer.weight.shape[0]
+        prune.random_unstructured(layer, name="weight", amount=amount)
+    
+    # Take each of the neuron and channel (conv2D) as basic unit
+    else:
+        with torch.no_grad():
+            
+            full_tensor = torch.arange(layer.weight.shape[0])
+            
+            # Exclude the neurons to prune
+            for v in neurons_to_prune:
+                full_tensor = full_tensor[full_tensor!=v]
+            
+            possible_choices = random.sample(set(full_tensor), num_neurons)
+            possible_choices = [t.item() for t in possible_choices]
+            
+            if isinstance(layer, nn.Linear):
+                # Set weights and biases of the selected neurons to zero
+                layer.weight[possible_choices, :] = 0
+            if layer.bias is not None:
+                layer.bias[possible_choices] = 0
+            elif isinstance(layer, nn.Conv2d):
+                # Set the weights of the selected filters to zero
+                for f in possible_choices:
+                    layer.weight[f] = 0
+                    if layer.bias is not None:
+                        layer.bias[f] = 0
+            else:
+                raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
+
+    print(
+            "Sparsity in weight: {:.2f}%".format(
+                100. * float(torch.sum(layer.weight == 0))
+                / float(layer.weight.nelement())
+            )
+        )
+
+def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+    layer = getattr(model, layer_name)
+    
+    with torch.no_grad():
+        if isinstance(layer, nn.Linear):
+            # Set weights and biases of the selected neurons to zero
+            layer.weight[neurons_to_prune, :] = 0
+            if layer.bias is not None:
+                layer.bias[neurons_to_prune] = 0
+        elif isinstance(layer, nn.Conv2d):
+            # Set the weights of the selected filters to zero
+            for f in neurons_to_prune:
+                layer.weight[f] = 0
+                if layer.bias is not None:
+                    layer.bias[f] = 0
+        else:
+            raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
     print(
         "Sparsity in weight: {:.2f}%".format(
-            100. * float(torch.sum(net_layer.weight == 0))
-            / float(net_layer.weight.nelement())
+            100. * float(torch.sum(layer.weight == 0))
+            / float(layer.weight.nelement())
         )
     )
     
@@ -325,17 +381,22 @@ def test_attributions(model,
                       layer_name,
                       random_prune=False):
 
-    # TODO: Now using the torch random prune, but should be pruned by the specific neurons
-    if random_prune:
-        ramdon_prune_fc(model, layer_name=layer_name, num_neurons=top_m_neurons)
-    else:
-        _, layer_importance_scores = get_layer_conductance(model, 
+    
+    _, layer_importance_scores = get_layer_conductance(model, 
                                                            train_inputs, 
                                                            train_labels, 
                                                            classes, 
                                                            layer_name=layer_name, 
                                                            attribution_method=attribution_method)
-        indices = select_top_neurons(layer_importance_scores, top_m_neurons)
+    indices = select_top_neurons(layer_importance_scores, top_m_neurons)
+
+    # TODO: Now using the torch random prune, but should be pruned by the specific neurons
+    if random_prune:
+        print("Random Pruning")
+        ramdon_prune(model, layer_name=layer_name, neurons_to_prune=indices, num_neurons=top_m_neurons, sparse_prune=False)
+
+    else:
+        print("Important Pruning")
         prune_neurons(model, layer_name=layer_name, neurons_to_prune = indices)
 
     a_accuracy, a_total_loss = test_model(model, test_inputs, test_labels)
@@ -402,7 +463,7 @@ if __name__ == '__main__':
                         test_labels=test_labels,
                         classes=classes,
                         layer_name=module_name[args.layer_index],
-                        random_prune=False)
+                        random_prune=True)
                     
                     if args.logging:
                         log.logger.info("Attribution: {}, Accuracy: {:.2f}%, Loss: {:.2f}".format(attr, a_accuracy, a_total_loss))

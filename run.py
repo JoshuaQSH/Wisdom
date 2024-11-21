@@ -188,6 +188,30 @@ def visualize_activation(activation_values, selected_activations, layer_name, th
     else:
         raise ValueError(f"Invalid mode: {mode}")
 
+# TODO: Implement the function to get the relevance scores for all layers
+def get_relevance_scores_for_all_layers(model, images, labels, attribution_method='LayerConductance'):
+    model.eval()
+    layer_relevance_scores = {}
+
+    for name, layer in model.named_modules():
+        # Skip if it's not a trainable layer (e.g., ReLU, pooling, etc.)
+        if isinstance(layer, (nn.Linear, nn.Conv2d)):
+            print(f"Processing layer: {name}")
+            
+            # Choose the attribution method
+            if attribution_method == 'LayerConductance':
+                neuron_cond = LayerConductance(model, layer)
+                relevance = neuron_cond.attribute(images, target=labels)
+            # Additional methods can be added here (e.g., LayerLRP, LayerIntegratedGradients)
+            else:
+                raise ValueError(f"Invalid attribution method: {attribution_method}")
+
+            # Calculate mean relevance score for each neuron (optional step for aggregation)
+            mean_relevance = torch.mean(relevance, dim=0)
+            layer_relevance_scores[name] = mean_relevance
+
+    return layer_relevance_scores
+
 def get_activation_values_for_neurons(model, inputs, labels, important_neuron_indices, layer_name='fc1', visualize=False):
     
     activation_values = []
