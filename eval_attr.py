@@ -56,8 +56,9 @@ def ramdon_prune(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7,
             if isinstance(layer, nn.Linear):
                 # Set weights and biases of the selected neurons to zero
                 layer.weight[possible_choices, :] = 0
-            if layer.bias is not None:
-                layer.bias[possible_choices] = 0
+                if layer.bias is not None:
+                    layer.bias[possible_choices] = 0
+            
             elif isinstance(layer, nn.Conv2d):
                 # Set the weights of the selected filters to zero
                 for f in possible_choices:
@@ -74,30 +75,6 @@ def ramdon_prune(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7,
             )
         )
 
-def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
-    layer = getattr(model, layer_name)
-    
-    with torch.no_grad():
-        if isinstance(layer, nn.Linear):
-            # Set weights and biases of the selected neurons to zero
-            layer.weight[neurons_to_prune, :] = 0
-            if layer.bias is not None:
-                layer.bias[neurons_to_prune] = 0
-        elif isinstance(layer, nn.Conv2d):
-            # Set the weights of the selected filters to zero
-            for f in neurons_to_prune:
-                layer.weight[f] = 0
-                if layer.bias is not None:
-                    layer.bias[f] = 0
-        else:
-            raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
-    print(
-        "Sparsity in weight: {:.2f}%".format(
-            100. * float(torch.sum(layer.weight == 0))
-            / float(layer.weight.nelement())
-        )
-    )
-    
 def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
     layer = getattr(model, layer_name)
     
@@ -399,9 +376,9 @@ def test_attributions(model,
         print("Important Pruning")
         prune_neurons(model, layer_name=layer_name, neurons_to_prune = indices)
 
-    a_accuracy, a_total_loss = test_model(model, test_inputs, test_labels)
+    accuracy, total_loss = test_model(model, test_inputs, test_labels)
     
-    return a_accuracy, a_total_loss
+    return accuracy, total_loss, indices
 
     
 if __name__ == '__main__':
@@ -439,6 +416,7 @@ if __name__ == '__main__':
     if args.capture_all:
         # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
         attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
+        # attributions = ['lrp', 'ldl']
         # Save the original model state (Before pruning)
         original_state = copy.deepcopy(model.state_dict())
 
@@ -454,7 +432,7 @@ if __name__ == '__main__':
                     print("Class: {} Before Acc: {:.2f}%, Before Loss: {:.2f}".format(single_class, b_accuracy, b_total_loss))
 
                 for attr in attributions:
-                    a_accuracy, a_total_loss = test_attributions(model=model,
+                    a_accuracy, a_total_loss, index = test_attributions(model=model,
                         attribution_method=attr,
                         top_m_neurons=args.top_m_neurons,
                         train_inputs=train_images, 
@@ -463,12 +441,14 @@ if __name__ == '__main__':
                         test_labels=test_labels,
                         classes=classes,
                         layer_name=module_name[args.layer_index],
-                        random_prune=True)
+                        random_prune=args.random_prune)
                     
                     if args.logging:
-                        log.logger.info("Attribution: {}, Accuracy: {:.2f}%, Loss: {:.2f}".format(attr, a_accuracy, a_total_loss))
+                        log.logger.info("Random Prune: {}, Attribution: {}, Accuracy: {:.2f}%".format(args.random_prune, attr, a_accuracy))
+                        log.logger.info("The chosen index: {}".format(index))
                     else:
-                        print("Attribution: {}, Accuracy: {:.2f}%, Loss: {:.2f}".format(attr, a_accuracy, a_total_loss))
+                        print("Random Prune: {}, Attribution: {}, Accuracy: {:.2f}%".format(args.random_prune, attr, a_accuracy))
+                        print("The chosen index: {}".format(index))
 
                     # Restore the model state
                     model.load_state_dict(original_state)
@@ -494,7 +474,7 @@ if __name__ == '__main__':
         # Get the test data
         test_images, test_labels = get_class_data(testloader, classes, args.test_image)
         
-        a_accuracy, a_total_loss = test_attributions(model=model,
+        a_accuracy, a_total_loss, index = test_attributions(model=model,
                       attribution_method=args.attr,
                       top_m_neurons=args.top_m_neurons,
                       train_inputs=train_images, 

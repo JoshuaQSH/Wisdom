@@ -71,6 +71,8 @@ def parse_args():
     parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp'],  help='The attribution method to use.')
     parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
     parser.add_argument('--capture-all', action='store_true', help='Capture all the layers.')
+    parser.add_argument('--end2end', action='store_true', help='End to end testing for the whole model.')
+    parser.add_argument('--random-prune', action='store_true', help='Randomly prune the neurons.')
     parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
     parser.add_argument('--n-clusters', type=int, default=5, help='Number of clusters to use for KMeans.')
     parser.add_argument('--cluster-scores', action='store_true', help='Cluserting the importance scores rather than using actiation values.')

@@ -158,6 +158,53 @@ def select_top_neurons(importance_scores, top_m_neurons=5):
                 _, indices = torch.topk(mean_attribution, top_m_neurons)
                 return indices
 
+# Select the top m neurons from all layers
+def select_top_neurons_all(importance_scores_dict, top_m_neurons=5):
+    # Create a list to store tuples of (layer_name, importance_value, index_in_layer)
+    flattened_importance = []
+
+    for layer_name, importance_scores in importance_scores_dict.items():
+        if top_m_neurons == -1:
+            print(f"Selecting all neurons from layer {layer_name}.")
+            if importance_scores.dim() == 1:  # FC layer
+                indices = torch.arange(importance_scores.shape[0])
+                flattened_importance.extend([(layer_name, score.item(), idx.item()) for idx, score in enumerate(importance_scores)])
+            else:  # Conv2D layer
+                mean_attribution = torch.mean(importance_scores, dim=[1, 2])
+                indices = torch.arange(mean_attribution.shape[0])
+                flattened_importance.extend([(layer_name, score.item(), idx.item()) for idx, score in enumerate(mean_attribution)])
+        else:
+            if importance_scores.dim() == 1:  # FC layer
+                _, indices = torch.topk(importance_scores, importance_scores.shape[0] if top_m_neurons == -1 else top_m_neurons)
+                flattened_importance.extend([(layer_name, importance_scores[i].item(), i) for i in indices.tolist()])
+            else:  # Conv2D layer
+                mean_attribution = torch.mean(importance_scores, dim=[1, 2])
+                _, indices = torch.topk(mean_attribution, mean_attribution.shape[0] if top_m_neurons == -1 else min(top_m_neurons, mean_attribution.shape[0]))
+                flattened_importance.extend([(layer_name, mean_attribution[i].item(), i) for i in indices.tolist()])
+
+        breakpoint()
+        # Sort flattened importance scores across all layers
+        flattened_importance = sorted(flattened_importance, key=lambda x: x[1], reverse=True)
+        
+        # Select the top_m_neurons from the flattened list
+        if top_m_neurons == -1:
+            selected = flattened_importance
+        else:
+            selected = flattened_importance[:top_m_neurons]
+
+        # Create a dictionary to store the selected indices per layer
+        selected_indices = {}
+        for layer_name, _, index in selected:
+            if layer_name not in selected_indices:
+                selected_indices[layer_name] = []
+            selected_indices[layer_name].append(index)
+
+        # Convert lists to tensors for each layer
+        for layer_name in selected_indices:
+            selected_indices[layer_name] = torch.tensor(selected_indices[layer_name])
+
+        return selected_indices
+
 def visualize_activation(activation_values, selected_activations, layer_name, threshold=0, mode='fc'):
     saved_file = f'./images/mean_activation_values_{layer_name}.pdf'
     if mode == 'fc':
@@ -189,7 +236,7 @@ def visualize_activation(activation_values, selected_activations, layer_name, th
         raise ValueError(f"Invalid mode: {mode}")
 
 # TODO: Implement the function to get the relevance scores for all layers
-def get_relevance_scores_for_all_layers(model, images, labels, attribution_method='LayerConductance'):
+def get_relevance_scores_for_all_layers(model, images, labels, attribution_method='lrp'):
     model.eval()
     layer_relevance_scores = {}
 
@@ -199,8 +246,8 @@ def get_relevance_scores_for_all_layers(model, images, labels, attribution_metho
             print(f"Processing layer: {name}")
             
             # Choose the attribution method
-            if attribution_method == 'LayerConductance':
-                neuron_cond = LayerConductance(model, layer)
+            if attribution_method == 'lrp':
+                neuron_cond = LayerLRP(model, layer)
                 relevance = neuron_cond.attribute(images, target=labels)
             # Additional methods can be added here (e.g., LayerLRP, LayerIntegratedGradients)
             else:
@@ -211,6 +258,42 @@ def get_relevance_scores_for_all_layers(model, images, labels, attribution_metho
             layer_relevance_scores[name] = mean_relevance
 
     return layer_relevance_scores
+
+def get_activation_values_for_model(model, inputs, labels, important_neuron_indices):
+    model.eval()
+    activation_dict = {}
+    print("Getting the Class: {}".format(labels))
+    
+    # Define a hook to capture activations for each layer
+    def hook_fn(module, input, output, layer_name):
+        activation_dict[layer_name] = output.detach()
+    
+    # Register hooks on all trainable layers (e.g., Linear and Conv2d)
+    handles = []
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            handle = module.register_forward_hook(lambda module, input, output, layer_name=name: hook_fn(module, input, output, layer_name))
+            handles.append(handle)
+
+    # Perform forward pass to get activations
+    with torch.no_grad():
+        model(inputs)
+    
+    # Remove all hooks
+    for handle in handles:
+        handle.remove()
+
+    # Select activations for important neurons if specified
+    selected_activation_dict = {}
+    for layer_name, activation_values in activation_dict.items():
+        if important_neuron_indices is not None and layer_name in important_neuron_indices:
+            indices = important_neuron_indices[layer_name]
+            selected_activations = activation_values[:, indices]
+        else:
+            selected_activations = activation_values
+        selected_activation_dict[layer_name] = selected_activations
+        
+    return activation_dict, selected_activation_dict
 
 def get_activation_values_for_neurons(model, inputs, labels, important_neuron_indices, layer_name='fc1', visualize=False):
     
@@ -419,6 +502,39 @@ def cluster_activation_values(activation_values, n_clusters, layer_name='fc1', u
     
     return kmeans_comb
 
+# Used for the whole model clustering
+def cluster_activation_values_all(activation_dict, n_clusters, use_silhouette=False):
+    kmeans_models = {}
+    
+    # Iterate through all layers and cluster their activations
+    all_activations = []
+    for layer_name, activation_values in activation_dict.items():
+        if len(activation_values.shape) > 2:  # For Conv2D layers, reduce spatial dimensions
+            activation_values = torch.mean(activation_values, dim=[2, 3])  # Shape: [batch_size, num_filters]
+        
+        all_activations.append(activation_values)
+
+    # Concatenate all activation values across layers into one big tensor
+    all_activations_tensor = torch.cat(all_activations, dim=1)  # Shape: [batch_size, total_neurons]
+
+    # Perform clustering across all neurons
+    total_neurons = all_activations_tensor.shape[1]
+    kmeans_comb = []
+    for i in range(total_neurons):
+        if use_silhouette:
+            optimal_k = find_optimal_clusters(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1), 2, 10)
+        else:
+            optimal_k = n_clusters
+        
+        kmeans_model = KMeans(n_clusters=optimal_k, random_state=42).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
+        kmeans_comb.append(kmeans_model)
+
+    # Save KMeans models
+    save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_all_layers.pkl')
+    print("KMeans models saved for all layers! Name: kmeans_acti_all_layers.pkl")
+
+    return kmeans_comb
+
 # Assign Test inputs to Clusters
 def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
     importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
@@ -528,6 +644,7 @@ if __name__ == '__main__':
     
     #  Get the specific class data
     images, labels = get_class_data(trainloader, classes, args.test_image)
+    
     # Get the importance scores - LRP
     if os.path.exists(args.importance_file):
         attribution, mean_attribution, labels = load_importance_scores(args.importance_file)
@@ -541,6 +658,7 @@ if __name__ == '__main__':
                 filename = args.importance_file.replace('.json', f'_{name}.json')
                 save_importance_scores(attribution, mean_attribution, filename, args.test_image)
                 print("{} Saved".format(filename))
+            
         else:
             attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, 
                                                                   layer_name=module_name[args.layer_index], 
@@ -550,14 +668,23 @@ if __name__ == '__main__':
     # Get the test data
     test_images, test_labels = get_class_data(testloader, classes, args.test_image)
 
-    # Obtain the important neuron indices
-    important_neuron_indices = select_top_neurons(mean_attribution, args.top_m_neurons)
+
+    if args.end2end:
+        attribution = get_relevance_scores_for_all_layers(model, images, labels, attribution_method=args.attr)
+        print("Relevance scores for all layers obtained.")
+        important_neuron_indices = select_top_neurons_all(attribution, args.top_m_neurons)
+    
+    else:
+        # Obtain the important neuron indices
+        important_neuron_indices = select_top_neurons(mean_attribution, args.top_m_neurons)
+        
     activation_values, selected_activations = get_activation_values_for_neurons(model, 
-                                                                                images, 
-                                                                                labels, 
-                                                                                important_neuron_indices, 
-                                                                                module_name[args.layer_index],
-                                                                                args.viz)
+                                                                                    images, 
+                                                                                    labels, 
+                                                                                    important_neuron_indices, 
+                                                                                    module_name[args.layer_index],
+                                                                                    args.viz)
+    
     
     if args.cluster_scores:
         ### Option - 1: Cluster the importance scores

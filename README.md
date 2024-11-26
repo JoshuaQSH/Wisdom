@@ -39,7 +39,7 @@ $ ./script.sh fc1
 - [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
   - [ ] Architecture analysation block by block, YOLOv5s
 - [ ] [**IDC**] End to End layer analyze, LeNet and others
-- [ ] [**IDC**] Include the results for the random pruning
+- [x] [**IDC**] Include the results for the random pruning
 - [ ] [**IDC**] Pickup the common neurons per method-class
 - [ ] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
     - [x] Rankings, plots
