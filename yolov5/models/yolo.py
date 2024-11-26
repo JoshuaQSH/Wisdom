@@ -3,7 +3,7 @@ import argparse
 import yaml
 
 from models.experimental import *
-
+from captum.attr import LayerConductance
 
 class Detect(nn.Module):
     def __init__(self, nc=80, anchors=()):  # detection layer
@@ -218,9 +218,13 @@ if __name__ == '__main__':
     model.train()
 
     # Profile
-    # img = torch.rand(8 if torch.cuda.is_available() else 1, 3, 640, 640).to(device)
-    # y = model(img, profile=True)
-    # print([y[0].shape] + [x.shape for x in y[1]])
+    img = torch.rand(8 if torch.cuda.is_available() else 1, 3, 640, 640).to(device)
+    breakpoint()
+    y = model(img, profile=True)
+    print([y[0].shape] + [x.shape for x in y[1]])
+
+    neuron_cond = LayerConductance(model, net_layer)
+    attribution = neuron_cond.attribute(img,  target=labels)
 
     # ONNX export
     # model.model[-1].export = True
