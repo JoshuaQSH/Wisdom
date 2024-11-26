@@ -35,16 +35,10 @@ $ ./script.sh fc1
 
 ## TODO
 
-- [x] `find_optimal_clusters` requires fixing, compute the silhouette score with row by row
-- [ ] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) in pytorch, with COCO dataset
-- [ ] End to End analyze
-- [ ] Selectors for different attributors (using the accuracy as the guide)
-    - [ ] Rankings, plots
-    - [ ] Voting
-- [ ] Add more dataset and models
-- [ ] SOTA methods to compare
-- [ ] runtime version + attention
-- [ ] YOLO v11
+- [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
+  - [ ] Layers by layers
+  - [ ] Architecture analysation block by block, YOLOv5s
+- [ ] [**YOLO**] YOLO v11
 
 
 ## Directory information
