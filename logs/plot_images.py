@@ -1,10 +1,12 @@
 import re
 import matplotlib.pyplot as plt
+import argparse
 import glob
 
 # Function to parse the log file
 def parse_log_file(log_file):
     with open(log_file, 'r') as file:
+        print("Opening log file:", log_file)
         lines = file.readlines()
     
     # Extract model, dataset, and layers index from the filename
@@ -67,6 +69,7 @@ def plot_data(model, dataset, layers_index, data):
         # plt.legend()
         plt.grid(True)
         plt.savefig(f'{model}_{dataset}_{layers_index}_{class_name}.pdf', format='pdf', dpi=1200)
+        plt.close()
 
 # Main function
 def plot_main(plot_all=False, log_file=None):
@@ -81,5 +84,8 @@ def plot_main(plot_all=False, log_file=None):
         plot_data(model, dataset, layers_index, data)
 
 if __name__ == "__main__":
-    log_file = "AttriTest-lenet-cifar10-20241123-222131.log"
-    plot_main(plot_all=True, log_file=log_file)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--log-file', type=str, default='AttriTest-lenet-cifar10-20241123-222131.log', help='Path to the log file')
+    parser.add_argument('--plot-all', action='store_true', help='Plot all log files')
+    args = parser.parse_args()
+    plot_main(plot_all=args.plot_all, log_file=args.log_file)

@@ -23,6 +23,11 @@ $ cd captum_demo
 # The default test will be using a customized LeNet-5 with CIFAR10 dataset
 # Usage: ./script.sh <chosen-layer>, <chosen-layer> could be ['fc1', 'fc2', 'conv1', 'conv2'], example:
 $ ./script.sh fc1
+
+# To plot the common neurons in different layer per class
+$ cd logs
+# python plot_images.py --plot-all --log-file <log_file_name.log>
+$ python plot_images.py --plot-all
 ```
 
 ## Routes
