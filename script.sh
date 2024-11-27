@@ -9,7 +9,7 @@ DATASET="cifar10"
 TEST_CLASS="plane"
 TEST_MODEL="lenet"
 NUM_CLUSTERS=2
-NUM_NEURONS=10
+NUM_NEURONS=3
 I_PATH=/home/shenghao/torch-deepimportance
 
 if [ $RUN_TEST == "fc1" ]
