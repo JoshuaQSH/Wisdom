@@ -18,8 +18,6 @@ $ pip -r install requirements.txt
 Run with a script:
 
 ```shell
-$ cd captum_demo
-
 # The default test will be using a customized LeNet-5 with CIFAR10 dataset
 # Usage: ./script.sh <chosen-layer>, <chosen-layer> could be ['fc1', 'fc2', 'conv1', 'conv2'], example:
 $ ./script.sh fc1
@@ -60,5 +58,5 @@ $ python plot_images.py --plot-all
 - `images`: All the saved images, including the example images and the heatmap saved by the running demos
 - `models_info`: Pre-trained model files (*.pt) and also the model architecture visualisations
 - `saved_files`: Saved JSON files for the model importances
-- `logs`: Saved the log files
-- `examples`: Small example testing captum
+- `logs`: The saved the log files
+- `examples`: Small examples (stand-alone) to test captum
