@@ -5,6 +5,7 @@ CLASSES=('plane' 'car' 'bird' 'cat' 'deer' 'dog' 'frog' 'horse' 'ship' 'truck')
 # Check "lgc"
 METHODS=('lc' 'la' 'ii' 'lgxa' 'lgc' 'ldl' 'ldls' 'lgs' 'lig' 'lfa' 'lrp')
 TEST_ATTR="lrp"
+# cifar10, mnist, imagenet
 DATASET="cifar10"
 TEST_CLASS="plane"
 TEST_MODEL="lenet"
@@ -12,47 +13,38 @@ NUM_CLUSTERS=2
 NUM_NEURONS=3
 I_PATH=/home/shenghao/torch-deepimportance
 
-if [ $RUN_TEST == "fc1" ]
+
+# For the CIFAR-10 dataset and LeNet model, parts of the unit tests
+if [ $RUN_TEST == "lenetfc1" ]
 then
     echo "Running LeNet with fc1 layer"
     # layer-index 3 is the fc1 layer
     python run.py \
-        --dataset cifar10 \
+        --dataset $DATASET \
         --batch-size 4 \
         --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_fc1.json \
         --layer-index 3 \
         --model $TEST_MODEL \
         --top-m-neurons $NUM_NEURONS \
         --n-clusters $NUM_CLUSTERS \
-        --attr ldls
+        --attr $TEST_ATTR
 
-elif [ $RUN_TEST == "end2end" ]
-then
-    echo "Running ${TEST_MODEL} End2End analysis"
-    python run.py \
-        --dataset $DATASET \
-        --batch-size 4 \
-        --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_end2end.json \
-        --model $TEST_MODEL \
-        --top-m-neurons $NUM_NEURONS \
-        --n-clusters $NUM_CLUSTERS \
-        --attr $TEST_ATTR \
-        --end2end
-
-elif [ $RUN_TEST == "conv1" ]
+elif [ $RUN_TEST == "lenetconv1" ]
 then
     echo "Running LeNet with conv1 layer"
-    python run.py --dataset $DATASET \
+    python run.py \
+    --dataset $DATASET \
     --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_conv1.json \
     --layer-index 1 \
     --top-m-neurons 2 \
     --model $TEST_MODEL \
     --attr $TEST_ATTR
 
-elif [ $RUN_TEST == "fc2" ]
+elif [ $RUN_TEST == "lenetfc2" ]
 then
     echo "Running LeNet with fc2 layer"
-    python run.py --dataset $DATASET \
+    python run.py \
+        --dataset $DATASET \
         --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_fc2.json \
         --layer-index 4 \
         --top-m-neurons 10 \
@@ -60,17 +52,18 @@ then
         --model $TEST_MODEL \
         --attr $TEST_ATTR
 
-elif [ $RUN_TEST == "conv2" ]
+elif [ $RUN_TEST == "lenetconv2" ]
 then
     echo "Running LeNet with conv2 layer"
-    python run.py --dataset $DATASET \
+    python run.py \
+        --dataset $DATASET \
         --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_conv2.json \
         --layer-index 2 \
         --top-m-neurons 2 \
         --model $TEST_MODEL \
         --attr $TEST_ATTR
 
-elif [ $RUN_TEST == "cifartest" ]
+elif [ $RUN_TEST == "lenetallclass" ]
 then
     echo "Running LeNet with fc1 layer"
     for class in "${CLASSES[@]}"
@@ -88,24 +81,20 @@ then
             --attr $TEST_ATTR
     done
 
-elif [ $RUN_TEST == "cifarmethods" ]
+elif [ $RUN_TEST == "end2end" ]
 then
-    echo "Running LeNet with fc1 layer"
-    for attribution in "${METHODS[@]}"
-    do
-        echo "--- Processing class: $attribution ---"
-        python run.py --dataset $DATASET \
-            --large-image \
-            --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${attribution}_fc1.json \
-            --layer-index 3 \
-            --model $TEST_MODEL \
-            --top-m-neurons $NUM_NEURONS \
-            --n-clusters $NUM_CLUSTERS \
-            --test-image $TEST_CLASS \
-            --attr $attribution
-        echo "Done with $attribution"
-    done
+    echo "Running ${TEST_MODEL} End2End analysis"
+    python run.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_end2end.json \
+        --model $TEST_MODEL \
+        --top-m-neurons 20 \
+        --n-clusters $NUM_CLUSTERS \
+        --attr $TEST_ATTR \
+        --end2end
 
+# For the ImageNet and more models
 elif [ $RUN_TEST == "imagenet" ]
 then
     echo "Running ImageNet with vgg16"
@@ -119,22 +108,7 @@ then
         --test-image $TEST_CLASS \
         --attr $TEST_ATTR
 
-elif [ $RUN_TEST == "attrtest" ]
-then
-    echo "Running ${DATASET} with ${TEST_MODEL}-FC1 and test each attribution"
-    for attribution in "${METHODS[@]}"
-    do
-        echo "--- Processing class: $attribution ---"
-        python run.py --dataset $DATASET \
-            --layer-index 3 \
-            --model $TEST_MODEL \
-            --top-m-neurons $NUM_NEURONS \
-            --n-clusters $NUM_CLUSTERS \
-            --test-image $TEST_CLASS \
-            --attr $attribution
-        echo "Done with $attribution"
-    done
-
+## Finegrained evaluations with pruning and attributions selection
 # 1->conv1, 2->conv2, 3->fc1, 4->fc2
 elif [ $RUN_TEST == "attr4class" ]
 then
