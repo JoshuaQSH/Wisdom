@@ -30,7 +30,7 @@ from captum.metrics import infidelity_perturb_func_decorator, infidelity
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, visualize_idc_scores
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, visualize_idc_scores, plot_cluster_info
 
 # Add src directory to sys.path
 src_path = Path(__file__).resolve().parent / "src"
@@ -234,7 +234,7 @@ def visualize_activation(activation_values, selected_activations, layer_name, th
     else:
         raise ValueError(f"Invalid mode: {mode}")
 
-# TODO: Implement the function to get the relevance scores for all layers
+# TODO: Implement the function to get the relevance scores for all layers [Require testing]
 def get_relevance_scores_for_all_layers(model, images, labels, attribution_method='lrp'):
     model.eval()
     layer_relevance_scores = {}
@@ -333,84 +333,6 @@ def get_activation_values_for_neurons(model, inputs, labels, important_neuron_in
         visualize_activation(activation_values, selected_activations, layer_name, threshold=0, mode=layer_name[:-1])
         
     return activation_values, selected_activations
-
-
-## TODO: bugs here, scatter plot is not working, for the shape of X
-def plot_cluster_info(n_clusters, silhouette_avg, X, clusterer, cluster_labels):
-    # Create a subplot with 1 row and 2 columns
-    fig, (ax1, ax2) = plt.subplots(1, 2)
-    fig.set_size_inches(18, 7)
-    # The silhouette coefficient can range from -0.1, 1
-    ax1.set_xlim([-0.1, 1])
-    y_lower = 10
-    sample_silhouette_values = silhouette_samples(X, cluster_labels)
-    for i in range(n_clusters):
-        # Aggregate the silhouette scores for samples belonging to
-        # cluster i, and sort them
-        ith_cluster_silhouette_values = sample_silhouette_values[cluster_labels == i]
-        ith_cluster_silhouette_values.sort()
-        size_cluster_i = ith_cluster_silhouette_values.shape[0]
-        y_upper = y_lower + size_cluster_i
-        color = cm.nipy_spectral(float(i) / n_clusters)
-        ax1.fill_betweenx(
-            np.arange(y_lower, y_upper),
-            0,
-            ith_cluster_silhouette_values,
-            facecolor=color,
-            edgecolor=color,
-            alpha=0.7,
-        )
-
-        # Label the silhouette plots with their cluster numbers at the middle
-        ax1.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
-
-        # Compute the new y_lower for next plot
-        y_lower = y_upper + 10  # 10 for the 0 samples
-    
-    ax1.set_title("The silhouette plot for the various clusters.")
-    ax1.set_xlabel("The silhouette coefficient values")
-    ax1.set_ylabel("Cluster label")
-    
-    # The vertical line for average silhouette score of all the values
-    ax1.axvline(x=silhouette_avg, color="red", linestyle="--")
-    ax1.set_yticks([])  # Clear the yaxis labels / ticks
-    ax1.set_xticks([-0.1, 0, 0.2, 0.4, 0.6, 0.8, 1])
-    
-    # 2nd Plot showing the actual clusters formed
-    colors = cm.nipy_spectral(cluster_labels.astype(float) / n_clusters)
-    # [5000, 1] for CIFAR-10 here
-    ax2.scatter(
-        X[:, 0], X[:, 1], marker=".", s=30, lw=0, alpha=0.7, c=colors, edgecolor="k"
-    )
-
-    # Labeling the clusters
-    centers = clusterer.cluster_centers_
-    # Draw white circles at cluster centers
-    ax2.scatter(
-        centers[:, 0],
-        centers[:, 1],
-        marker="o",
-        c="white",
-        alpha=1,
-        s=200,
-        edgecolor="k",
-    )
-    
-    for i, c in enumerate(centers):
-        ax2.scatter(c[0], c[1], marker="$%d$" % i, alpha=1, s=50, edgecolor="k")
-
-    ax2.set_title("The visualization of the clustered data.")
-    ax2.set_xlabel("Feature space for the 1st feature")
-    ax2.set_ylabel("Feature space for the 2nd feature")
-
-    plt.suptitle(
-        "Silhouette analysis for KMeans clustering on sample data with n_clusters = %d"
-        % n_clusters,
-        fontsize=14,
-        fontweight="bold",
-    )
-    
-    plt.savefig('./images/silhouette_n_{}.pdf'.format(n_clusters), dpi=1500)
 
 
 def find_optimal_clusters(scores, min_k=2, max_k=10):
@@ -527,23 +449,10 @@ def cluster_activation_values_all(activation_dict, n_clusters, use_silhouette=Fa
         kmeans_model = KMeans(n_clusters=optimal_k, random_state=42).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
         kmeans_comb.append(kmeans_model)
 
-    # Save KMeans models
+    # TODO: Save KMeans models
     # save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_all_layers.pkl')
     print("KMeans models saved for all layers! Name: kmeans_acti_all_layers.pkl")
-
     return kmeans_comb
-
-
-# Assign Test inputs to Clusters
-def assign_clusters_to_importance_scores(importance_scores, kmeans_model):
-    importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
-    cluster_labels = kmeans_model.predict(importance_scores_np)
-    return cluster_labels
-
-def assign_clusters_to_activation_values(activation_values, kmeans_model):
-    activation_values_np = activation_values.cpu().numpy()
-    cluster_labels = kmeans_model.predict(activation_values_np)
-    return cluster_labels
 
 # A for loop to assign clusters to all the neurons
 def assign_clusters(activations, kmeans_models):
@@ -633,11 +542,6 @@ def compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name, 
     
     return unique_clusters, coverage_rate
 
-def compute_incc_centroids(important_neurons_clusters):
-    centroids = {}
-    for neuron, clusters in important_neurons_clusters.items():
-        centroids[neuron] = [cluster.cluster_centers_ for cluster in clusters]
-    return centroids
 
 if __name__ == '__main__':
     args = parse_args()
@@ -669,11 +573,20 @@ if __name__ == '__main__':
     else:
         device = torch.device("cpu")
     
+    # We aussume that the SOAT models are pretrained with IMAGENET
     model, module_name, module = get_model(model_name=args.model)
-    model.load_state_dict(torch.load(model_path))
+
+    # For one of the testing demo, we provide the pretrained LeNet5 with CIFAR10
+    if args.dataset == 'cifar10' and args.model == 'lenet':
+        model.load_state_dict(torch.load(model_path))
     
-    #  Get the specific class data
+
+
+    # Task one: test the single class/label of the model
+    # Get the specific class data
     images, labels = get_class_data(trainloader, classes, args.test_image)
+
+    breakpoint()
     
     # Get the importance scores - LRP
     if os.path.exists(args.importance_file):
@@ -727,11 +640,6 @@ if __name__ == '__main__':
         print("Importance scores clustered.")
     else:
         ### Option - 2: Cluster the activation values
-        # cluster_labels, kmeans_comb = cluster_activation_values(selected_activations, optimal_k, module_name[args.layer_index])
-        # try:
-        #     kmeans_model = load_kmeans_model('./saved_files/kmeans_model_{}.pkl'.format(module_name[args.layer_index]))
-        # except FileNotFoundError:
-        #     cluster_labels, kmeans_comb = cluster_activation_values(selected_activations, args.n_clusters, module_name[args.layer_index], args.use_silhouette)
         if args.end2end:
             kmeans_comb = cluster_activation_values_all(selected_activations, args.n_clusters, args.use_silhouette)
         else:    
@@ -758,6 +666,7 @@ if __name__ == '__main__':
     
     else:
         ### Compute IDC coverage
+        # End to end testing for the whole model
         if args.end2end:
             unique_cluster, coverage_rate = compute_idc_test_whole(model, 
                             test_images, 
@@ -768,6 +677,7 @@ if __name__ == '__main__':
                             n_clusters=args.n_clusters,
                             attribution_method=args.attr)
         else:
+            # Test the specific layer
             unique_cluster, coverage_rate = compute_idc_test(model, 
                             test_images, 
                             test_labels, 

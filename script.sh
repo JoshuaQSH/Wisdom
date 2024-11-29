@@ -94,18 +94,23 @@ then
         --attr $TEST_ATTR \
         --end2end
 
-# For the ImageNet and more models
+# TODO: For the ImageNet and more models
+# TODO: 1) test three models with different attributions
+# TODO: 2) test one label and then all the labels with --test-all
 elif [ $RUN_TEST == "imagenet" ]
 then
-    echo "Running ImageNet with vgg16"
+    # ['vgg16', 'convnext_base', 'efficientnet_v2_s']
+    IMAGE_MODEL="vgg16"
+    IMAGE_CLASS="tench"
+    echo "Running ImageNet with ${IMAGE_MODEL}"
     python run.py --capture-all \
         --dataset imagenet \
-        --importance-file ${I_PATH}/saved_files/plane_vgg16_${TEST_ATTR}_fc1.json \
+        --importance-file ${I_PATH}/saved_files/${IMAGE_MODEL}_${TEST_ATTR}.json \
         --layer-index 3 \
-        --model vgg16 \
+        --model $IMAGE_MODEL \
         --top-m-neurons 5 \
         --n-clusters 2 \
-        --test-image $TEST_CLASS \
+        --test-image $IMAGE_CLASS \
         --attr $TEST_ATTR
 
 ## Finegrained evaluations with pruning and attributions selection

@@ -8,6 +8,8 @@ import json
 import logging
 from logging import handlers
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import numpy as np
 
 import torch
 import torchvision
@@ -20,6 +22,8 @@ import torch.nn.functional as F
 from torch.utils.data import Subset
 
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import silhouette_samples, silhouette_score
+
 
 # Add src directory to sys.path
 src_path = Path(__file__).resolve().parent / "src"
@@ -65,9 +69,9 @@ def parse_args():
     parser.add_argument('--importance-file', type=str, default='./saved_files/plane_lenet_importance.json', help='The file to save the importance scores.')
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device to use for training.')
-    parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset.')
-    parser.add_argument('--test-image', type=str, default='plane', choices=['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'], 
-                        help='Test image name.')
+    parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset with the resized images.')
+    parser.add_argument('--test-image', type=str, default='plane', help='Test image name.')
+    parser.add_argument('--test-all', action='store_true', help='Test all the images.')
     parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp'],  help='The attribution method to use.')
     parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
     parser.add_argument('--capture-all', action='store_true', help='Capture all the layers.')
@@ -399,11 +403,88 @@ def test_model():
                         'resnet152',
                         'resnext101_32x8d',
                         'vit_b_16']
-    offer_moder_name = ['resnet18']
+    offer_moder_name = ['vgg16', 'convnext_base', 'efficientnet_v2_s']
     for model_name in offer_moder_name:
          model, module_name, module = get_model(model_name=model_name)
          print(model_name, len(module_name))
          print(model_name, module_name)
+
+## TODO: bugs here, scatter plot is not working, for the shape of X
+def plot_cluster_info(n_clusters, silhouette_avg, X, clusterer, cluster_labels):
+    # Create a subplot with 1 row and 2 columns
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    fig.set_size_inches(18, 7)
+    # The silhouette coefficient can range from -0.1, 1
+    ax1.set_xlim([-0.1, 1])
+    y_lower = 10
+    sample_silhouette_values = silhouette_samples(X, cluster_labels)
+    for i in range(n_clusters):
+        # Aggregate the silhouette scores for samples belonging to
+        # cluster i, and sort them
+        ith_cluster_silhouette_values = sample_silhouette_values[cluster_labels == i]
+        ith_cluster_silhouette_values.sort()
+        size_cluster_i = ith_cluster_silhouette_values.shape[0]
+        y_upper = y_lower + size_cluster_i
+        color = cm.nipy_spectral(float(i) / n_clusters)
+        ax1.fill_betweenx(
+            np.arange(y_lower, y_upper),
+            0,
+            ith_cluster_silhouette_values,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.7,
+        )
+
+        # Label the silhouette plots with their cluster numbers at the middle
+        ax1.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
+
+        # Compute the new y_lower for next plot
+        y_lower = y_upper + 10  # 10 for the 0 samples
+    
+    ax1.set_title("The silhouette plot for the various clusters.")
+    ax1.set_xlabel("The silhouette coefficient values")
+    ax1.set_ylabel("Cluster label")
+    
+    # The vertical line for average silhouette score of all the values
+    ax1.axvline(x=silhouette_avg, color="red", linestyle="--")
+    ax1.set_yticks([])  # Clear the yaxis labels / ticks
+    ax1.set_xticks([-0.1, 0, 0.2, 0.4, 0.6, 0.8, 1])
+    
+    # 2nd Plot showing the actual clusters formed
+    colors = cm.nipy_spectral(cluster_labels.astype(float) / n_clusters)
+    # [5000, 1] for CIFAR-10 here
+    ax2.scatter(
+        X[:, 0], X[:, 1], marker=".", s=30, lw=0, alpha=0.7, c=colors, edgecolor="k"
+    )
+
+    # Labeling the clusters
+    centers = clusterer.cluster_centers_
+    # Draw white circles at cluster centers
+    ax2.scatter(
+        centers[:, 0],
+        centers[:, 1],
+        marker="o",
+        c="white",
+        alpha=1,
+        s=200,
+        edgecolor="k",
+    )
+    
+    for i, c in enumerate(centers):
+        ax2.scatter(c[0], c[1], marker="$%d$" % i, alpha=1, s=50, edgecolor="k")
+
+    ax2.set_title("The visualization of the clustered data.")
+    ax2.set_xlabel("Feature space for the 1st feature")
+    ax2.set_ylabel("Feature space for the 2nd feature")
+
+    plt.suptitle(
+        "Silhouette analysis for KMeans clustering on sample data with n_clusters = %d"
+        % n_clusters,
+        fontsize=14,
+        fontweight="bold",
+    )
+    
+    plt.savefig('./images/silhouette_n_{}.pdf'.format(n_clusters), dpi=1500)
 
 def visualize_idc_scores(idc_scores, filename='./logs/idc_scores.pdf'):
     methods = list(idc_scores.keys())
@@ -427,5 +508,6 @@ if __name__ == '__main__':
     # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
     # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
     trainloader, testloader, classes = load_ImageNet()
-    test_model()
+    # print("Classes: ", classes)
+    # test_model()
     
