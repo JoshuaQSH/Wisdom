@@ -24,7 +24,6 @@ from torch.utils.data import Subset
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import silhouette_samples, silhouette_score
 
-
 # Add src directory to sys.path
 src_path = Path(__file__).resolve().parent / "src"
 sys.path.append(str(src_path))
@@ -59,7 +58,6 @@ class Logger(object):
         self.logger.addHandler(th)
 
 def parse_args():
-    
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='lenet', choices=['lenet', 'vgg16', 'custom'], help='Model to use for training.')
     parser.add_argument('--model-path', type=str, default='None', help='Path to the trained model.')
@@ -89,9 +87,6 @@ def parse_args():
     parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
     parser.add_argument('--log-path', type=str, default='./logs/', help='Path to save the log file.')
 
-
-
-    
     args = parser.parse_args()
     print(args)
     
@@ -343,53 +338,9 @@ def is_neuron_activated(activation_value, threshold=0):
     return activation_value > threshold
 
 def is_conv2d_neuron_activated(activation_map, threshold=0):
-    """
-    Check if any neuron in the Conv2D activation map is activated.
-    
-    Parameters:
-    - activation_map (torch.Tensor): The activation map of shape (output_height, output_width).
-    - threshold (float): The threshold to determine activation (default: 0 for ReLU).
-    
-    Returns:
-    - activated (bool): True if the neuron is activated, False otherwise.
-    """
     return (activation_map > threshold).any().item()
 
-# Generate Adversarial Examples
-def fgsm_attack(model, inputs, labels, epsilon):
-    """
-    Generate adversarial examples using the FGSM method.
-    
-    Parameters:
-    - model (torch.nn.Module): The trained model.
-    - inputs (torch.Tensor): Original input images.
-    - labels (torch.Tensor): True labels for the inputs.
-    - epsilon (float): The perturbation strength.
-    
-    Returns:
-    - adv_examples (torch.Tensor): Generated adversarial examples.
-    """
-    inputs.requires_grad = True
-    
-    # Forward pass
-    outputs = model(inputs)
-    loss = F.nll_loss(outputs, labels)
-    
-    # Backward pass (calculate gradients)
-    model.zero_grad()
-    loss.backward()
-    
-    # Create adversarial perturbations
-    perturbation = epsilon * inputs.grad.sign()
-    
-    # Create adversarial examples by adding perturbations to original inputs
-    adv_examples = inputs + perturbation
-    
-    # Clip the values to stay within valid image range (0-1)
-    adv_examples = torch.clamp(adv_examples, 0, 1)
-    
-    return adv_examples
-
+## For the unit test
 def test_model():
     offer_moder_name = ['vgg16', 
                         'convnext_base', 
@@ -485,22 +436,6 @@ def plot_cluster_info(n_clusters, silhouette_avg, X, clusterer, cluster_labels):
     )
     
     plt.savefig('./images/silhouette_n_{}.pdf'.format(n_clusters), dpi=1500)
-
-def visualize_idc_scores(idc_scores, filename='./logs/idc_scores.pdf'):
-    methods = list(idc_scores.keys())
-    scores = [idc_scores[method] for method in methods]
-    
-    plt.figure(figsize=(12, 6))
-    plt.bar(methods, scores, color='skyblue')
-    plt.xlabel('Attribution Method')
-    plt.ylabel('IDC Score (%)')
-    plt.title('Comparison of IDC Scores for Different Attribution Methods')
-    plt.xticks(rotation=45)
-    plt.grid(axis='y', linestyle='--')
-    plt.tight_layout()
-    plt.savefig(filename, format='pdf', dpi=1200)
-    # plt.show()
-
 
 if __name__ == '__main__':
     # unit test - model

@@ -19,8 +19,8 @@ Run with a script:
 
 ```shell
 # The default test will be using a customized LeNet-5 with CIFAR10 dataset
-# Usage: ./script.sh <chosen-layer>, <chosen-layer> could be ['fc1', 'fc2', 'conv1', 'conv2'], example:
-$ ./script.sh fc1
+# Usage: ./script.sh <chosen-layer>, <chosen-layer> could be ['fc1', 'fc2', 'conv1', 'conv2']. For the LeNet-5+CIFAR10, we do:
+$ ./script.sh lenetfc1
 
 # To plot the common neurons in different layer per class
 $ cd logs

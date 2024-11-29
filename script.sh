@@ -10,9 +10,8 @@ DATASET="cifar10"
 TEST_CLASS="plane"
 TEST_MODEL="lenet"
 NUM_CLUSTERS=2
-NUM_NEURONS=3
+NUM_NEURONS=10
 I_PATH=/home/shenghao/torch-deepimportance
-
 
 # For the CIFAR-10 dataset and LeNet model, parts of the unit tests
 if [ $RUN_TEST == "lenetfc1" ]
