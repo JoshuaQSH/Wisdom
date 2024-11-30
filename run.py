@@ -149,7 +149,7 @@ if __name__ == '__main__':
 
     if args.end2end:
         important_neuron_indices = idc.select_top_neurons_all(attribution)
-        activation_values, selected_activations = get_activation_values_for_model(images, labels, important_neuron_indices)
+        activation_values, selected_activations = idc.get_activation_values_for_model(images, classes[labels[0]], important_neuron_indices)
     else:
         # Obtain the important neuron indices
         important_neuron_indices = idc.select_top_neurons(mean_attribution)
@@ -184,22 +184,17 @@ if __name__ == '__main__':
         ### Compute IDC coverage
         # End to end testing for the whole model
         if args.end2end:
-            unique_cluster, coverage_rate = compute_idc_test_whole(model, 
-                            test_images, 
+            unique_cluster, coverage_rate = idc.compute_idc_test_whole(test_images, 
                             test_labels, 
-                            kmeans_comb, # kmeans_model
-                            classes,
-                            top_m_neurons=args.top_m_neurons, 
-                            n_clusters=args.n_clusters,
-                            attribution_method=args.attr)
+                            kmeans_comb,
+                            args.attr)
         else:
             # Test the specific layer
-            idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette)
             unique_cluster, coverage_rate = idc.compute_idc_test(test_images, 
                                                                  test_labels, 
                                                                  kmeans_comb, 
-                                                                 classes,
-                                                                 module_name[args.layer_index])
+                                                                 module_name[args.layer_index],
+                                                                 args.attr)
             
     ### Infidelity metric
     # infid = infidelity_metric(net, perturb_fn, images, attribution)

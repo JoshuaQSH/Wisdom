@@ -41,13 +41,17 @@ $ python plot_images.py --plot-all
 - [x] [**IDC**] `find_optimal_clusters` requires fixing, compute the silhouette score with row by row
 - [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
   - [ ] Architecture analysation block by block, YOLOv5s
-- [ ] [**IDC**] End to End layer analyze, LeNet and others
+- [x] [**IDC**] End to End layer analyze for LeNet 
 - [x] [**IDC**] Include the results for the random pruning
-- [ ] [**IDC**] Pickup the common neurons per method-class
+- [x] [**IDC**] Pickup the common neurons per method-class
 - [ ] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
     - [x] Rankings, plots
     - [ ] Voting
 - [ ] [**IDC**] Add more dataset and models
+  - [ ] VGG16 + ImageNet
+  - [ ] ConvNext + ImageNet
+  - [ ] mobilenet + ImageNet
+- [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
 - [ ] [**IDC**] SOTA methods to compare
 - [ ] [**IDC**] runtime version + attention
 - [ ] [**YOLO**] YOLO v11

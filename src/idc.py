@@ -81,7 +81,7 @@ class IDC:
     ## Get the activation values [layer-wise]
     def get_activation_values_for_neurons(self, inputs, labels, important_neuron_indices, layer_name='fc1'):
         activation_values = []
-        print("Getting the Class: {}".format(self.classes[labels[0]]))
+        print("Getting the Class: {}".format(labels))
         
         def hook_fn(module, input, output):
             activation_values.append(output.detach())
@@ -115,6 +115,7 @@ class IDC:
     def get_activation_values_for_model(self, inputs, labels, important_neuron_indices):
         self.model.eval()
         activation_dict = {}
+        print("Getting the Class: {}".format(labels))
         
         def hook_fn(module, input, output, layer_name):
             activation_dict[layer_name] = output.detach()
@@ -252,7 +253,7 @@ class IDC:
         # TODO: get_relevance_scores_for_all_layers
         layer_importance_scores = get_relevance_scores_for_all_layers(self.model, inputs_images, labels, attribution_method=attribution_method)
         indices = self.select_top_neurons_all(layer_importance_scores)
-        activation_, selected_activations = self.get_activation_values_for_model(inputs_images, labels, indices)
+        activation_, selected_activations = self.get_activation_values_for_model(inputs_images, self.classes[labels[0]], indices)
         activation_values = []
         for layer_name, importance_scores in selected_activations.items():
             if layer_name[:-1] == 'conv':
@@ -272,6 +273,7 @@ class IDC:
             max_coverage = all_activations_tensor.shape[0] / total_combination
         
         coverage_rate = len(unique_clusters) / total_combination
+        print("Attribution Method: ", attribution_method)
         print(f"Total INCC combinations: {total_combination}")
         print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
         print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
@@ -288,7 +290,7 @@ class IDC:
                                                            top_m_images=-1,
                                                            attribution_method=attribution_method)
         indices = self.select_top_neurons(layer_importance_scores)
-        activation_values, selected_activations = self.get_activation_values_for_neurons(inputs_images, labels, indices, layer_name)
+        activation_values, selected_activations = self.get_activation_values_for_neurons(inputs_images, self.classes[labels[0]], indices, layer_name)
         if layer_name[:-1] == 'conv':
             activation_values = torch.mean(selected_activations, dim=[2, 3])
         else:
@@ -305,6 +307,7 @@ class IDC:
             max_coverage = activation_values.shape[0] / total_combination
         
         coverage_rate = len(unique_clusters) / total_combination
+        print("Attribution Method: ", attribution_method)
         print(f"Total INCC combinations: {total_combination}")
         print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
         print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
