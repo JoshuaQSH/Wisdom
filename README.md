@@ -1,6 +1,8 @@
 # Torch4DeepImportance
 
-A pytorch version for Deepimportance (test version). [TensorFlow version for DeepImportance](https://github.com/DeepImportance/deepimportance_code_release/tree/ga_modifications). [Paper](https://zenodo.org/records/3628024).
+A pytorch version for Deepimportance (test version). [TensorFlow version for DeepImportance](https://github.com/DeepImportance/deepimportance_code_release/tree/ga_modifications). 
+
+For the paper, please refer [HERE](https://zenodo.org/records/3628024).
 
 A Captum lib added.
 
@@ -63,4 +65,5 @@ $ python plot_images.py --plot-all
 - `models_info`: Pre-trained model files (*.pt) and also the model architecture visualisations
 - `saved_files`: Saved JSON files for the model importances
 - `logs`: The saved the log files
+- `src`: The source files, including the idc implementations and the attribution methods (torch/captum)
 - `examples`: Small examples (stand-alone) to test captum
