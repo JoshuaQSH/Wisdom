@@ -88,7 +88,7 @@ then
         --batch-size 4 \
         --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_end2end.json \
         --model $TEST_MODEL \
-        --top-m-neurons 20 \
+        --top-m-neurons 10 \
         --n-clusters $NUM_CLUSTERS \
         --attr $TEST_ATTR \
         --end2end
