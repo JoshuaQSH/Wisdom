@@ -68,8 +68,7 @@ then
     for class in "${CLASSES[@]}"
     do
         echo "--- Processing class: $class ---"
-        python run.py --capture-all \
-            --dataset $DATASET \
+        python run.py --dataset $DATASET \
             --large-image \
             --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_fc1.json \
             --layer-index 3 \
@@ -102,10 +101,9 @@ then
     IMAGE_MODEL="vgg16"
     IMAGE_CLASS="tench"
     echo "Running ImageNet with ${IMAGE_MODEL}"
-    python run.py --capture-all \
-        --dataset imagenet \
+    python run.py --dataset imagenet \
         --importance-file ${I_PATH}/saved_files/${IMAGE_MODEL}_${TEST_ATTR}.json \
-        --layer-index 3 \
+        --layer-index 4 \
         --model $IMAGE_MODEL \
         --top-m-neurons 5 \
         --n-clusters 2 \
@@ -122,11 +120,41 @@ then
         --batch-size 4 \
         --layer-index 3 \
         --model $TEST_MODEL \
+        --top-m-neurons 20 \
+        --n-clusters $NUM_CLUSTERS \
+        --all-attr \
+        --logging
+
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --layer-index 3 \
+        --model $TEST_MODEL \
+        --top-m-neurons 15 \
+        --n-clusters $NUM_CLUSTERS \
+        --all-attr \
+        --logging
+
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --layer-index 3 \
+        --model $TEST_MODEL \
         --top-m-neurons 10 \
         --n-clusters $NUM_CLUSTERS \
-        --capture-all \
+        --all-attr \
         --logging
-        
+
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --layer-index 3 \
+        --model $TEST_MODEL \
+        --top-m-neurons 5 \
+        --n-clusters $NUM_CLUSTERS \
+        --all-attr \
+        --logging
+                
 elif [ $RUN_TEST == "attr4class2" ]
 then
     echo "Running ${DATASET} with ${TEST_MODEL}-Conv2 and test each attribution"
@@ -137,7 +165,17 @@ then
         --model $TEST_MODEL \
         --top-m-neurons 2 \
         --n-clusters $NUM_CLUSTERS \
-        --capture-all \
+        --all-attr \
+        --logging
+    
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --layer-index 2 \
+        --model $TEST_MODEL \
+        --top-m-neurons 3 \
+        --n-clusters $NUM_CLUSTERS \
+        --all-attr \
         --logging
 
 elif [ $RUN_TEST == "attr4class3" ]
@@ -148,9 +186,39 @@ then
         --batch-size 4 \
         --layer-index 4 \
         --model $TEST_MODEL \
-        --top-m-neurons $NUM_NEURONS \
+        --top-m-neurons 20 \
         --n-clusters $NUM_CLUSTERS \
-        --capture-all \
+        --all-attr \
+        --logging
+    
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --layer-index 4 \
+        --model $TEST_MODEL \
+        --top-m-neurons 15 \
+        --n-clusters $NUM_CLUSTERS \
+        --all-attr \
+        --logging
+    
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --layer-index 4 \
+        --model $TEST_MODEL \
+        --top-m-neurons 10 \
+        --n-clusters $NUM_CLUSTERS \
+        --all-attr \
+        --logging
+    
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --layer-index 4 \
+        --model $TEST_MODEL \
+        --top-m-neurons 5 \
+        --n-clusters $NUM_CLUSTERS \
+        --all-attr \
         --logging
 
 elif [ $RUN_TEST == "attr4class4" ]
@@ -163,7 +231,17 @@ then
         --model $TEST_MODEL \
         --top-m-neurons 1 \
         --n-clusters $NUM_CLUSTERS \
-        --capture-all \
+        --all-attr \
+        --logging
+    
+    python eval_attr.py \
+        --dataset $DATASET \
+        --batch-size 4 \
+        --layer-index 1 \
+        --model $TEST_MODEL \
+        --top-m-neurons 2 \
+        --n-clusters $NUM_CLUSTERS \
+        --all-attr \
         --logging
 
 else

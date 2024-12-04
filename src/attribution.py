@@ -9,7 +9,6 @@ from captum.attr import (
 
 def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_m_images=-1, attribution_method='lrp'):
     model = model.cpu()
-    
     if top_m_images != -1:
         images = images[:top_m_images]
         labels = labels[:top_m_images]

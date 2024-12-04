@@ -4,20 +4,7 @@ import sys
 from pathlib import Path
 
 import torch
-import torch.nn as nn
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from matplotlib.colors import LinearSegmentedColormap
-
-import torch
-import torchvision
-import torchvision.transforms.functional as TF
-import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-from torchvision import models
-from torchvision import transforms
 from captum.attr import IntegratedGradients
 from captum.attr import Saliency
 from captum.attr import DeepLift
@@ -27,16 +14,13 @@ from captum.attr import visualization as viz
 from captum.attr import LayerConductance, LayerActivation, InternalInfluence, LayerGradientXActivation, LayerGradCam, LayerDeepLift, LayerDeepLiftShap, LayerGradientShap, LayerIntegratedGradients, LayerFeatureAblation, LayerLRP
 from captum.metrics import infidelity_perturb_func_decorator, infidelity
 
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_samples, silhouette_score
-
 # Add src directory to sys.path
 src_path = Path(__file__).resolve().parent / "src"
 sys.path.append(str(src_path))
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, plot_cluster_info
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model
 from attribution import get_layer_conductance, get_relevance_scores_for_all_layers
-from visualization import visualize_activation
+from visualization import visualize_activation, plot_cluster_infos, visualize_idc_scores
 from idc import IDC
 
 def load_importance_scores(filename):
@@ -56,22 +40,6 @@ def save_importance_scores(importance_scores, mean_importance, filename, class_l
     with open(filename, 'w') as f:
         json.dump(data, f)
     print(f"Importance scores saved to {filename}")
-
-def evaluate_attribution_methods(model, inputs_images, labels, kmeans, classes, layer_name, attribution_methods, top_m_neurons=-1, n_clusters=5):
-    idc_scores = {}
-    for method in attribution_methods:
-        print(f"Evaluating method: {method}")
-        # Compute IDC for the given attribution method
-        _, idc_score = compute_idc_test(model, inputs_images, labels, kmeans, classes, layer_name,
-                                        top_m_neurons=top_m_neurons, n_clusters=n_clusters,
-                                        attribution_method=method)
-        
-        print(f"IDC score for {method}: {idc_score}")
-        # Store the IDC score for this method
-        idc_scores[method] = idc_score
-    
-    visualize_idc_scores(idc_scores)
-    return idc_scores
 
 if __name__ == '__main__':
     args = parse_args()
@@ -105,7 +73,7 @@ if __name__ == '__main__':
     
     # We aussume that the SOAT models are pretrained with IMAGENET
     model, module_name, module = get_model(model_name=args.model)
-
+    
     # For one of the testing demo, we provide the pretrained LeNet5 with CIFAR10
     if args.dataset == 'cifar10' and args.model == 'lenet':
         model.load_state_dict(torch.load(model_path))
@@ -115,12 +83,14 @@ if __name__ == '__main__':
     # Get the specific class data
     images, labels = get_class_data(trainloader, classes, args.test_image)
     
+    breakpoint()
+    
     # Get the importance scores - LRP
     if os.path.exists(args.importance_file):
         print("Obtaining the importance scores from the file.")
         attribution, mean_attribution, labels = load_importance_scores(args.importance_file)
     else:
-        if args.capture_all and not args.end2end:
+        if args.layer_by_layer and not args.end2end:
             for name in module_name[1:]:
                 attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, 
                                                                       layer_name=name, 

@@ -51,7 +51,7 @@ def visualize_activation(activation_values, selected_activations, layer_name, th
     
 
 ## TODO: bugs here, scatter plot is not working, for the shape of X
-def plot_cluster_info(n_clusters, silhouette_avg, X, clusterer, cluster_labels):
+def plot_cluster_infos(n_clusters, silhouette_avg, X, clusterer, cluster_labels):
     # Create a subplot with 1 row and 2 columns
     fig, (ax1, ax2) = plt.subplots(1, 2)
     fig.set_size_inches(18, 7)

@@ -6,6 +6,7 @@ import time
 import copy
 import random
 from pathlib import Path
+import sys
 
 import torch
 import torch.nn as nn
@@ -30,140 +31,16 @@ from captum.metrics import infidelity_perturb_func_decorator, infidelity
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 
+
+# Add src directory to sys.path
+src_path = Path(__file__).resolve().parent / "src"
+sys.path.append(str(src_path))
+
 from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, load_kmeans_model, save_kmeans_model, Logger
-
-def ramdon_prune(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], num_neurons=5, sparse_prune=False):
-    layer = getattr(model, layer_name)
-    
-    ## Use the torch pruning for the random prune
-    if sparse_prune:
-        amount = num_neurons / layer.weight.shape[0]
-        prune.random_unstructured(layer, name="weight", amount=amount)
-    
-    # Take each of the neuron and channel (conv2D) as basic unit
-    else:
-        with torch.no_grad():
-            
-            full_tensor = torch.arange(layer.weight.shape[0])
-            
-            # Exclude the neurons to prune
-            for v in neurons_to_prune:
-                full_tensor = full_tensor[full_tensor!=v]
-            
-            possible_choices = random.sample(set(full_tensor), num_neurons)
-            possible_choices = [t.item() for t in possible_choices]
-            
-            if isinstance(layer, nn.Linear):
-                # Set weights and biases of the selected neurons to zero
-                layer.weight[possible_choices, :] = 0
-                if layer.bias is not None:
-                    layer.bias[possible_choices] = 0
-            
-            elif isinstance(layer, nn.Conv2d):
-                # Set the weights of the selected filters to zero
-                for f in possible_choices:
-                    layer.weight[f] = 0
-                    if layer.bias is not None:
-                        layer.bias[f] = 0
-            else:
-                raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
-
-    print(
-            "Sparsity in weight: {:.2f}%".format(
-                100. * float(torch.sum(layer.weight == 0))
-                / float(layer.weight.nelement())
-            )
-        )
-
-def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
-    layer = getattr(model, layer_name)
-    
-    with torch.no_grad():
-        if isinstance(layer, nn.Linear):
-            # Set weights and biases of the selected neurons to zero
-            layer.weight[neurons_to_prune, :] = 0
-            if layer.bias is not None:
-                layer.bias[neurons_to_prune] = 0
-        elif isinstance(layer, nn.Conv2d):
-            # Set the weights of the selected filters to zero
-            for f in neurons_to_prune:
-                layer.weight[f] = 0
-                if layer.bias is not None:
-                    layer.bias[f] = 0
-        else:
-            raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
-    print(
-        "Sparsity in weight: {:.2f}%".format(
-            100. * float(torch.sum(layer.weight == 0))
-            / float(layer.weight.nelement())
-        )
-    )
-
-def get_layer_conductance(model, images, labels, classes, layer_name='fc1', top_m_images=-1, attribution_method='lrp'):
-    model = model.cpu()
-    
-    if top_m_images != -1:
-        images = images[:top_m_images]
-        labels = labels[:top_m_images]
-        
-    net_layer = getattr(model, layer_name)
-
-    print("GroundTruth: {}, Model Layer: {}".format(classes[labels[0]], net_layer))
-    outputs = model(images)
-    _, predicted = torch.max(outputs, 1)
-    
-    # ['LayerConductance', 'LayerActivation', 'InternalInfluence', 
-    # 'LayerGradientXActivation', 'LayerGradCam', 'LayerDeepLift', 
-    # 'LayerDeepLiftShap', 'LayerGradientShap', 'LayerIntegratedGradients', 
-    # 'LayerFeatureAblation', 'LayerLRP']
-    if attribution_method == 'lc':
-        print("Running with LayerConductance")
-        neuron_cond = LayerConductance(model, net_layer)
-        attribution = neuron_cond.attribute(images, target=labels)
-    elif attribution_method == 'la':
-        print("Running with LayerActivation")
-        neuron_cond = LayerActivation(model, net_layer)
-        attribution = neuron_cond.attribute(images)
-    elif attribution_method == 'ii':
-        print("Running with InternalInfluence")
-        neuron_cond = InternalInfluence(model, net_layer)
-        attribution = neuron_cond.attribute(images, target=labels)
-    elif attribution_method == 'lgxa':
-        print("Running with LayerGradientXActivation")
-        neuron_cond = LayerGradientXActivation(model, net_layer)
-        attribution = neuron_cond.attribute(images, target=labels)
-    elif attribution_method == 'lgc':
-        print("Running with LayerGradCam")
-        neuron_cond = LayerGradCam(model, net_layer)
-        attribution = neuron_cond.attribute(images, target=labels)
-    elif attribution_method == 'ldl':
-        print("Running with LayerDeepLift")
-        neuron_cond = LayerDeepLift(model, net_layer)
-        attribution = neuron_cond.attribute(images, baselines=torch.zeros_like(images), target=labels)
-    elif attribution_method == 'ldls':
-        print("Running with LayerDeepLiftShap")
-        neuron_cond = LayerDeepLiftShap(model, net_layer)
-        attribution = neuron_cond.attribute(images,  baselines=torch.zeros_like(images), target=labels)
-    elif attribution_method == 'lgs':
-        print("Running with LayerGradientShap")
-        neuron_cond = LayerGradientShap(model, net_layer)
-        attribution = neuron_cond.attribute(images, baselines=torch.zeros_like(images), target=labels)
-    elif attribution_method == 'lig':
-        print("Running with LayerIntegratedGradients")
-        neuron_cond = LayerIntegratedGradients(model, net_layer)
-        attribution = neuron_cond.attribute(images, target=labels)
-    elif attribution_method == 'lfa':
-        print("Running with LayerFeatureAblation")
-        neuron_cond = LayerFeatureAblation(model, net_layer)
-        attribution = neuron_cond.attribute(images, target=labels)
-    elif attribution_method == 'lrp':
-        print("Running with LayerLRP")
-        neuron_cond = LayerLRP(model, net_layer)
-        attribution = neuron_cond.attribute(images, target=labels)
-    else:
-        raise ValueError(f"Invalid attribution method: {attribution}")
-    
-    return attribution, torch.mean(attribution, dim=0)
+from attribution import get_layer_conductance, get_relevance_scores_for_all_layers
+from visualization import visualize_activation, plot_cluster_infos, visualize_idc_scores
+from idc import IDC
+from pruning_methods import ramdon_prune, prune_neurons
 
 def select_top_neurons(importance_scores, top_m_neurons=5):
     if top_m_neurons == -1:
@@ -305,7 +182,7 @@ def cluster_activation_values(activation_values, n_clusters, layer_name='fc1', u
 def offer_kmeans_model(args, model, images, labels, classes, module_name):
     
     # Get the importance scores - LRP
-    if args.capture_all:
+    if args.layer_by_layer:
         for name in module_name[1:]:
             attribution, mean_attribution = get_layer_conductance(model, images, labels, classes, 
                                                                 layer_name=name, 
@@ -365,6 +242,7 @@ def test_attributions(model,
                                                            classes, 
                                                            layer_name=layer_name, 
                                                            attribution_method=attribution_method)
+    
     indices = select_top_neurons(layer_importance_scores, top_m_neurons)
 
     # TODO: Now using the torch random prune, but should be pruned by the specific neurons
@@ -413,15 +291,27 @@ if __name__ == '__main__':
     trainloader, testloader, classes = prepare_data(args)    
     
     ### Test all the model layer and also the each of the attribution methods
-    if args.capture_all:
+    if args.all_attr:
         # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
         attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
         # attributions = ['lrp', 'ldl']
+        
+        ## Saved the index for comparing the Common Neurons across the attributions
+        # {'lc': [1, 2, 3, 4, 5], 'la': [1, 2, 3, 4, 5], ...}
+        attr_dict = {key: [] for key in attributions}
+        
         # Save the original model state (Before pruning)
         original_state = copy.deepcopy(model.state_dict())
 
+        # class -> attributions
+        # 
+        
         if args.dataset == 'cifar10':
             classes = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+            ## Saved the index for comparing the Common Neurons across the classes
+            # {'plane': [1, 2, 3, 4, 5], 'car': [1, 2, 3, 4, 5], ...}
+            common_index_class = {key: [] for key in classes}
+            
             for single_class in classes:
                 train_images, train_labels = get_class_data(trainloader, classes, single_class)
                 test_images, test_labels = get_class_data(testloader, classes, single_class)
@@ -431,6 +321,7 @@ if __name__ == '__main__':
                 else:
                     print("Class: {} Before Acc: {:.2f}%, Before Loss: {:.2f}".format(single_class, b_accuracy, b_total_loss))
 
+                attr_index = []
                 for attr in attributions:
                     a_accuracy, a_total_loss, index = test_attributions(model=model,
                         attribution_method=attr,
@@ -449,22 +340,49 @@ if __name__ == '__main__':
                     else:
                         print("Random Prune: {}, Attribution: {}, Accuracy: {:.2f}%".format(args.random_prune, attr, a_accuracy))
                         print("The chosen index: {}".format(index))
+                    
+                    attr_index.append(index)
+                    attr_dict[attr].append(index)
 
                     # Restore the model state
                     model.load_state_dict(original_state)
                     print("Model restored to original state.")
-
                 
+                # analyze the common index in each attribution method
+                common_elements = set(attr_index[0].tolist()).intersection(*(set(tensor.tolist()) for tensor in attr_index[1:]))
+                common_index_class[single_class] = list(common_elements)
+            
+            common_index_attr = {}
+            for key, tensor_list in attr_dict.items():
+                common_elements = set(tensor_list[0].tolist()).intersection(
+                    *(set(tensor.tolist()) for tensor in tensor_list[1:])
+                )
+                common_index_attr[key] = list(common_elements)
+            
+            with open('log_attr_per_class_{}_{}.json'.format(module_name[args.layer_index], args.top_m_neurons), 'w') as log_file:
+                json.dump(common_index_class, log_file, indent=4)
+            with open('log_class_per_attr_{}_{}.json'.format(module_name[args.layer_index], args.top_m_neurons), 'w') as log_file:
+                json.dump(common_index_attr, log_file, indent=4)
+                                        
         elif args.dataset == 'mnist':
             classes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+            common_index = {}
+            common_index = {key: [] for key in classes}
+            
         elif args.dataset == 'imagenet':
             url = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"
             urllib.request.urlretrieve(url, "imagenet_labels.json")
             # Load the labels from the JSON file
             with open("imagenet_labels.json") as f:
                 classes = json.load(f)
+            
+            common_index = {}
+            common_index = {key: [] for key in classes}
+            
+            
         else:
-            raise ValueError(f"Invalid dataset: {args.dataset}")
+            raise ValueError(f"Invalid dataset: {args.dataset}")    
+    
     else:
         #  Get the specific class data
         train_images, train_labels = get_class_data(trainloader, classes, args.test_image)

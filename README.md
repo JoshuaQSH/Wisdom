@@ -54,6 +54,7 @@ $ python plot_images.py --plot-all
   - [ ] ConvNext + ImageNet
   - [ ] mobilenet + ImageNet
 - [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
+- [ ] [**Lib**] pip package and docker conatiner
 - [ ] [**IDC**] SOTA methods to compare
 - [ ] [**IDC**] runtime version + attention
 - [ ] [**YOLO**] YOLO v11
@@ -67,3 +68,22 @@ $ python plot_images.py --plot-all
 - `logs`: The saved the log files
 - `src`: The source files, including the idc implementations and the attribution methods (torch/captum)
 - `examples`: Small examples (stand-alone) to test captum
+
+## Docker
+
+See `Docker` with the `Dockerfile`
+
+```shell
+
+# Run
+docker run --gpus all -it --name deepimportance-container torch-deepimportance
+
+docker commit deepimportance-container torch-deepimportance:v1
+docker login
+docker tag torch-deepimportance:v1 your_dockerhub_username/torch-deepimportance:v1
+docker push your_dockerhub_username/torch-deepimportance:v1
+docker pull your_dockerhub_username/torch-deepimportance:v1
+
+## testing and debugging
+docker exec -it deepimportance-container bash
+```
