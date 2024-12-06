@@ -266,7 +266,10 @@ if __name__ == '__main__':
     if args.logging:
         start_time = int(round(time.time()*1000))
         timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
-        saved_log_name = args.log_path + 'AttriTest-{}-{}-{}.log'.format(args.model, args.dataset, timestamp)
+        if args.random_prune:
+            saved_log_name = args.log_path + 'AttriTest-{}-{}-random-L{}-{}.log'.format(args.model, args.dataset, args.layer_index, timestamp)
+        else:
+            saved_log_name = args.log_path + 'AttriTest-{}-{}-L{}-{}.log'.format(args.model, args.dataset, args.layer_index, timestamp)
         log = Logger(saved_log_name, level='debug')
         log.logger.debug("[=== Model: {}, Dataset: {}, Layers_Index: {} ==]".format(args.model, args.dataset, args.layer_index))
     else:
