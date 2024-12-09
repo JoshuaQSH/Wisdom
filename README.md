@@ -56,6 +56,8 @@ $ python plot_images.py --plot-all
 - [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
 - [ ] [**Lib**] pip package and docker conatiner
 - [ ] [**IDC**] SOTA methods to compare
+- [ ] [**IDC**] Per feature selector (transfer learning style)
+  - [ ] A table for the variances and per input predition scores
 - [ ] [**IDC**] runtime version + attention
 - [ ] [**YOLO**] YOLO v11
 

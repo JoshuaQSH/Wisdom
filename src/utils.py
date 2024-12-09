@@ -55,7 +55,7 @@ class Logger(object):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default='lenet', choices=['lenet', 'vgg16', 'custom'], help='Model to use for training.')
+    parser.add_argument('--model', type=str, default='lenet', help='Model to use for training.')
     parser.add_argument('--model-path', type=str, default='None', help='Path to the trained model.')
     parser.add_argument('--saved-model', type=str, default='lenet_cifar10.pt', help='Saved model name.')
     parser.add_argument('--dataset', type=str, default='cifar10', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
@@ -339,7 +339,7 @@ def is_conv2d_neuron_activated(activation_map, threshold=0):
 
 ## For the unit test
 def test_model():
-    offer_moder_name = ['vgg16', 
+    offer_model_name = ['vgg16', 'lenet',
                         'convnext_base', 
                         'efficientnet_v2_s', 
                         'efficientnet_v2_m', 
@@ -351,11 +351,14 @@ def test_model():
                         'resnet152',
                         'resnext101_32x8d',
                         'vit_b_16']
-    offer_moder_name = ['vgg16', 'convnext_base', 'efficientnet_v2_s']
-    for model_name in offer_moder_name:
+    offer_model_name = ['mobilenet_v3_small', 'efficientnet_v2_s', 'convnext_base']
+    for model_name in offer_model_name:
          model, module_name, module = get_model(model_name=model_name)
          print(model_name, len(module_name))
-         print(model_name, module_name)
+         # print(model_name, module_name)
+         total_params = sum(p.numel() for p in model.parameters())
+         print(f"Total number of parameters: {total_params}")
+
 
 if __name__ == '__main__':
     # unit test - model
@@ -364,5 +367,5 @@ if __name__ == '__main__':
     # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
     trainloader, testloader, classes = load_ImageNet()
     # print("Classes: ", classes)
-    # test_model()
+    test_model()
     

@@ -97,8 +97,8 @@ then
 # TODO: 2) test one label and then all the labels with --test-all
 elif [ $RUN_TEST == "imagenet" ]
 then
-    # ['vgg16', 'convnext_base', 'efficientnet_v2_s']
-    IMAGE_MODEL="vgg16"
+    # ['vgg16', 'convnext_base', 'efficientnet_v2_s', 'mobilenet_v3_small', 'efficientnet_v2_s']  
+    IMAGE_MODEL="mobilenet_v3_small"
     IMAGE_CLASS="tench"
     echo "Running ImageNet with ${IMAGE_MODEL}"
     python run.py --dataset imagenet \

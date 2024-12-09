@@ -25,7 +25,6 @@ import torch.nn.utils.prune as prune
 
 from torchvision import models
 from captum.attr import visualization as viz
-from captum.attr import LayerConductance, LayerActivation, InternalInfluence, LayerGradientXActivation, LayerGradCam, LayerDeepLift, LayerDeepLiftShap, LayerGradientShap, LayerIntegratedGradients, LayerFeatureAblation, LayerLRP
 from captum.metrics import infidelity_perturb_func_decorator, infidelity
 
 from sklearn.cluster import KMeans
@@ -297,7 +296,6 @@ if __name__ == '__main__':
     if args.all_attr:
         # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
         attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
-        # attributions = ['lrp', 'ldl']
         
         ## Saved the index for comparing the Common Neurons across the attributions
         # {'lc': [1, 2, 3, 4, 5], 'la': [1, 2, 3, 4, 5], ...}
