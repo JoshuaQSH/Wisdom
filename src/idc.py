@@ -2,17 +2,19 @@
 import torch
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, silhouette_samples
-from attribution import get_layer_conductance, get_relevance_scores_for_all_layers
+from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from utils import load_kmeans_model, save_kmeans_model
 from visualization import visualize_activation, visualize_idc_scores
 
 class IDC:
-    def __init__(self, model, classes, top_m_neurons, n_clusters, use_silhouette):
+    def __init__(self, model, classes, top_m_neurons, n_clusters, use_silhouette, test_all_classes):
         self.model = model
         self.classes = classes
         self.top_m_neurons = top_m_neurons
         self.n_clusters = n_clusters
         self.use_silhouette = use_silhouette
+        self.test_all_classes = test_all_classes
+        self.total_combination = 1
 
     ## Top-k Neurons Selection [layer-wise]
     def select_top_neurons(self, importance_scores):
@@ -41,47 +43,43 @@ class IDC:
     def select_top_neurons_all(self, importance_scores_dict):
         flattened_importance = []
 
+        # Flatten and collect importance scores across all layers
         for layer_name, importance_scores in importance_scores_dict.items():
-            if self.top_m_neurons == -1:
-                print(f"Selecting all neurons from layer {layer_name}.")
-                if importance_scores.dim() == 1:
-                    indices = torch.arange(importance_scores.shape[0])
-                    flattened_importance.extend([(layer_name, score.item(), idx.item()) for idx, score in enumerate(importance_scores)])
-                else:
-                    mean_attribution = torch.mean(importance_scores, dim=[1, 2])
-                    indices = torch.arange(mean_attribution.shape[0])
-                    flattened_importance.extend([(layer_name, score.item(), idx.item()) for idx, score in enumerate(mean_attribution)])
-            else:
-                if importance_scores.dim() == 1:
-                    _, indices = torch.topk(importance_scores, importance_scores.shape[0] if self.top_m_neurons == -1 else self.top_m_neurons)
-                    flattened_importance.extend([(layer_name, importance_scores[i].item(), i) for i in indices.tolist()])
-                else:
-                    mean_attribution = torch.mean(importance_scores, dim=[1, 2])
-                    _, indices = torch.topk(mean_attribution, mean_attribution.shape[0] if self.top_m_neurons == -1 else min(self.top_m_neurons, mean_attribution.shape[0]))
-                    flattened_importance.extend([(layer_name, mean_attribution[i].item(), i) for i in indices.tolist()])
-
-            flattened_importance = sorted(flattened_importance, key=lambda x: x[1], reverse=True)
-            
-            if self.top_m_neurons == -1:
-                selected = flattened_importance
-            else:
-                selected = flattened_importance[:self.top_m_neurons]
-
-            selected_indices = {}
-            for layer_name, _, index in selected:
-                if layer_name not in selected_indices:
-                    selected_indices[layer_name] = []
-                selected_indices[layer_name].append(index)
-
-            for layer_name in selected_indices:
-                selected_indices[layer_name] = torch.tensor(selected_indices[layer_name])
-
-            return selected_indices
+            # Fully connected layer
+            if importance_scores.dim() == 1:  
+                for idx, score in enumerate(importance_scores):
+                    flattened_importance.append((layer_name, score.item(), idx))
+            # Convolutional layer
+            else:  
+                # Compute mean importance per channel
+                mean_attribution = torch.mean(importance_scores, dim=[1, 2])
+                for idx, score in enumerate(mean_attribution):
+                    flattened_importance.append((layer_name, score.item(), idx))
+        
+        # Sort by importance score in descending order
+        flattened_importance = sorted(flattened_importance, key=lambda x: x[1], reverse=True)
+        # Select top-m neurons across all layers
+        if self.top_m_neurons == -1:
+            selected = flattened_importance
+        else:
+            selected = flattened_importance[:self.top_m_neurons]
+        
+        # Group selected neurons by layer
+        selected_indices = {}
+        for layer_name, _, index in selected:
+            if layer_name not in selected_indices:
+                selected_indices[layer_name] = []
+            selected_indices[layer_name].append(index)
+        
+        # Convert lists to tensors
+        for layer_name in selected_indices:
+            selected_indices[layer_name] = torch.tensor(selected_indices[layer_name])
+        
+        return selected_indices
     
     ## Get the activation values [layer-wise]
-    def get_activation_values_for_neurons(self, inputs, labels, important_neuron_indices, layer_name='fc1'):
+    def get_activation_values_for_neurons(self, inputs, important_neuron_indices, layer_name='fc1', dataloader=None):
         activation_values = []
-        print("Getting the Class: {}".format(labels))
         
         def hook_fn(module, input, output):
             activation_values.append(output.detach())
@@ -96,11 +94,17 @@ class IDC:
             raise ValueError(f"Layer {layer_name} not found in the model.")
 
         self.model.eval()
-        with torch.no_grad():
-            outputs = self.model(inputs)
+
+        if self.test_all_classes:
+            with torch.no_grad():
+                for inputs, labels in dataloader:
+                    outputs = self.model(inputs)        
+        else:
+            with torch.no_grad():
+                outputs = self.model(inputs)
         
         handle.remove()
-            
+        
         activation_values = torch.cat(activation_values, dim=0)
         if important_neuron_indices is None:
             selected_activations = activation_values
@@ -173,9 +177,38 @@ class IDC:
         save_kmeans_model(kmeans, './saved_files/kmeans_impo_{}.pkl'.format(layer_name))    
         
         return cluster_labels, kmeans
+    
+        ## Cluster the importance scores [layer-wise]
+    def cluster_activation_values(self, activation_values, layer_name):
+        kmeans_comb = []
+        
+        if isinstance(layer_name, torch.nn.Linear):
+            n_neurons = activation_values.shape[1]
+            for i in range(n_neurons):
+                if self.use_silhouette:
+                    optimal_k = self.find_optimal_clusters(activation_values, 2, 10)
+                else:
+                    optimal_k = self.n_clusters
+                kmeans_comb.append(KMeans(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
+
+        elif isinstance(layer_name, torch.nn.Conv2d):
+            activation_values = torch.mean(activation_values, dim=[2, 3])
+            n_neurons = activation_values.shape[1]
+            for i in range(n_neurons):
+                if self.use_silhouette:
+                    self.n_clusters = self.find_optimal_clusters(activation_values, 2, 10)
+
+                kmeans_comb.append(KMeans(n_clusters=self.n_clusters).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
+        else:
+            raise ValueError(f"Invalid layer name: {layer_name}")
+        
+        save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
+        print("KMeans model saved! Name: kmeans_acti_{}.pkl".format(layer_name))
+        
+        return kmeans_comb
 
     ## Cluster the importance scores [layer-wise]
-    def cluster_activation_values(self, activation_values, layer_name='fc1'):
+    def cluster_activation_values_(self, activation_values, layer_name='fc1'):
         kmeans_comb = []
         
         if layer_name[:-1] == 'fc':
@@ -231,7 +264,8 @@ class IDC:
     def assign_clusters(self, activations, kmeans_models):
         n_samples, n_neurons = activations.shape
         cluster_assignments = []
-
+        update_total_combination = True
+        
         # Loop over each test sample
         for i in range(n_samples):
             # Get the activations for this sample
@@ -242,17 +276,18 @@ class IDC:
             for neuron_idx in range(n_neurons):
                 cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].reshape(-1, 1))
                 sample_clusters.append(cluster[0])  # Append the cluster ID
+                if update_total_combination:
+                    self.total_combination *= kmeans_models[neuron_idx].n_clusters
             
             # Convert to tuple for uniqueness
-            cluster_assignments.append(tuple(sample_clusters))  
+            cluster_assignments.append(tuple(sample_clusters))
+            update_total_combination = False
+            
         return cluster_assignments
 
     ## Compute the IDC test [model-wise]
-    def compute_idc_test_whole(self, inputs_images, labels, kmeans, attribution_method='lrp'):
-        
-        # TODO: get_relevance_scores_for_all_layers
-        layer_importance_scores = get_relevance_scores_for_all_layers(self.model, inputs_images, labels, attribution_method=attribution_method)
-        indices = self.select_top_neurons_all(layer_importance_scores)
+    def compute_idc_test_whole(self, inputs_images, labels, indices, kmeans, attribution_method='lrp'):
+
         activation_, selected_activations = self.get_activation_values_for_model(inputs_images, self.classes[labels[0]], indices)
         activation_values = []
         for layer_name, importance_scores in selected_activations.items():
@@ -264,9 +299,9 @@ class IDC:
         # TODO: assign_clusters here, some bugs HERE
         all_activations_tensor = torch.cat(activation_values, dim=1)
         cluster_labels = self.assign_clusters(all_activations_tensor, kmeans)
-        
         unique_clusters = set(cluster_labels)
-        total_combination = pow(self.n_clusters, all_activations_tensor.shape[1])
+        # total_combination = pow(self.n_clusters, all_activations_tensor.shape[1])
+        total_combination = self.total_combination
         if all_activations_tensor.shape[0] > total_combination:
             max_coverage = 1
         else:
@@ -281,26 +316,22 @@ class IDC:
         return unique_clusters, coverage_rate
 
     ## Compute the IDC test [layer-wise]
-    def compute_idc_test(self, inputs_images, labels, kmeans, layer_name, attribution_method='lrp'):
-        _, layer_importance_scores = get_layer_conductance(model=self.model,
-                                                           images=inputs_images, 
-                                                           labels=labels,
-                                                           classes=self.classes,
-                                                           layer_name=layer_name,
-                                                           top_m_images=-1,
-                                                           attribution_method=attribution_method)
-        indices = self.select_top_neurons(layer_importance_scores)
-        activation_values, selected_activations = self.get_activation_values_for_neurons(inputs_images, self.classes[labels[0]], indices, layer_name)
-        if layer_name[:-1] == 'conv':
+    def compute_idc_test(self, inputs_images, labels, indices, kmeans, net_layer, layer_name, attribution_method='lrp'):
+        
+        print("The first label for IDC is: {}".format(self.classes[labels[0]]))
+        self.test_all_classes = False
+        activation_values, selected_activations = self.get_activation_values_for_neurons(inputs_images, indices, layer_name)
+        if isinstance(net_layer, torch.nn.Conv2d):
             activation_values = torch.mean(selected_activations, dim=[2, 3])
         else:
             activation_values = selected_activations
-            
+        
         activation_values_np = activation_values.cpu().numpy()
         cluster_labels = self.assign_clusters(kmeans_models=kmeans, activations=activation_values)
         
         unique_clusters = set(cluster_labels)
-        total_combination = pow(self.n_clusters, activation_values_np.shape[1])
+        # total_combination = pow(self.n_clusters, activation_values_np.shape[1])
+        total_combination = self.total_combination
         if activation_values.shape[0] > total_combination:
             max_coverage = 1
         else:
@@ -308,7 +339,7 @@ class IDC:
         
         coverage_rate = len(unique_clusters) / total_combination
         print("Attribution Method: ", attribution_method)
-        print(f"Total INCC combinations: {total_combination}")
+        print(f"Total INCC combinations: ", total_combination)
         print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
         print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
         

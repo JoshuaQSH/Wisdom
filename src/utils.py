@@ -5,6 +5,7 @@ from pathlib import Path
 import urllib
 import urllib.request
 import json
+import random
 import logging
 from logging import handlers
 
@@ -25,6 +26,8 @@ src_path = Path(__file__).resolve().parent / "src"
 sys.path.append(str(src_path))
 
 from model_hub import LeNet, Net
+from models_cv import *
+
 
 class Logger(object):
     level_relations = {
@@ -64,19 +67,25 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device to use for training.')
     parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset with the resized images.')
-    parser.add_argument('--test-image', type=str, default='plane', help='Test image name.')
-    parser.add_argument('--test-all', action='store_true', help='Test all the images.')
+    parser.add_argument('--random-prune', action='store_true', help='Randomly prune the neurons.')
+    parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
+    parser.add_argument('--n-clusters', type=int, default=2, help='Number of clusters to use for KMeans.')
+    parser.add_argument('--cluster-scores', action='store_true', help='Cluserting the importance scores rather than using actiation values.')
+    parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
+    parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
+
+    # IDC Testing 
+    parser.add_argument('--test-image', type=str, default='plane', help='Test image name. For the single image testing.')
+    parser.add_argument('--test-all', action='store_true', help='Test all the images (respectively).')
+    parser.add_argument('--all-class', action='store_true', help='Attributions collected for all the classes.')
+    parser.add_argument('--idc-test-all', action='store_true', help='Using all the test images for the Coverage testing.')
+    parser.add_argument('--num-samples', type=int, default=1000, help='Sampling number for the test images (against with the `idc-test-all`).')
+
     parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp'],  help='The attribution method to use.')
     parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
     parser.add_argument('--all-attr', action='store_true', help='Testing all the attribution methods, for analysis.')
     parser.add_argument('--layer-by-layer', action='store_true', help='Capturing all the module layer in the model, same as end2end.')
     parser.add_argument('--end2end', action='store_true', help='End to end testing for the whole model.')
-    parser.add_argument('--random-prune', action='store_true', help='Randomly prune the neurons.')
-    parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
-    parser.add_argument('--n-clusters', type=int, default=5, help='Number of clusters to use for KMeans.')
-    parser.add_argument('--cluster-scores', action='store_true', help='Cluserting the importance scores rather than using actiation values.')
-    parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
-    parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
     
     # General arguments
     parser.add_argument('--vis-attributions', action='store_true', help='Visualize the attributions.')
@@ -96,7 +105,7 @@ def train_val_dataset(dataset, val_split=0.25):
     datasets['val'] = Subset(dataset, val_idx)
     return datasets
 
-def data_loader(root, batch_size=256, workers=1, pin_memory=True):
+def data_loader(root, batch_size=256, workers=1, pin_memory=True, shuffle=False):
     traindir = os.path.join(root, 'train')
     valdir = os.path.join(root, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -125,7 +134,7 @@ def data_loader(root, batch_size=256, workers=1, pin_memory=True):
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=shuffle,
         num_workers=workers,
         pin_memory=pin_memory,
         sampler=None
@@ -139,7 +148,7 @@ def data_loader(root, batch_size=256, workers=1, pin_memory=True):
         pin_memory=pin_memory
     )
 
-    return train_loader, val_loader
+    return train_loader, val_loader, val_dataset
 
 # Load the ImageNet dataset
 def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False):
@@ -168,9 +177,9 @@ def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_wor
         trainloader = dataloaders['train']
         testloader = dataloaders['val']
     else:
-        trainloader, testloader = data_loader(root, batch_size, num_workers, True)
+        trainloader, testloader, val_dataset = data_loader(root, batch_size, num_workers, True)
 
-    return trainloader, testloader, classes
+    return trainloader, testloader, val_dataset, classes
 
 #  Load the CIFAR-10 dataset
 def load_CIFAR(batch_size=32, root='./data', large_image=True):
@@ -197,11 +206,11 @@ def load_CIFAR(batch_size=32, root='./data', large_image=True):
     classes = ('plane', 'car', 'bird', 'cat',
             'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
     
-    return trainloader, testloader, classes
+    return trainloader, testloader, test_dataset, classes
 
 
 #  Load the MNIST dataset
-def load_MNIST(batch_size=32, root='./data', channel_first=True, train_all=False):
+def load_MNIST(batch_size=32, root='./data', channel_first=False, train_all=False):
     transform_list = [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
     if channel_first:
         transform_list.append(transforms.Lambda(lambda x: x.repeat(3, 1, 1)))  # If you want 3 channels
@@ -216,8 +225,10 @@ def load_MNIST(batch_size=32, root='./data', channel_first=True, train_all=False
     else:
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    return train_loader, test_loader
+    
+    classes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+    
+    return train_loader, test_loader, test_dataset, classes
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -242,8 +253,74 @@ def load_kmeans_model(filename='kmeans_model.pkl'):
     with open(filename, "rb") as file:
         kmeans_models_loaded = pickle.load(file)
     return kmeans_models_loaded
+
+def get_trainable_modules_main(model, prefix=''):
     
-# TODO: Adding more models
+    trainable_module = []
+    trainable_module_name = []
+    
+    def get_trainable_modules(model, prefix=''):
+        for name, layer in model.named_children():
+            full_name = f"{prefix}.{name}" if prefix else name
+            if isinstance(layer, (torch.nn.Conv2d, torch.nn.Linear)) and any(p.requires_grad for p in layer.parameters()):
+                trainable_module_name.append(full_name)
+                trainable_module.append(layer)
+            get_trainable_modules(layer, full_name)
+    get_trainable_modules(model)
+    return trainable_module, trainable_module_name
+
+def get_layer_by_name(model, layer_name):
+    parts = layer_name.split('.')
+    layer = model
+    for part in parts:
+        if part.isdigit():
+            layer = layer[int(part)]
+        else:
+            layer = getattr(layer, part)
+    return layer
+
+def get_model_cifar(model_name='vgg16', load_model_path='/home/shenghao/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10-new.pt'):
+
+    model_classes = {
+        'lenet': LeNet,
+        'vgg16': lambda: VGG('VGG16'),
+        'resnet18': ResNet18,
+        'googlenet': GoogLeNet,
+        'densenet': DenseNet121,
+        'resnext29': ResNeXt29_2x64d,
+        'mobilenetv2': MobileNetV2,
+        'shufflenetv2': lambda: ShuffleNetV2(1),
+        'senet': SENet18,
+        'preresnet': PreActResNet18,
+        'mobilenet': MobileNet,
+        'DPN92': DPN92,
+        'efficientnet': EfficientNetB0,
+        'regnet': RegNetX_200MF,
+        'simpledla': SimpleDLA,
+    }
+
+    if model_name in model_classes:
+        model = model_classes[model_name]()
+    else:
+        raise(f"{model_name} not in the list of available models.")
+    module_name = []
+    module = []
+    data_parallel_dict = torch.load(load_model_path)
+    new_state_dict = {}
+    for key, value in data_parallel_dict.items():
+        new_key = key.replace('module.', '')  # Remove 'module.' prefix
+        new_state_dict[new_key] = value    
+    
+    model.load_state_dict(new_state_dict)
+    
+    # Alternatively, to get all submodule names (including nested ones)
+    for name, layer in model.named_modules():
+        module_name.append(name)
+        module.append(layer)
+
+    return model, module_name, module
+    
+
 def get_model(model_name='vgg16'):
     # Hardcoded model names for now
     offer_moder_name = ['lenet', 'custom', 
@@ -275,6 +352,7 @@ def get_model(model_name='vgg16'):
             # "IMAGENET1K_V2", "IMAGENET1K_V1"
             model = model_func(weights="IMAGENET1K_V1")        
             print(f"{model_name} model loaded with weights.")
+            
     else:
         raise(f"{model_name} not in the list of available models.")
 
@@ -282,10 +360,14 @@ def get_model(model_name='vgg16'):
     for name, layer in model.named_modules():
         module_name.append(name)
         module.append(layer)
-        
+
+    # trainable_module, trainable_module_name = get_trainable_modules_main(model)
+    
     return model, module_name, module
 
 def get_class_data(dataloader, classes, target_class):
+    max_test_sample = 8000
+
     class_index = classes.index(target_class)
 
     filtered_data = []
@@ -294,41 +376,38 @@ def get_class_data(dataloader, classes, target_class):
         for i, l in zip(inputs, labels):
             if l == class_index:
                 filtered_data.append(i)
-                filtered_labels.append(l)
+                filtered_labels.append(l)  
+        if len(filtered_data) >= max_test_sample:
+            break
     
     if filtered_data:
         return torch.stack(filtered_data), torch.tensor(filtered_labels)
     else:
         return None, None
 
-def prepare_data_cifa(data_path='../data', cifar10=True):
-    
-    if cifar10:
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        ])
+## An end-to-end test for the model (randomly pickup a bunch of images)
+def test_random_class(test_dataset, test_all=False, num_samples=1000):
+
+    if test_all:
+        subset_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
     else:
-        transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor()
-        ])
-
-    trainset = torchvision.datasets.CIFAR10(root=data_path, train=True,
-                                            download=True, transform=transform)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
-                                            shuffle=True, num_workers=2)
-
-    testset = torchvision.datasets.CIFAR10(root=data_path, train=False,
-                                        download=True, transform=transform)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=4,
-                                            shuffle=False, num_workers=2)
-
-    classes = ('plane', 'car', 'bird', 'cat',
-            'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+        indices = torch.randperm(len(test_dataset))[:num_samples]
+        subset = Subset(test_dataset, indices)
+        subset_loader = DataLoader(subset, batch_size=1, shuffle=False)
     
-    return trainloader, testloader, classes
+    test_image = []
+    test_label = []
+
+    # Iterate through the DataLoader
+    for images, labels in subset_loader:
+        test_image.append(images)
+        test_label.append(labels)
+
+    # Concatenate all batches into single tensors
+    test_image = torch.cat(test_image, dim=0)
+    test_label = torch.cat(test_label, dim=0)
+
+    return subset_loader, test_image, test_label
 
 # See if a neuron is activated
 def is_neuron_activated(activation_value, threshold=0):
@@ -359,13 +438,43 @@ def test_model():
          total_params = sum(p.numel() for p in model.parameters())
          print(f"Total number of parameters: {total_params}")
 
+# Test the CIFAR models
+def test_cifar_models():
+    model_classes = {
+    'lenet': LeNet,
+    'vgg16': lambda: VGG('VGG16'),
+    'resnet18': ResNet18,
+    'googlenet': GoogLeNet,
+    'densenet': DenseNet121,
+    'resnext29': ResNeXt29_2x64d,
+    'mobilenetv2': MobileNetV2,
+    'shufflenetv2': lambda: ShuffleNetV2(1),
+    'senet': SENet18,
+    'preresnet': PreActResNet18,
+    'mobilenet': MobileNet,
+    'DPN92': DPN92,
+    'efficientnet': EfficientNetB0,
+    'regnet': RegNetX_200MF,
+    'simpledla': SimpleDLA,}
+
+    model_list = ['lenet', 'vgg16', 'resnet18', 'googlenet', 'mobilenet', 'mobilenetv2', 'shufflenet', 'shufflenetv2', 'senet', 'preresnet', 'densenet', 'resnext']
+
+    for model_name in model_list:
+        if model_name in model_classes:
+            model = model_classes[model_name]()
+            print(model_name)    
+            total_params = sum(p.numel() for p in model.parameters())
+            print(f"Total number of parameters: {total_params}")
+            x = torch.randn(1, 3, 32, 32)
+            y = model(x)
+            print(y.size())
 
 if __name__ == '__main__':
     # unit test - model
     args = parse_args()
-    # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
-    # train_loader, test_loader, classes = load_CIFAR(batch_size=32, root=args.data_path)
-    trainloader, testloader, classes = load_ImageNet()
+    # train_loader, test_loader, test_dataset, classes = load_CIFAR(batch_size=32, root=args.data_path)
+    # subset_loader, test_image, test_label = test_random_class(test_dataset, test_all=True, num_samples=1000)
+    # trainloader, testloader, test_dataset, classes = load_ImageNet()
     # print("Classes: ", classes)
-    test_model()
-    
+    # test_model()
+    # test_cifar_models()

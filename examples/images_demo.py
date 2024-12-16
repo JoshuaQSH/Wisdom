@@ -24,7 +24,6 @@ from captum.attr import visualization as viz
 from captum.attr._utils.lrp_rules import EpsilonRule, GammaRule, Alpha1_Beta0_Rule
 from captum._utils.models.linear_model import SkLearnLinearModel
 
-
 ### 1- Loading the model and the dataset
 def give_model_label(labels_path="/home/shenghao/torch-deepimportance/images/"):
     model = models.vgg16(weights=models.vgg.VGG16_Weights.IMAGENET1K_V1)
@@ -137,10 +136,11 @@ def compute_attr(model, pred_label_idx, transformed_img, input, name='swan', is_
     #                         'KernelShap',
     #                         'LRP']
     
-    attributions_list = [ 'FeaturePermutation',
-                            'ShapleyValueSampling',
-                            'KernelShap',
-                            'LRP']
+    # attributions_list = [ 'ShapleyValueSampling',
+    #                         'KernelShap',
+    #                         'LRP']
+    
+    attributions_list = ['KernelShap']
 
     attributions_dict = {}
     # n_methods = len(attributions_list)

@@ -66,6 +66,7 @@ $ python plot_images.py --plot-all
 
 - `images`: All the saved images, including the example images and the heatmap saved by the running demos
 - `models_info`: Pre-trained model files (*.pt) and also the model architecture visualisations
+  - `train_from_scratch`: This is a standalone file that allows you to train all the CV models from scratch with CIFAR10 dataset
 - `saved_files`: Saved JSON files for the model importances
 - `logs`: The saved the log files
 - `src`: The source files, including the idc implementations and the attribution methods (torch/captum)
