@@ -182,7 +182,7 @@ def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_wor
     return trainloader, testloader, val_dataset, classes
 
 #  Load the CIFAR-10 dataset
-def load_CIFAR(batch_size=32, root='./data', large_image=True):
+def load_CIFAR(batch_size=32, root='./data', large_image=True, shuffle=True):
 
     if large_image:
         transform = transforms.Compose([
@@ -200,7 +200,7 @@ def load_CIFAR(batch_size=32, root='./data', large_image=True):
     train_dataset = CIFAR10(root=root, train=True, download=True, transform=transform)
     test_dataset = CIFAR10(root=root, train=False, download=True, transform=transform)
 
-    trainloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    trainloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=2)
     testloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
     
     classes = ('plane', 'car', 'bird', 'cat',
@@ -232,6 +232,32 @@ def load_MNIST(batch_size=32, root='./data', channel_first=False, train_all=Fals
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+# This is for forming a custom dataset
+class SelectorDataset(torch.utils.data.Dataset):
+    def __init__(self, image_dataset, layer_info, attribution_labels, attribution_methods):
+        super(SelectorDataset, self).__init__()
+        self.image_dataset = image_dataset
+        self.layer_info = layer_info
+        self.attribution_labels = attribution_labels
+        # Map method to index
+        self.method_to_idx = {method: idx for idx, method in enumerate(attribution_methods)}  
+
+    def __len__(self):
+        return len(self.image_dataset)
+
+    def __getitem__(self, idx):
+        # Get image and label from the original dataset
+        image, _ = self.image_dataset[idx]
+        
+        # Get layer information for the current sample
+        layer_info = self.layer_info[idx]
+        
+        # Convert attribution method to index
+        attribution_label = self.method_to_idx[self.attribution_labels[idx]]
+        
+        return image, layer_info, torch.tensor(attribution_label, dtype=torch.long)
 
 # Save the torch (DNN) model
 def save_model(model, model_name):
@@ -469,6 +495,38 @@ def test_cifar_models():
             y = model(x)
             print(y.size())
 
+def test_selector_dataloader(root):
+    
+    transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),])
+
+    train_dataset = CIFAR10(root=root, train=True, download=True, transform=transform)
+    test_dataset = CIFAR10(root=root, train=False, download=True, transform=transform)
+
+    layer_info = torch.tensor([0., 0., 1., 0., 0.]).repeat(len(train_dataset), 1)  # One-hot vector for all images
+    # Example list of attribution methods
+    attribution_labels = ['lc', 'la', 'ii', 'lc', 'ldl', 'lig', 'lgs', 'lgxa', 'lrp', 'lfa'] * 5000
+    attribution_methods = ['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
+
+    # Create the custom dataset
+    selector_train_dataset = SelectorDataset(train_dataset, layer_info, attribution_labels, attribution_methods)
+
+    # Create DataLoader for training
+    trainloader = DataLoader(selector_train_dataset, batch_size=32, shuffle=True, num_workers=2)
+
+    # Create DataLoader for testing (similarly, you need to create the corresponding test dataset)
+    selector_test_dataset = SelectorDataset(test_dataset, layer_info, attribution_labels, attribution_methods)
+    testloader = torch.utils.data.DataLoader(selector_test_dataset, batch_size=32, shuffle=False, num_workers=2)
+    for images, layer_info, labels in trainloader:
+        print(f"Images shape: {images.shape}")
+        print(f"Layer info shape: {layer_info.shape}")
+        print(f"Labels shape: {labels.shape}")
+        break
+
 if __name__ == '__main__':
     # unit test - model
     args = parse_args()
@@ -478,3 +536,5 @@ if __name__ == '__main__':
     # print("Classes: ", classes)
     # test_model()
     # test_cifar_models()
+    # test_selector_dataloader(root = args.data_path)
+

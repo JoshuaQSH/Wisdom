@@ -4,11 +4,11 @@ RUN_TEST=$@
 CLASSES=('plane' 'car' 'bird' 'cat' 'deer' 'dog' 'frog' 'horse' 'ship' 'truck')
 # Check "lgc"
 METHODS=('lc' 'la' 'ii' 'lgxa' 'lgc' 'ldl' 'ldls' 'lgs' 'lig' 'lfa' 'lrp')
-TEST_ATTR="lrp"
+TEST_ATTR="la"
 # cifar10, mnist, imagenet
 DATASET="cifar10"
 TEST_CLASS="plane"
-TEST_MODEL="vgg16"
+TEST_MODEL="lenet"
 NUM_CLUSTERS=2
 NUM_NEURONS=10
 I_PATH=/home/shenghao/torch-deepimportance
@@ -33,20 +33,19 @@ then
 
 elif [ $RUN_TEST == "othernet" ]
 then
-    layerindex=2
-    testmodel="resnet18"
+    layerindex=4
+    testmodel="efficientnet"
     echo "Running ${testmodel} with Layer Index ${layerindex}"
     python run.py \
         --dataset $DATASET \
         --batch-size 4 \
         --layer-index $layerindex \
         --model $testmodel \
-        --top-m-neurons $NUM_NEURONS \
+        --top-m-neurons 5 \
         --n-clusters $NUM_CLUSTERS \
-        --attr lc \
+        --attr lrp \
         --saved-model ${testmodel}_CIFAR10-new.pt \
-        --all-class \
-        --idc-test-all
+        --test-image cat
 
 elif [ $RUN_TEST == "lenetfc2" ]
 then
@@ -200,6 +199,56 @@ then
             --end2end
     done
 
+elif [ $RUN_TEST == "end2endSelect" ]
+then
+    echo "Running ${TEST_MODEL} End2End analysis"
+    for class in "${CLASSES[@]}"
+    do
+        echo "--- Processing class: $class ---"
+        if [ $class == "plane" ]
+        then
+            CHOOSE_ATTR="lrp"
+        elif [ $class == "car" ]
+        then
+            CHOOSE_ATTR="ii"
+        elif [ $class == "bird" ]
+        then
+            CHHOSE_ATTR="lrp"
+        elif [ $class == "cat" ]
+        then
+            CHOOSE_ATTR="lrp"
+        elif [ $class == "deer" ]
+        then
+            CHOOSE_ATTR="ldl"
+        elif [ $class == "dog" ]
+        then
+            CHOOSE_ATTR="lrp"
+        elif [ $class == "frog" ]
+        then
+            CHOOSE_ATTR="lrp"
+        elif [ $class == "horse" ]
+        then
+            CHOOSE_ATTR="la"
+        elif [ $class == "ship" ]
+        then
+            CHOOSE_ATTR="lrp"
+        elif [ $class == "truck" ]
+        then
+            CHOOSE_ATTR="lfa"
+        fi
+        python run.py \
+            --dataset $DATASET \
+            --batch-size 4 \
+            --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_end2end.json \
+            --model lenet \
+            --top-m-neurons $NUM_NEURONS \
+            --n-clusters $NUM_CLUSTERS \
+            --attr $CHOOSE_ATTR \
+            --test-image $class \
+            --end2end \
+            --logging
+    done
+
 # TODO: For the ImageNet and more models
 # TODO: 1) test three models with different attributions
 # TODO: 2) test one label and then all the labels with --test-all
@@ -214,7 +263,7 @@ then
         --layer-index 4 \
         --batch-size 4 \
         --model $IMAGE_MODEL \
-        --top-m-neurons 3 \
+        --top-m-neurons 10 \
         --n-clusters 2 \
         --test-image $IMAGE_CLASS \
         --attr $TEST_ATTR
@@ -238,6 +287,20 @@ then
 
 ## Finegrained evaluations with pruning and attributions selection
 # 0-'conv1', 1-'conv2', 2-'fc1', 3-'fc2', 4-'fc3'
+elif [ $RUN_TEST == "attr4demo" ]
+then
+    echo "Running ${DATASET} with ${TEST_MODEL}-FC1 and test each attribution"
+    python selector_demo.py \
+        --dataset $DATASET \
+        --batch-size 128 \
+        --layer-index 2 \
+        --model lenet \
+        --top-m-neurons 10 \
+        --n-clusters $NUM_CLUSTERS \
+        --test-image plane \
+        --all-attr \
+        --logging
+
 elif [ $RUN_TEST == "attr4lenetf1" ]
 then
     topkneurons=(2 5 10 15 20)

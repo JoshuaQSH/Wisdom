@@ -35,7 +35,7 @@ from sklearn.metrics import silhouette_samples, silhouette_score
 src_path = Path(__file__).resolve().parent / "src"
 sys.path.append(str(src_path))
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, Logger
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_model_cifar, get_trainable_modules_main, Logger
 from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from visualization import visualize_activation, plot_cluster_infos, visualize_idc_scores
 from idc import IDC
@@ -145,9 +145,7 @@ def find_optimal_clusters(scores, min_k=2, max_k=10):
     return best_k
 
 def cluster_activation_values(activation_values, n_clusters, layer_name='fc1', use_silhouette=False):
-    
     kmeans_comb = []
-    
     if layer_name[:-1] == 'fc':
         n_neurons = activation_values.shape[1]
         # kmeans = KMeans(n_clusters=optimal_k, random_state=0)
@@ -220,7 +218,6 @@ def test_model(model, inputs, labels):
     correct += (predicted == labels).sum().item()
     total += labels.size(0)
     accuracy = correct / total * 100
-    
     return accuracy, total_loss
 
 def test_attributions(model,
@@ -259,7 +256,7 @@ def test_attributions(model,
     return accuracy, total_loss, indices
 
 ### Test Case - 1: Test the CIFAR-10 dataset with all the classes
-def test_cifar10_all(attributions, args, model, trainloader, testloader, classes, net_layer, layer_name):
+def test_cifar10_all(attributions, args, model, original_state, trainloader, testloader, classes, net_layer, layer_name):
     classes = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
     ## Saved the index for comparing the Common Neurons across the classes
     # {'plane': [1, 2, 3, 4, 5], 'car': [1, 2, 3, 4, 5], ...}
@@ -329,7 +326,6 @@ def test_cifar10_all(attributions, args, model, trainloader, testloader, classes
     print("Filed saved !")
     return common_index_class, common_index_attr, best_attributions
 
-    
 if __name__ == '__main__':
     args = parse_args()
 
@@ -350,10 +346,27 @@ if __name__ == '__main__':
     if args.model_path != 'None':
         model_path = args.model_path
     else:
-        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/'
+        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/'
     model_path += args.saved_model
-    model, module_name, module = get_model(model_name=args.model)
+    
+    ## Loading models - either 1) from scratch or 2) pretrained
+    if args.dataset == 'cifar10' and args.model != 'lenet':
+        model, module_name, module = get_model_cifar(model_name=args.model, load_model_path=model_path)
+    else:
+        # We aussume that the SOTA models are pretrained with IMAGENET
+        model, module_name, module = get_model(model_name=args.model)
+    
+    if args.dataset == 'mnist' and args.model == 'lenet':
+        model.conv1 = torch.nn.Conv2d(1, 6, 5)
+        model.fc1 = torch.nn.Linear(16 * 16, 120)
+    
+    # # For one of the testing demo, we provide the pretrained LeNet5 with CIFAR10    
+    # if args.model_path != 'None' and args.model == 'lenet':
+    #     model.load_state_dict(torch.load(model_path))
+    
+    # TODO: A Hack here for model loading
     model.load_state_dict(torch.load(model_path))
+    selector_model = copy.deepcopy(model)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
     
     ### Device settings    
@@ -369,7 +382,7 @@ if __name__ == '__main__':
     if args.all_attr:
         # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
         # attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
-        attributions = ['lc']
+        attributions = ['lc', 'la']
         
         ## Saved the index for comparing the Common Neurons across the attributions
         # {'lc': [1, 2, 3, 4, 5], 'la': [1, 2, 3, 4, 5], ...}
@@ -379,9 +392,11 @@ if __name__ == '__main__':
         original_state = copy.deepcopy(model.state_dict())
 
         if args.dataset == 'cifar10':
+            ### Test the model with all the classes
             common_index_class, common_index_attr, best_attributions = test_cifar10_all(attributions, 
                                                                      args, 
-                                                                     model, 
+                                                                     model,
+                                                                     original_state,
                                                                      trainloader, 
                                                                      testloader, 
                                                                      classes,
@@ -402,10 +417,10 @@ if __name__ == '__main__':
             common_index = {}
             common_index = {key: [] for key in classes}
             
-            
         else:
             raise ValueError(f"Invalid dataset: {args.dataset}")    
     
+    ### Test the model with the specific class
     else:
         #  Get the specific class data
         train_images, train_labels = get_class_data(trainloader, classes, args.test_image)
@@ -414,7 +429,8 @@ if __name__ == '__main__':
         
         # Get the test data
         test_images, test_labels = get_class_data(testloader, classes, args.test_image)
-        
+                
+        ### Test the model with various attribution methods      
         a_accuracy, a_total_loss, index = test_attributions(model=model,
                       attribution_method=args.attr,
                       top_m_neurons=args.top_m_neurons,

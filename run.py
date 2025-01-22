@@ -92,7 +92,6 @@ if __name__ == '__main__':
         # We aussume that the SOTA models are pretrained with IMAGENET
         model, module_name, module = get_model(model_name=args.model)
 
-    
     if args.dataset == 'mnist' and args.model == 'lenet':
         model.conv1 = torch.nn.Conv2d(1, 6, 5)
         model.fc1 = torch.nn.Linear(16 * 16, 120)
@@ -206,7 +205,6 @@ if __name__ == '__main__':
                 log.logger.info("Testing Samples: {}, IDC Coverage: {}, Attribution: {}".format(len(test_images), coverage_rate, args.attr))
             else:
                 print("Number of Testing Samples: {}".format(len(test_images)))
-
 
         else:
             # Test the specific layer

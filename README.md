@@ -49,6 +49,7 @@ $ python plot_images.py --plot-all
 - [ ] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
     - [x] Rankings, plots
     - [ ] Voting
+- [ ] [**IDC**] Customized rules for `torch.nn.Sequencial` in LRP
 - [ ] [**IDC**] Add more dataset and models
   - [ ] VGG16 + ImageNet
   - [ ] ConvNext + ImageNet

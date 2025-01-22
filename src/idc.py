@@ -3,7 +3,7 @@ import torch
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, silhouette_samples
 from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
-from utils import load_kmeans_model, save_kmeans_model
+from utils import load_kmeans_model, save_kmeans_model, get_layer_by_name
 from visualization import visualize_activation, visualize_idc_scores
 
 class IDC:
@@ -291,11 +291,12 @@ class IDC:
         activation_, selected_activations = self.get_activation_values_for_model(inputs_images, self.classes[labels[0]], indices)
         activation_values = []
         for layer_name, importance_scores in selected_activations.items():
-            if layer_name[:-1] == 'conv':
-                activation_values.append(torch.mean(importance_scores, dim=[2, 3]))
+            layer = get_layer_by_name(self.model, layer_name)
+            # TODO: VGG16 Conv2D layer seems to have issue
+            if isinstance(layer, torch.nn.Conv2d):
+                activation_values.append(torch.mean(selected_activations[layer_name], dim=[2, 3]))
             else:
-                activation_values.append(importance_scores)
-        
+                activation_values.append(selected_activations[layer_name])
         # TODO: assign_clusters here, some bugs HERE
         all_activations_tensor = torch.cat(activation_values, dim=1)
         cluster_labels = self.assign_clusters(all_activations_tensor, kmeans)
