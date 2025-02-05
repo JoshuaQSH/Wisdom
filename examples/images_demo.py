@@ -140,7 +140,7 @@ def compute_attr(model, pred_label_idx, transformed_img, input, name='swan', is_
     #                         'KernelShap',
     #                         'LRP']
     
-    attributions_list = ['KernelShap']
+    attributions_list = ['LRP']
 
     attributions_dict = {}
     # n_methods = len(attributions_list)
@@ -186,13 +186,13 @@ def compute_attr(model, pred_label_idx, transformed_img, input, name='swan', is_
         elif method == 'FeaturePermutation':
             pred_label_idx, input_batch = test_batch()
             attributions_dict[method] = attribution_method.attribute(input_batch, target=pred_label_idx)
-            breakpoint()
         elif method == 'ShapleyValueSampling':
             attributions_dict[method] = attribution_method.attribute(input, target=pred_label_idx, feature_mask=None)
         elif method == 'KernelShap':
             attributions_dict[method] = attribution_method.attribute(input, target=pred_label_idx)
         elif method == 'LRP':
-            layers = list(model._modules["features"]) + list(model._modules["classifier"])
+            # layers = list(model._modules["features"]) + list(model._modules["classifier"])
+            layers = list(model._modules["features"])
             num_layers = len(layers)
             for idx_layer in range(1, num_layers):
                 if idx_layer <= 16:

@@ -289,11 +289,44 @@ then
 # 0-'conv1', 1-'conv2', 2-'fc1', 3-'fc2', 4-'fc3'
 elif [ $RUN_TEST == "attr4demo" ]
 then
-    echo "Running ${DATASET} with ${TEST_MODEL}-FC1 and test each attribution"
+    echo "Running ${DATASET} with ${TEST_MODEL} and test each attribution"
+    python selector_demo.py \
+        --dataset $DATASET \
+        --batch-size 128 \
+        --layer-index 0 \
+        --model lenet \
+        --top-m-neurons 10 \
+        --n-clusters $NUM_CLUSTERS \
+        --test-image plane \
+        --all-attr \
+        --logging
+
+    python selector_demo.py \
+        --dataset $DATASET \
+        --batch-size 128 \
+        --layer-index 1 \
+        --model lenet \
+        --top-m-neurons 10 \
+        --n-clusters $NUM_CLUSTERS \
+        --test-image plane \
+        --all-attr \
+        --logging
+    
     python selector_demo.py \
         --dataset $DATASET \
         --batch-size 128 \
         --layer-index 2 \
+        --model lenet \
+        --top-m-neurons 10 \
+        --n-clusters $NUM_CLUSTERS \
+        --test-image plane \
+        --all-attr \
+        --logging
+    
+    python selector_demo.py \
+        --dataset $DATASET \
+        --batch-size 128 \
+        --layer-index 3 \
         --model lenet \
         --top-m-neurons 10 \
         --n-clusters $NUM_CLUSTERS \

@@ -94,7 +94,7 @@ def parse_args():
     parser.add_argument('--log-path', type=str, default='./logs/', help='Path to save the log file.')
 
     args = parser.parse_args()
-    print(args)
+    # print(args)
     
     return args
 
