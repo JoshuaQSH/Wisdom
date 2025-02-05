@@ -159,6 +159,31 @@ class UtilsTests(unittest.TestCase):
         self.assertEqual(next(iter(trainloader))[1].shape[0], args.batch_size)
         self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 1, 28, 28))
         self.assertEqual(classes[0], '0')
+    
+    def test_load_COCO(self):
+        args = self.parser
+        trainloader, testloader, classes = utils.load_COCO(batch_size=32, data_path='../data/coco.yaml', img_size=[640, 640], 
+              cfg='models/yolov5l.yaml',
+              model_stride=[8, 16, 32],
+              single_cls=False, 
+              cache_images=False, 
+              rect=True, 
+              num_workers=2)
+        self.assertEqual(next(iter(trainloader))[0].shape, (32, 3, 160, 640))
+        self.assertEqual(next(iter(testloader))[0].shape, (32, 3, 320, 640))
+        self.assertEqual(classes.shape[0], 849947)
+        
+        trainloader_e, testloader_e, classes_e = utils.load_COCO(batch_size=32, data_path='../data/elephant.yaml', img_size=[640, 640], 
+              cfg='models/yolov5s.yaml',
+              model_stride=[8, 16, 32],
+              single_cls=False, 
+              cache_images=False, 
+              rect=True, 
+              num_workers=2)
+        self.assertEqual(next(iter(trainloader_e))[0].shape, (32, 3, 384, 640))
+        self.assertEqual(next(iter(testloader_e))[0].shape, (32, 3, 448, 640))
+        self.assertEqual(classes_e.shape[0], 2249)
+        
 
 if __name__ == '__main__':
     unittest.main()
