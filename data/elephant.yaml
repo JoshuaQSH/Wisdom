@@ -1,0 +1,10 @@
+# train and val datasets (image directory or *.txt file with image paths)
+train: /home/shenghao/torch-deepimportance/data/train_elephant.txt
+val: /home/shenghao/torch-deepimportance/data/val_elephant.txt
+test: /home/shenghao/torch-deepimportance/data/test_elephant.txt
+
+# number of classes
+nc: 1
+
+# class names
+names: ['Elephant']
