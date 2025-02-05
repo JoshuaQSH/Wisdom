@@ -201,8 +201,7 @@ def load_COCO_old(batch_size=32, root='/home/shenghao/torch-deepimportance/yolov
 
     return train_loader, val_loader, classes
 
-## TODO: cfg and model_stride should be passed as arguments
-def load_COCO(batch_size=32, data_path='../data/elephant.yaml', img_size=[640, 640], 
+def load_COCO_elephant(batch_size=32, data_path='../data/elephant.yaml', img_size=[640, 640], 
               cfg='models/yolov5s.yaml',
               model_stride=[8, 16, 32],
               single_cls=True, 
@@ -660,4 +659,4 @@ if __name__ == '__main__':
     # test_model()
     # test_cifar_models()
     # test_selector_dataloader(root = args.data_path)
-    load_COCO()
+    trainloader, testloader, c = load_COCO_elephant()
