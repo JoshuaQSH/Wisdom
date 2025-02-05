@@ -5,6 +5,7 @@ from sklearn.metrics import silhouette_score, silhouette_samples
 from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from utils import load_kmeans_model, save_kmeans_model, get_layer_by_name
 from visualization import visualize_activation, visualize_idc_scores
+import json
 
 class IDC:
     def __init__(self, model, classes, top_m_neurons, n_clusters, use_silhouette, test_all_classes):
@@ -15,6 +16,17 @@ class IDC:
         self.use_silhouette = use_silhouette
         self.test_all_classes = test_all_classes
         self.total_combination = 1
+    
+    def save_to_json(self, coverage_rate, model_name, testing_class, testing_layer, file_path='coverage_rate.json'):
+        data = {
+            'coverage_rate': coverage_rate,
+            'model_name': model_name,
+            'testing_class': testing_class,
+            'testing_layer': testing_layer
+        }
+        with open(file_path, 'w') as json_file:
+            json.dump(data, json_file)
+        print(f"Coverage rate saved to {file_path}")
 
     ## Top-k Neurons Selection [layer-wise]
     def select_top_neurons(self, importance_scores):
@@ -314,6 +326,10 @@ class IDC:
         print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
         print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
         
+        model_name = self.model.__class__.__name__
+        testing_class = self.classes[labels[0]]
+        self.save_to_json(coverage_rate, model_name, testing_class, layer_name)
+        
         return unique_clusters, coverage_rate
 
     ## Compute the IDC test [layer-wise]
@@ -343,6 +359,10 @@ class IDC:
         print(f"Total INCC combinations: ", total_combination)
         print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
         print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
+        
+        model_name = self.model.__class__.__name__
+        testing_class = self.classes[labels[0]]
+        self.save_to_json(coverage_rate, model_name, testing_class, layer_name)
         
         return unique_clusters, coverage_rate
     
