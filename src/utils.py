@@ -13,6 +13,7 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10, MNIST
+from torchvision.datasets import CocoDetection
 from torch.utils.data import DataLoader
 import torchvision.datasets as datasets
 import torchvision.models as models
@@ -149,6 +150,54 @@ def data_loader(root, batch_size=256, workers=1, pin_memory=True, shuffle=False)
     )
 
     return train_loader, val_loader, val_dataset
+
+def collate_fn(batch):
+    images, targets = zip(*batch)
+    images = torch.stack(images, dim=0)
+    return images, targets
+
+# Load COCO dataset
+def load_COCO(batch_size=32, root='/path/to/coco', num_workers=2):
+    # Define paths to annotations
+    ann_train = os.path.join(root, 'annotations', 'instances_train2017.json')
+    ann_val = os.path.join(root, 'annotations', 'instances_val2017.json')
+
+    # Define image directories
+    img_dir_train = os.path.join(root, 'train2017')
+    img_dir_val = os.path.join(root, 'val2017')
+
+    # Define transformations
+    transform = transforms.Compose([
+        transforms.Resize((640, 640)),  # Resize images to 640x640
+        transforms.ToTensor(),          # Convert images to PyTorch tensors
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])  # Normalize with ImageNet means and stds
+    ])
+
+    # Load datasets
+    train_dataset = CocoDetection(root=img_dir_train, annFile=ann_train, transform=transform)
+    val_dataset = CocoDetection(root=img_dir_val, annFile=ann_val, transform=transform)
+
+    # Create DataLoaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate_fn)
+
+    # COCO class names
+    classes = [
+        'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
+        'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
+        'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
+        'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
+        'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+        'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+        'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+        'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'TV', 'laptop',
+        'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
+        'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
+        'toothbrush'
+    ]
+
+    return train_loader, val_loader, classes
 
 # Load the ImageNet dataset
 def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False):

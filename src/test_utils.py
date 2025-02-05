@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 
 from model_hub import LeNet, Net
 from models_cv import *
+from YOLOv5.yolo import *
 
 class UtilsTests(unittest.TestCase):
     
@@ -96,6 +97,13 @@ class UtilsTests(unittest.TestCase):
             y = model(x)
             self.assertEqual(y.shape, (1, 10))
     
+    def test_yolov5(self):
+        cfg = 'YOLOv5/yolov5s.yaml'
+        model = Model(cfg)
+        img = torch.rand(8 if torch.cuda.is_available() else 1, 3, 640, 640)
+        y = model(img, profile=True)
+        self.assertEqual(y[0].shape, (8, 3, 80, 80, 6))
+    
     def test_selector_dataloader(self):
         args = self.parser
         transform = transforms.Compose([
@@ -144,6 +152,13 @@ class UtilsTests(unittest.TestCase):
         self.assertEqual(next(iter(trainloader))[1].shape[0], args.batch_size)
         self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 3, 224, 224))
         self.assertEqual(classes[0], 'tench')
+    
+    def test_load_MNIST(self):
+        args = self.parser
+        trainloader, testloader, test_dataset, classes = utils.load_MNIST(batch_size=args.batch_size, root='/data/shenghao/dataset/MNIST', channel_first=False, train_all=False)
+        self.assertEqual(next(iter(trainloader))[1].shape[0], args.batch_size)
+        self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 1, 28, 28))
+        self.assertEqual(classes[0], '0')
 
 if __name__ == '__main__':
     unittest.main()

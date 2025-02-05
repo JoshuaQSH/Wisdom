@@ -16,3 +16,4 @@ six==1.16.0
 tqdm==4.66.4
 transformers==4.42.4
 captum
+onnx==1.17.0
