@@ -6,6 +6,7 @@ from attribution import get_relevance_scores, get_relevance_scores_for_all_layer
 from utils import load_kmeans_model, save_kmeans_model, get_layer_by_name
 from visualization import visualize_activation, visualize_idc_scores
 import json
+import numpy as np
 
 class IDC:
     def __init__(self, model, classes, top_m_neurons, n_clusters, use_silhouette, test_all_classes):
@@ -31,7 +32,7 @@ class IDC:
     ## Top-k Neurons Selection [layer-wise]
     def select_top_neurons(self, importance_scores):
         if self.top_m_neurons == -1:
-            print("Selecting all neurons.")
+            # print("Selecting all neurons.")
             if importance_scores.dim() == 1:
                 _, indices = torch.sort(importance_scores, descending=True)
                 return indices
@@ -39,7 +40,7 @@ class IDC:
                 return None
         else:
             if importance_scores.dim() == 1:
-                print("Selecting top {} neurons (FC layer).".format(self.top_m_neurons))
+                # print("Selecting top {} neurons (FC layer).".format(self.top_m_neurons))
                 _, indices = torch.topk(importance_scores, self.top_m_neurons)
                 return indices
             else:
@@ -169,6 +170,7 @@ class IDC:
             print("For n_clusters =", n_clusters, "The average silhouette_score is :", silhouette_avg)
             
         best_k = silhouette_list.index(max(silhouette_list)) + min_k
+        print("Best number of clusters: ", best_k)
         return best_k
 
     ## Cluster the importance scores [layer-wise]
@@ -190,7 +192,7 @@ class IDC:
         
         return cluster_labels, kmeans
     
-        ## Cluster the importance scores [layer-wise]
+    ## Cluster the importance scores [layer-wise]
     def cluster_activation_values(self, activation_values, layer_name):
         kmeans_comb = []
         
@@ -264,9 +266,9 @@ class IDC:
         kmeans_comb = []
         for i in range(total_neurons):
             if self.use_silhouette:
-                self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1), 2, 10)
+                self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].reshape(-1, 1), 2, 10)
             
-            kmeans_model = KMeans(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
+            kmeans_model = KMeans(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))
             kmeans_comb.append(kmeans_model)
 
         print("KMeans models saved for all layers! Name: kmeans_acti_all_layers.pkl")
@@ -281,7 +283,7 @@ class IDC:
         # Loop over each test sample
         for i in range(n_samples):
             # Get the activations for this sample
-            sample_activations = activations[i].cpu().numpy()
+            sample_activations = activations[i].cpu().numpy().astype(np.float64)
             sample_clusters = []
             
             # Loop over each neuron and assign it to a cluster

@@ -100,6 +100,31 @@ def parse_args():
     
     return args
 
+def convert_tensors(obj):
+    """Recursively convert Tensors to lists"""
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()  # Convert tensor to a list
+    elif isinstance(obj, dict):
+        return {k: convert_tensors(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_tensors(v) for v in obj]
+    else:
+        return obj
+
+def save_json(filename, saved_data):
+    with open(filename, 'w') as json_file:
+        json.dump(saved_data, json_file, indent=4)
+
+def load_json(filename):
+    with open(filename, 'r') as json_file:
+        saved_data = json.load(json_file)
+    return saved_data
+
+def normalize_tensor(featrues):
+    featrues -= featrues.min()
+    featrues /= featrues.max()
+    return featrues
+
 def train_val_dataset(dataset, val_split=0.25):
     train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split)
     datasets = {}
@@ -383,8 +408,8 @@ class SelectorDataset(torch.utils.data.Dataset):
 
 # Save the torch (DNN) model
 def save_model(model, model_name):
-    torch.save(model.state_dict(), model_name + '.pth')
-    print("Model saved as", model_name + '.pth')
+    torch.save(model.state_dict(), model_name + '.pt')
+    print("Model saved as", model_name + '.pt')
 
 
 # Save the k-means model
@@ -660,3 +685,5 @@ if __name__ == '__main__':
     # test_cifar_models()
     # test_selector_dataloader(root = args.data_path)
     # trainloader, testloader, c = load_COCO()
+
+    

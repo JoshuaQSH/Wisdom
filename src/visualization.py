@@ -5,6 +5,23 @@ import numpy as np
 import matplotlib.cm as cm
 from sklearn.metrics import silhouette_samples
 
+color_choice = ['#ECDFFF', '#D4C4EE', '#BDAADE', '#A690CF', '#8E78BF', '#8C75BC', '#6A579C']
+
+def plot_common_neurons_rate(common_neurons_rate, filename='./logs/common_neurons_rate.pdf'):
+    
+    classes = list(common_neurons_rate.keys())
+    rates = [sum(rates) / len(rates) for rates in common_neurons_rate.values()]
+    
+    plt.figure(figsize=(12, 5))
+    params = {'axes.labelsize': 16, 'axes.titlesize': 16, 'xtick.labelsize': 14, 'ytick.labelsize': 14}
+    plt.rcParams.update(params)
+    plt.bar(classes, rates, color=color_choice[1])
+    # plt.xlabel('Class')
+    plt.ylabel('Common Neurons Rate', fontsize=16)
+    plt.title('Common Neurons Rate per Class')
+    # plt.xticks(rotation=45)
+    plt.savefig(filename, format='pdf', dpi=1200)
+    # plt.show()
 
 def visualize_idc_scores(idc_scores, filename='./logs/idc_scores.pdf'):
     methods = list(idc_scores.keys())

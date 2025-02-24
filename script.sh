@@ -295,44 +295,54 @@ then
         --batch-size 128 \
         --layer-index 0 \
         --model lenet \
-        --top-m-neurons 10 \
+        --top-m-neurons 2 \
         --n-clusters $NUM_CLUSTERS \
         --test-image plane \
-        --all-attr \
-        --logging
+        --all-attr
+    
+    # python prepare_selector_data.py \
+    #     --dataset $DATASET \
+    #     --batch-size 128 \
+    #     --layer-index 2 \
+    #     --model lenet \
+    #     --top-m-neurons 10 \
+    #     --n-clusters $NUM_CLUSTERS \
+    #     --test-image plane \
+    #     --all-attr \
+    #     --logging
 
-    python selector_demo.py \
-        --dataset $DATASET \
-        --batch-size 128 \
-        --layer-index 1 \
-        --model lenet \
-        --top-m-neurons 10 \
-        --n-clusters $NUM_CLUSTERS \
-        --test-image plane \
-        --all-attr \
-        --logging
+    # python selector_demo.py \
+    #     --dataset $DATASET \
+    #     --batch-size 128 \
+    #     --layer-index 1 \
+    #     --model lenet \
+    #     --top-m-neurons 3 \
+    #     --n-clusters $NUM_CLUSTERS \
+    #     --test-image plane \
+    #     --all-attr \
+    #     --logging
     
-    python selector_demo.py \
-        --dataset $DATASET \
-        --batch-size 128 \
-        --layer-index 2 \
-        --model lenet \
-        --top-m-neurons 10 \
-        --n-clusters $NUM_CLUSTERS \
-        --test-image plane \
-        --all-attr \
-        --logging
+    # python selector_demo.py \
+    #     --dataset $DATASET \
+    #     --batch-size 128 \
+    #     --layer-index 2 \
+    #     --model lenet \
+    #     --top-m-neurons 10 \
+    #     --n-clusters $NUM_CLUSTERS \
+    #     --test-image plane \
+    #     --all-attr \
+    #     --logging
     
-    python selector_demo.py \
-        --dataset $DATASET \
-        --batch-size 128 \
-        --layer-index 3 \
-        --model lenet \
-        --top-m-neurons 10 \
-        --n-clusters $NUM_CLUSTERS \
-        --test-image plane \
-        --all-attr \
-        --logging
+    # python selector_demo.py \
+    #     --dataset $DATASET \
+    #     --batch-size 128 \
+    #     --layer-index 3 \
+    #     --model lenet \
+    #     --top-m-neurons 10 \
+    #     --n-clusters $NUM_CLUSTERS \
+    #     --test-image plane \
+    #     --all-attr \
+    #     --logging
 
 elif [ $RUN_TEST == "attr4lenetf1" ]
 then

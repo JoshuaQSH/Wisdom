@@ -34,15 +34,14 @@ def get_relevance_scores(model, images, labels, classes, net_layer, layer_name='
     if top_m_images != -1:
         images = images[:top_m_images]
         labels = labels[:top_m_images]
-        
-    print("GroundTruth: {}, Layer's Name: {}, Module: {}".format(classes[labels[0]], layer_name, net_layer))
-    print("Running with {}".format(attribution_method))
+    
+    # print("Running with {}".format(attribution_method))
 
     outputs = model(images)
     _, predicted = torch.max(outputs, 1)
     
     if attribution_method not in attribution_classes:
-        raise ValueError(f"Invalid attribution method: {attribution_method}")
+        raise ValueError(f"Invalid attribustion method: {attribution_method}")
 
     neuron_cond_class = attribution_classes[attribution_method]
     neuron_cond = neuron_cond_class(model, net_layer)

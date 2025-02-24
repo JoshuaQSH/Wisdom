@@ -12,6 +12,8 @@ from torch.utils.data import DataLoader
 from model_hub import LeNet, Net
 from models_cv import *
 from YOLOv5.yolo import *
+from idc import IDC
+from attribution import *
 
 class UtilsTests(unittest.TestCase):
     
@@ -138,7 +140,35 @@ class UtilsTests(unittest.TestCase):
             self.assertEqual(layer_info.shape, (args.batch_size, 5))
             self.assertEqual(labels.shape[0], args.batch_size)
             break
+        
+    def test_get_relevance_scores_for_all_class(self):
+        pass
     
+    def test_dynamic_clustering_idc_all_layers(self):
+        args = self.parser
+        args.test_image = 'horse'
+        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/lenet_cifar10.pt'
+        trainloader, testloader, test_dataset, classes = utils.load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
+        model, module_name, module = utils.get_model_cifar(model_name='lenet', load_model_path=model_path)
+        trainable_module, trainable_module_name = utils.get_trainable_modules_main(model)
+        test_image, test_label = utils.get_class_data(testloader, classes, args.test_image)
+        images, labels = utils.get_class_data(trainloader, classes, args.test_image)
+        attribution = get_relevance_scores_for_all_layers(model, images, labels, attribution_method='lrp')
+        idc = IDC(model=model, 
+                  classes=classes, 
+                  top_m_neurons=10, 
+                  n_clusters=2, 
+                  use_silhouette=True, 
+                  test_all_classes=True)
+        important_neuron_indices = idc.select_top_neurons_all(attribution)
+        activation_values, selected_activations = idc.get_activation_values_for_model(images, classes[labels[0]], important_neuron_indices)
+        kmeans_comb = idc.cluster_activation_values_all(selected_activations)
+        unique_cluster, coverage_rate = idc.compute_idc_test_whole(test_image, 
+                            test_label,
+                            important_neuron_indices,
+                            kmeans_comb,
+                            'lrp')
+
     def test_load_CIFAR(self):
         args = self.parser
         trainloader, testloader, test_dataset, classes = utils.load_CIFAR(batch_size=args.batch_size, root=args.data_path)

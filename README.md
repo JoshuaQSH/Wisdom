@@ -28,6 +28,9 @@ $ ./script.sh lenetfc1
 $ cd logs
 # python plot_images.py --plot-all --log-file <log_file_name.log>
 $ python plot_images.py --plot-all
+
+# Selector predict
+$ python selector_pred_v1.py --dataset cifar10 --batch-size 2 --layer-index 2 --model lenet --top-m-neurons 10 --all-attr
 ```
 
 ## Routes
@@ -46,8 +49,10 @@ $ python plot_images.py --plot-all
 - [x] [**IDC**] End to End layer analyze for LeNet 
 - [x] [**IDC**] Include the results for the random pruning
 - [x] [**IDC**] Pickup the common neurons per method-class
+- [ ] [**IDC**] Prepare the grounp truth data by prunning
 - [ ] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
     - [x] Rankings, plots
+    - [ ] Transfer learning based training
     - [ ] Voting
 - [ ] [**IDC**] Customized rules for `torch.nn.Sequencial` in LRP
 - [ ] [**IDC**] Add more dataset and models

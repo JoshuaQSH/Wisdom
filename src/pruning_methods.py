@@ -40,12 +40,12 @@ def ramdon_prune(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7,
             else:
                 raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
 
-    print(
-            "Sparsity in weight: {:.2f}%".format(
-                100. * float(torch.sum(layer.weight == 0))
-                / float(layer.weight.nelement())
-            )
-        )
+    # print(
+    #         "Sparsity in weight: {:.2f}%".format(
+    #             100. * float(torch.sum(layer.weight == 0))
+    #             / float(layer.weight.nelement())
+    #         )
+    #     )
 
 def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
     layer = getattr(model, layer_name)
@@ -64,9 +64,9 @@ def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7
                     layer.bias[f] = 0
         else:
             raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
-    print(
-        "Sparsity in weight: {:.2f}%".format(
-            100. * float(torch.sum(layer.weight == 0))
-            / float(layer.weight.nelement())
-        )
-    )
+    # print(
+    #     "Sparsity in weight: {:.2f}%".format(
+    #         100. * float(torch.sum(layer.weight == 0))
+    #         / float(layer.weight.nelement())
+    #     )
+    # )
