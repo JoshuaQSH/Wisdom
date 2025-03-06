@@ -1,6 +1,7 @@
 '''LeNet in PyTorch.'''
 import torch.nn as nn
 import torch.nn.functional as F
+import torch
 
 class LeNet(nn.Module):
     def __init__(self):
@@ -21,3 +22,11 @@ class LeNet(nn.Module):
         out = F.relu(self.fc2(out))
         out = self.fc3(out)
         return out
+
+def test():
+    net = LeNet()
+    x = torch.randn(1,3,32,32)
+    y = net(x)
+    print(y)
+
+# test()

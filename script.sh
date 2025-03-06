@@ -8,7 +8,7 @@ TEST_ATTR="la"
 # cifar10, mnist, imagenet
 DATASET="cifar10"
 TEST_CLASS="plane"
-TEST_MODEL="lenet"
+TEST_MODEL="vgg16"
 NUM_CLUSTERS=2
 NUM_NEURONS=10
 I_PATH=/home/shenghao/torch-deepimportance
@@ -34,7 +34,7 @@ then
 elif [ $RUN_TEST == "othernet" ]
 then
     layerindex=4
-    testmodel="efficientnet"
+    testmodel="vgg16"
     echo "Running ${testmodel} with Layer Index ${layerindex}"
     python run.py \
         --dataset $DATASET \
@@ -189,7 +189,6 @@ then
         python run.py \
             --dataset $DATASET \
             --batch-size 4 \
-            --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_end2end.json \
             --model $TEST_MODEL \
             --top-m-neurons $NUM_NEURONS \
             --n-clusters $NUM_CLUSTERS \
@@ -197,56 +196,6 @@ then
             --test-image $class \
             --saved-model ${TEST_MODEL}_CIFAR10-new.pt \
             --end2end
-    done
-
-elif [ $RUN_TEST == "end2endSelect" ]
-then
-    echo "Running ${TEST_MODEL} End2End analysis"
-    for class in "${CLASSES[@]}"
-    do
-        echo "--- Processing class: $class ---"
-        if [ $class == "plane" ]
-        then
-            CHOOSE_ATTR="lrp"
-        elif [ $class == "car" ]
-        then
-            CHOOSE_ATTR="ii"
-        elif [ $class == "bird" ]
-        then
-            CHHOSE_ATTR="lrp"
-        elif [ $class == "cat" ]
-        then
-            CHOOSE_ATTR="lrp"
-        elif [ $class == "deer" ]
-        then
-            CHOOSE_ATTR="ldl"
-        elif [ $class == "dog" ]
-        then
-            CHOOSE_ATTR="lrp"
-        elif [ $class == "frog" ]
-        then
-            CHOOSE_ATTR="lrp"
-        elif [ $class == "horse" ]
-        then
-            CHOOSE_ATTR="la"
-        elif [ $class == "ship" ]
-        then
-            CHOOSE_ATTR="lrp"
-        elif [ $class == "truck" ]
-        then
-            CHOOSE_ATTR="lfa"
-        fi
-        python run.py \
-            --dataset $DATASET \
-            --batch-size 4 \
-            --importance-file ${I_PATH}/saved_files/plane_${TEST_MODEL}_${TEST_ATTR}_end2end.json \
-            --model lenet \
-            --top-m-neurons $NUM_NEURONS \
-            --n-clusters $NUM_CLUSTERS \
-            --attr $CHOOSE_ATTR \
-            --test-image $class \
-            --end2end \
-            --logging
     done
 
 # TODO: For the ImageNet and more models

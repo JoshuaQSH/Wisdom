@@ -47,7 +47,25 @@ def ramdon_prune(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7,
     #         )
     #     )
 
-def prune_neurons(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+def prune_neurons(model, layer='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+    # layer = getattr(model, layer_name)
+    with torch.no_grad():
+        if isinstance(layer, nn.Linear):
+            # Set weights and biases of the selected neurons to zero
+            layer.weight[neurons_to_prune, :] = 0
+            if layer.bias is not None:
+                layer.bias[neurons_to_prune] = 0
+        elif isinstance(layer, nn.Conv2d):
+            # Set the weights of the selected filters to zero
+            for f in neurons_to_prune:
+                layer.weight[f] = 0
+                if layer.bias is not None:
+                    layer.bias[f] = 0
+        else:
+            raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
+
+def prune_neurons_(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+    breakpoint()
     layer = getattr(model, layer_name)
     
     with torch.no_grad():

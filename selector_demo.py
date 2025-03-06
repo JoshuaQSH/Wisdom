@@ -15,7 +15,7 @@ import torch.optim as optim
 src_path = Path(__file__).resolve().parent / "src"
 sys.path.append(str(src_path))
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_model_cifar, get_trainable_modules_main, SelectorDataset, Logger
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, normalize_tensor, get_model, get_model_cifar, get_trainable_modules_main, SelectorDataset, Logger
 from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from pruning_methods import prune_neurons
 
@@ -228,8 +228,8 @@ def train_demo(attributions,
     attr_label_ex = attr_label.repeat(train_images.shape[0], 1).squeeze(1)
     attr_label_ex = attr_label_ex.to(device)
     
-    test_model(model, train_images, train_labels)
     b_accuracy, b_total_loss = test_model(model, train_images, train_labels)
+        
     if log is not None:
         log.logger.info("Optimal method: {}".format(optimal_method))
         log.logger.info("Accuracy drop: {}".format(accuracy_drops))
@@ -242,7 +242,10 @@ def train_demo(attributions,
     ### Extract features using transfer learning (freeze feature extractor)
     features = extract_features(model, train_images)
     layer_info_repeated = layer_info.unsqueeze(0).repeat(features[0].shape[0], 1)
-    combined_features = torch.cat((features[0], layer_info_repeated), dim=1)
+    
+    # Normalize the features
+    features_norm = normalize_tensor(features[0])
+    combined_features = torch.cat((features_norm, layer_info_repeated), dim=1)
         
     for epoch in range(num_epochs):
         running_loss = 0.0
@@ -366,9 +369,9 @@ def test_demo_with_layerinfo(model, selector_model, test_images, test_labels, la
         acc_attr = running_corrects_attr / test_images.shape[0]
         
         if log is not None:
-            log.logger.info("Test Loss: {:.4f} Acc: {:.4f}".format(loss.item(), acc_attr))
+            log.logger.info("Test Loss: {:.4f}, Acc: {:.4f}".format(loss.item(), acc_attr))
         else:
-            print("Test Loss: {:.4f} Acc: {:.4f}".format(loss.item(), acc_attr))
+            print("Test Loss: {:.4f}, Acc: {:.4f}".format(loss.item(), acc_attr))
     
     handle.remove()
     return acc_class, acc_attr
@@ -381,8 +384,8 @@ if __name__ == '__main__':
     trainloader, testloader, classes = prepare_data(args)    
     
     # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
-    attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
-    # attributions = ['lfa', 'ldl']
+    # attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
+    attributions = ['lfa', 'ldl']
         
     ## Saved the index for comparing the Common Neurons across the attributions
     # {'lc': [1, 2, 3, 4, 5], 'la': [1, 2, 3, 4, 5], ...}
@@ -397,7 +400,7 @@ if __name__ == '__main__':
     num_out = len(attributions)
     # num_ft = trainable_module[-1].in_features
     selector_model = copy.deepcopy(model)
-    num_epochs = 40
+    num_epochs = 20
     train_iters = 2
     for param in selector_model.parameters():
         param.requires_grad = False
@@ -406,9 +409,11 @@ if __name__ == '__main__':
     trained_fc3 = selector_model.fc3
 
     best_acc = 0
+    
     for epoch in range(num_epochs):
         for test_class in classes:
             train_images, train_labels = get_class_data(trainloader, classes, test_class)
+            breakpoint()
             selector_model_choice = train_demo(attributions=attributions, 
                     model=model,
                     selector_model=trained_fc3,
@@ -423,13 +428,14 @@ if __name__ == '__main__':
                     train_labels=train_labels,
                     log=log)
 
-        if epoch % 5 == 0:
+        if epoch % 2 == 0:
             if log is not None:
                 log.logger.info("Label (During Training): {}".format(test_class))
                 log.logger.info("Best Acc: {:.4f}, Epoch: {}".format(best_acc, epoch))
             else:
                 print("Label (During Training): {}, Epoch: {}".format(test_class, epoch))
                 print("Best Acc: {:.4f}".format(best_acc))
+                
             test_images, test_labels = get_class_data(testloader, classes, test_class)
             acc_class, test_acc = test_demo_with_layerinfo(model, selector_model, test_images, test_labels, layer_info, attributions, trainable_module[args.layer_index], trainable_module_name[args.layer_index], trainable_module_name[-2], args.top_m_neurons, log)
             # test_ac = test_demo(selector_model, model, test_images, test_labels, classes, attributions, trainable_module[args.layer_index], trainable_module_name[args.layer_index], args.top_m_neurons, log)
@@ -438,12 +444,12 @@ if __name__ == '__main__':
                 best_acc = test_acc
                 print("Class Acc: {}, Attr Acc: {}".format(acc_class, test_acc))
             
-    for test_class in classes:
-        if log is not None:
-            log.logger.info("Label (Testing): {}".format(test_class))
-        else:
-            print("Label (Testing): {}".format(test_class))
-        test_images, test_labels = get_class_data(testloader, classes, test_class)
-        # test_acc = test_demo(selector_model, test_images, test_labels, classes, attributions, log)
-        # test_acc = test_demo(selector_model, model, test_images, test_labels, classes, attributions, trainable_module[args.layer_index], trainable_module_name[args.layer_index], args.top_m_neurons, log)
-        acc_class, test_acc = test_demo_with_layerinfo(model, selector_model, test_images, test_labels, layer_info, attributions, trainable_module[args.layer_index], trainable_module_name[args.layer_index], trainable_module_name[-2], args.top_m_neurons, log)
+        for test_class in classes:
+            if log is not None:
+                log.logger.info("Label (Testing): {}".format(test_class))
+            else:
+                print("Label (Testing): {}".format(test_class))
+            test_images, test_labels = get_class_data(testloader, classes, test_class)
+            # test_acc = test_demo(selector_model, test_images, test_labels, classes, attributions, log)
+            # test_acc = test_demo(selector_model, model, test_images, test_labels, classes, attributions, trainable_module[args.layer_index], trainable_module_name[args.layer_index], args.top_m_neurons, log)
+            acc_class, test_acc = test_demo_with_layerinfo(model, selector_model, test_images, test_labels, layer_info, attributions, trainable_module[args.layer_index], trainable_module_name[args.layer_index], trainable_module_name[-2], args.top_m_neurons, log)

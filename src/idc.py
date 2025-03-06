@@ -216,8 +216,8 @@ class IDC:
         else:
             raise ValueError(f"Invalid layer name: {layer_name}")
         
-        save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
-        print("KMeans model saved! Name: kmeans_acti_{}.pkl".format(layer_name))
+        # save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
+        # print("KMeans model saved! Name: kmeans_acti_{}.pkl".format(layer_name))
         
         return kmeans_comb
 
@@ -245,8 +245,8 @@ class IDC:
         else:
             raise ValueError(f"Invalid layer name: {layer_name}")
         
-        save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
-        print("KMeans model saved! Name: kmeans_acti_{}.pkl".format(layer_name))
+        # save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
+        # print("KMeans model saved! Name: kmeans_acti_{}.pkl".format(layer_name))
         
         return kmeans_comb
 
@@ -271,7 +271,7 @@ class IDC:
             kmeans_model = KMeans(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))
             kmeans_comb.append(kmeans_model)
 
-        print("KMeans models saved for all layers! Name: kmeans_acti_all_layers.pkl")
+        # print("KMeans models saved for all layers! Name: kmeans_acti_all_layers.pkl")
         return kmeans_comb
     
     # A for loop to assign clusters to all the neurons
@@ -283,12 +283,20 @@ class IDC:
         # Loop over each test sample
         for i in range(n_samples):
             # Get the activations for this sample
-            sample_activations = activations[i].cpu().numpy().astype(np.float64)
+            sample_activations = activations[i].cpu().numpy().astype(np.float32)
             sample_clusters = []
             
             # Loop over each neuron and assign it to a cluster
             for neuron_idx in range(n_neurons):
-                cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].reshape(-1, 1))
+                try:
+                    cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].reshape(-1, 1))
+                except ValueError as e:
+                    if "Buffer dtype mismatch" in str(e):
+                        print("Type mismatch detected. Converting to float64 and retrying...")
+                        cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].astype(np.float64).reshape(-1, 1))
+                    else:
+                        raise e                
+                
                 sample_clusters.append(cluster[0])  # Append the cluster ID
                 if update_total_combination:
                     self.total_combination *= kmeans_models[neuron_idx].n_clusters

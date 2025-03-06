@@ -26,7 +26,8 @@ from sklearn.model_selection import train_test_split
 src_path = Path(__file__).resolve().parent / "src"
 sys.path.append(str(src_path))
 
-from model_hub import LeNet, Net
+import model_hub
+# from model_hub import LeNet, Net
 from models_cv import *
 from YOLOv5.yolo import *
 from YOLOv5.datasets import *
@@ -61,8 +62,7 @@ class Logger(object):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='lenet', help='Model to use for training.')
-    parser.add_argument('--model-path', type=str, default='None', help='Path to the trained model.')
-    parser.add_argument('--saved-model', type=str, default='lenet_cifar10.pt', help='Saved model name.')
+    parser.add_argument('--saved-model', type=str, default='lenet_CIFAR10.pth', help='Saved model name.')
     parser.add_argument('--dataset', type=str, default='cifar10', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
     parser.add_argument('--data-path', type=str, default='/data/shenghao/dataset/', help='Path to the data directory.')
     parser.add_argument('--importance-file', type=str, default='./saved_files/plane_lenet_importance.json', help='The file to save the importance scores.')
@@ -72,28 +72,25 @@ def parse_args():
     parser.add_argument('--random-prune', action='store_true', help='Randomly prune the neurons.')
     parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
     parser.add_argument('--n-clusters', type=int, default=2, help='Number of clusters to use for KMeans.')
-    parser.add_argument('--cluster-scores', action='store_true', help='Cluserting the importance scores rather than using actiation values.')
     parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
 
     # IDC Testing 
     parser.add_argument('--test-image', type=str, default='plane', help='Test image name. For the single image testing.')
-    parser.add_argument('--test-all', action='store_true', help='Test all the images (respectively).')
     parser.add_argument('--all-class', action='store_true', help='Attributions collected for all the classes.')
     parser.add_argument('--idc-test-all', action='store_true', help='Using all the test images for the Coverage testing.')
-    parser.add_argument('--num-samples', type=int, default=1000, help='Sampling number for the test images (against with the `idc-test-all`).')
+    parser.add_argument('--num-samples', type=int, default=0, help='Sampling number for the test images (against with the `idc-test-all`).')
 
     parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp'],  help='The attribution method to use.')
     parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
-    parser.add_argument('--all-attr', action='store_true', help='Testing all the attribution methods, for analysis.')
     parser.add_argument('--layer-by-layer', action='store_true', help='Capturing all the module layer in the model, same as end2end.')
     parser.add_argument('--end2end', action='store_true', help='End to end testing for the whole model.')
     
     # General arguments
-    parser.add_argument('--vis-attributions', action='store_true', help='Visualize the attributions.')
-    parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
+    # parser.add_argument('--vis-attributions', action='store_true', help='Visualize the attributions.')
+    # parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
     parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
-    parser.add_argument('--log-path', type=str, default='./logs/', help='Path to save the log file.')
+    parser.add_argument('--log-path', type=str, default='./logs/TestLog', help='Path (and name) to save the log file.')
 
     args = parser.parse_args()
     # print(args)
@@ -326,10 +323,10 @@ def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_wor
     else:
         trainloader, testloader, val_dataset = data_loader(root, batch_size, num_workers, True)
 
-    return trainloader, testloader, val_dataset, classes
+    return trainloader, testloader, datasets, val_dataset, classes
 
 #  Load the CIFAR-10 dataset
-def load_CIFAR(batch_size=32, root='./data', large_image=True, shuffle=True):
+def load_CIFAR(batch_size=32, root='./data', large_image=False, shuffle=True):
 
     if large_image:
         transform = transforms.Compose([
@@ -353,7 +350,7 @@ def load_CIFAR(batch_size=32, root='./data', large_image=True, shuffle=True):
     classes = ('plane', 'car', 'bird', 'cat',
             'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
     
-    return trainloader, testloader, test_dataset, classes
+    return trainloader, testloader, train_dataset, test_dataset, classes
 
 
 #  Load the MNIST dataset
@@ -375,7 +372,7 @@ def load_MNIST(batch_size=32, root='./data', channel_first=False, train_all=Fals
     
     classes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
     
-    return train_loader, test_loader, test_dataset, classes
+    return train_loader, test_loader, train_dataset, test_dataset, classes
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -409,7 +406,9 @@ class SelectorDataset(torch.utils.data.Dataset):
 # Save the torch (DNN) model
 def save_model(model, model_name):
     torch.save(model.state_dict(), model_name + '.pt')
-    print("Model saved as", model_name + '.pt')
+    torch.save(model, model_name + '_whole.pth')
+    print("Model state saved as", model_name + '.pt')
+    print("Whole model saved as", model_name + '_whole.pth')
 
 
 # Save the k-means model
@@ -452,39 +451,10 @@ def get_layer_by_name(model, layer_name):
             layer = getattr(layer, part)
     return layer
 
-def get_model_cifar(model_name='vgg16', load_model_path='/home/shenghao/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10-new.pt'):
-
-    model_classes = {
-        'lenet': LeNet,
-        'vgg16': lambda: VGG('VGG16'),
-        'resnet18': ResNet18,
-        'googlenet': GoogLeNet,
-        'densenet': DenseNet121,
-        'resnext29': ResNeXt29_2x64d,
-        'mobilenetv2': MobileNetV2,
-        'shufflenetv2': lambda: ShuffleNetV2(1),
-        'senet': SENet18,
-        'preresnet': PreActResNet18,
-        'mobilenet': MobileNet,
-        'DPN92': DPN92,
-        'efficientnet': EfficientNetB0,
-        'regnet': RegNetX_200MF,
-        'simpledla': SimpleDLA,
-    }
-
-    if model_name in model_classes:
-        model = model_classes[model_name]()
-    else:
-        raise(f"{model_name} not in the list of available models.")
+def get_model(load_model_path='/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth'):
     module_name = []
     module = []
-    data_parallel_dict = torch.load(load_model_path)
-    new_state_dict = {}
-    for key, value in data_parallel_dict.items():
-        new_key = key.replace('module.', '')  # Remove 'module.' prefix
-        new_state_dict[new_key] = value    
-    
-    model.load_state_dict(new_state_dict)
+    model = torch.load(load_model_path)
     
     # Alternatively, to get all submodule names (including nested ones)
     for name, layer in model.named_modules():
@@ -492,12 +462,50 @@ def get_model_cifar(model_name='vgg16', load_model_path='/home/shenghao/torch-de
         module.append(layer)
 
     return model, module_name, module
-    
 
-def get_model(model_name='vgg16'):
+def cifar_model_state2whole():
+    load_model_path=['/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10.pt', 
+                     '/home/shenghao/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10.pt', 
+                     '/home/shenghao/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10.pt',
+                     '/home/shenghao/torch-deepimportance/models_info/saved_models/densenet_CIFAR10.pt',
+                     '/home/shenghao/torch-deepimportance/models_info/saved_models/mobilenetv2_CIFAR10.pt',
+                     '/home/shenghao/torch-deepimportance/models_info/saved_models/shufflenetv2_CIFAR10.pt',
+                     '/home/shenghao/torch-deepimportance/models_info/saved_models/efficientnet_CIFAR10.pt']
+    
+    model_classes = {
+        'lenet': LeNet,
+        'vgg16': lambda: VGG('VGG16'),
+        'resnet18': ResNet18,
+        # 'googlenet': GoogLeNet,
+        'densenet': DenseNet121,
+        # 'resnext29': ResNeXt29_2x64d,
+        'mobilenetv2': MobileNetV2,
+        'shufflenetv2': lambda: ShuffleNetV2(1),
+        # 'senet': SENet18,
+        # 'preresnet': PreActResNet18,
+        # 'mobilenet': MobileNet,
+        # 'DPN92': DPN92,
+        'efficientnet': EfficientNetB0,
+        # 'regnet': RegNetX_200MF,
+        # 'simpledla': SimpleDLA,
+    }
+
+    for i, model_name in enumerate(model_classes):
+        model = model_classes[model_name]()
+
+        data_parallel_dict = torch.load(load_model_path[i])
+        new_state_dict = {}
+        for key, value in data_parallel_dict.items():
+            new_key = key.replace('module.', '')  # Remove 'module.' prefix
+            new_state_dict[new_key] = value    
+        
+        model.load_state_dict(new_state_dict)
+        torch.save(model, load_model_path[i].replace('.pt', '_whole.pth'))
+        print("Done with ", model_name)
+
+def imagenet_model_state2whole():
     # Hardcoded model names for now
-    offer_moder_name = ['lenet', 'custom', 
-                        'vgg16', 
+    offer_moder_name = ['vgg16', 
                         'convnext_base', 
                         'efficientnet_v2_s', 
                         'efficientnet_v2_m', 
@@ -509,34 +517,18 @@ def get_model(model_name='vgg16'):
                         'resnet152',
                         'resnext101_32x8d',
                         'vit_b_16']
-    module_name = []
-    module = []
-    # Check if model_name is in the list
-    if model_name in offer_moder_name:
-        if model_name == 'lenet':
-            model = LeNet()
-        elif model_name == 'custom':
-            model = Net()
-        else:
-            # Dynamically get the model function from torchvision.models
-            model_func = getattr(models, model_name)
-        
-            # Dynamically get the weights attribute for the model
-            # "IMAGENET1K_V2", "IMAGENET1K_V1"
-            model = model_func(weights="IMAGENET1K_V1")        
-            print(f"{model_name} model loaded with weights.")
-            
-    else:
-        raise(f"{model_name} not in the list of available models.")
-
-    # Alternatively, to get all submodule names (including nested ones)
-    for name, layer in model.named_modules():
-        module_name.append(name)
-        module.append(layer)
-
-    # trainable_module, trainable_module_name = get_trainable_modules_main(model)
     
-    return model, module_name, module
+     # Check if model_name is in the list
+    for model_name in offer_moder_name:
+        # Dynamically get the model function from torchvision.models
+        model_func = getattr(models, model_name)
+        
+        # Dynamically get the weights attribute for the model
+        # "IMAGENET1K_V2", "IMAGENET1K_V1"
+        model = model_func(weights="IMAGENET1K_V1")        
+        print(f"{model_name} model loaded with weights.")
+        torch.save(model, f"/home/shenghao/torch-deepimportance/models_info/saved_models/{model_name}_IMAGENET_whole.pth")
+        print("Done with ", model_name)
 
 def get_class_data(dataloader, classes, target_class):
     max_test_sample = 8000
@@ -557,6 +549,54 @@ def get_class_data(dataloader, classes, target_class):
         return torch.stack(filtered_data), torch.tensor(filtered_labels)
     else:
         return None, None
+
+def extract_class_to_dataloder(dataset, classes, batch_size=100):
+    class_indices = {i: [] for i in range(len(classes))}
+    
+    # Populate the dictionary with indices
+    for idx, (_, label) in enumerate(dataset):
+        class_indices[label].append(idx)
+    
+    ordered_indices = [idx for class_id in range(len(classes)) for idx in class_indices[class_id]]
+    ordered_subset = Subset(dataset, ordered_indices)
+    ordered_loader = DataLoader(ordered_subset, batch_size=batch_size, shuffle=False)
+    
+    return ordered_loader
+
+# Evaluate the model on the given dataloader and compute accuracy, loss, and F1 score.
+def test_model_dataloder(model, dataloader, device='cpu'):
+    model.eval()
+    running_loss = 0.0
+    all_labels = []
+    all_preds = []
+    from sklearn.metrics import f1_score
+    criterion = nn.CrossEntropyLoss()
+
+    with torch.no_grad():
+        for inputs, labels in dataloader:
+            inputs, labels = inputs.to(device), labels.to(device)
+
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            running_loss += loss.item() * inputs.size(0)
+
+            _, preds = torch.max(outputs, 1)
+
+            # Store labels and predictions for metric computation
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(preds.cpu().numpy())
+
+    # Compute average loss
+    avg_loss = running_loss / len(dataloader.dataset)
+
+    # Compute accuracy
+    correct_predictions = sum(p == t for p, t in zip(all_preds, all_labels))
+    accuracy = correct_predictions / len(all_labels)
+
+    # Compute F1 score
+    f1 = f1_score(all_labels, all_preds, average='weighted')
+
+    return accuracy, avg_loss, f1
 
 ## An end-to-end test for the model (randomly pickup a bunch of images)
 def test_random_class(test_dataset, test_all=False, num_samples=1000):
@@ -677,7 +717,6 @@ def test_selector_dataloader(root):
 if __name__ == '__main__':
     # unit test - model
     args = parse_args()
-    # train_loader, test_loader, test_dataset, classes = load_CIFAR(batch_size=32, root=args.data_path)
     # subset_loader, test_image, test_label = test_random_class(test_dataset, test_all=True, num_samples=1000)
     # trainloader, testloader, test_dataset, classes = load_ImageNet()
     # print("Classes: ", classes)
@@ -685,5 +724,7 @@ if __name__ == '__main__':
     # test_cifar_models()
     # test_selector_dataloader(root = args.data_path)
     # trainloader, testloader, c = load_COCO()
-
+    # model, module_name, module = get_model('/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth')
+    # print(model)
+    # print(module)
     

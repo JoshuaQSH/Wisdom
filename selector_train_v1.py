@@ -18,7 +18,7 @@ from prepare_selector_data import get_layer_info, extract_features, CustomDatase
 src_path = Path(__file__).resolve().parent / "src"
 sys.path.append(str(src_path))
 
-from utils import parse_args, normalize_tensor, get_model, get_model_cifar, get_trainable_modules_main, save_model, Logger
+from utils import parse_args, normalize_tensor, get_model, get_trainable_modules_main, save_model, Logger
 
 class Selector(nn.Module):
     def __init__(self, input_size, output_size, hidden_sizes):
@@ -51,10 +51,6 @@ class Selector(nn.Module):
     
     def forward(self, x):
         return self.model(x)
-
-def save_model(model, model_name):
-    torch.save(model.state_dict(), model_name + '.pt')
-    print("Model saved as", model_name + '.pt')
             
 def string_to_one_hot(attribution_methods, string_labels):
     method_to_idx = {method: idx for idx, method in enumerate(attribution_methods)}
@@ -67,41 +63,33 @@ def load_dataset(csv_file='prepared_data.csv', attributions=['lfa', 'ldl'], batc
     return dataloader
 
 def prapared_parameters(args):
+    
     ### Logger settings
     if args.logging:
         start_time = int(round(time.time()*1000))
         timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
-        saved_log_name = args.log_path + 'Selector-{}-{}-L{}-{}.log'.format(args.model, args.dataset, args.layer_index, timestamp)
+        saved_log_name = args.log_path + '-{}-{}-{}-{}.log'.format(args.model, args.dataset, args.layer_index, timestamp)
+        
+        # saved_log_name = args.log_path + 'End2endIDC-{}-{}-{}-{}.log'.format(args.model, args.dataset, args.test_image, timestamp)
         log = Logger(saved_log_name, level='debug')
-        log.logger.debug("[=== Model: {}, Dataset: {}, Layers_Index: {}, TopK: {} ==]".format(args.model, args.dataset, args.layer_index, args.top_m_neurons))
+        log.logger.debug("[=== Model: {}, Dataset: {}, Layers_Index: {}, Topk: {} ==]".format(args.model, args.dataset, args.layer_index, args.top_m_neurons))
     else:
         log = None
-    
+        
     ### Model settings
-    if args.model_path != 'None':
-        model_path = args.model_path
-    else:
-        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/'
-    model_path += args.saved_model
+    model_path = os.getenv("HOME") + args.saved_model
     
-    ## Loading models - either 1) from scratch or 2) pretrained
-    if args.dataset == 'cifar10' and args.model != 'lenet':
-        model, module_name, module = get_model_cifar(model_name=args.model, load_model_path=model_path)
-    else:
-        # We aussume that the SOTA models are pretrained with IMAGENET
-        model, module_name, module = get_model(model_name=args.model)
-    
-    # TODO: A Hack here for model loading
-    model.load_state_dict(torch.load(model_path))
-    selector_model = copy.deepcopy(model)
+    ### Model loading
+    model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
+    selector_model = copy.deepcopy(model)
     
     ### Device settings    
     if torch.cuda.is_available() and args.device != 'cpu':
         device = torch.device(args.device)
     else:
         device = torch.device("cpu")
-
+    
     return model, selector_model, module_name, module, trainable_module, trainable_module_name, device, log
 
 

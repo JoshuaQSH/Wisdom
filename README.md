@@ -78,6 +78,81 @@ $ python selector_pred_v1.py --dataset cifar10 --batch-size 2 --layer-index 2 --
 - `src`: The source files, including the idc implementations and the attribution methods (torch/captum)
 - `examples`: Small examples (stand-alone) to test captum
 
+## Parameters
+```shell
+# UC1 - Running IDC test with different attribution methods
+python run.py \
+      --model <model-name> \
+      --saved-model <path-to-the-pretrained-pt-file> \
+      --dataset <dataset-name> \
+      --data-path <path-to-dataset> \
+      --importance-file <path-to-save-importance-file-json> \
+      --device cpu \
+      # --use-silhouette \
+      --n-cluster 2 \ 
+      --top-m-neurons 5 \
+      --test-image plane \
+      # --idc-test-all \
+      --num-samples 1000 \
+      --attr lrp \
+      --layer-index 1 \
+      # --layer-by-layer \
+      # --end2end \
+      # --all-class \
+      --log-path './logs/TestLog' \
+      --logging
+
+# Clustering, choose one
+--use-silhouette # dynamic choose the cluster number
+--n-cluster N # fixed cluster number
+
+# Sampling test images
+--num-sample N # Randomly pick N samples
+--idc-test-all # Choose all the image in one batch
+
+# Choose one or none:
+--layer-by-layer # Looping all the layer on a specific class
+--end2end # End2End test
+--all-class # Test all the class with a given layer
+
+# Logging
+--log-path  '<path>/<name>' # log file path and name: e.g., './logs/TestLog'
+--logging # Save the log file
+
+# An LeNet Example
+python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --use-silhouette --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --all-attr --log-path './logs/TestLog' --logging
+
+# A VGG16 example - cifar10
+# attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
+python run.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/vgg16_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 50 --test-image plane --idc-test-all --num-samples 0  --attr lrp --end2end --layer-index 1 --log-path './logs/TestLog' --logging
+
+# A VGG16 example - ImageNet
+python run.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/vgg16_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
+
+# mobilenetv2_CIFAR10_whole
+python run.py --model mobilenetv2 --saved-model '/torch-deepimportance/models_info/saved_models/mobilenetv2_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/densenet_impotant.json' --use-silhouette --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 3
+
+
+# UC-2 Selector
+## Prepare selector data
+python prepare_selector_data.py \
+        --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' \
+        --dataset cifar10 \
+        --batch-size 256 \
+        --layer-index 5 \
+        --model vgg16 \
+        --top-m-neurons 10 \
+        --n-clusters 2 \
+        --log-path './logs/PrepareDataLog' \
+        --logging
+
+## Prediction - lenet
+python selector_pred_v1.py --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --batch-size 256 --layer-index 2 --model lenet --top-m-neurons 10 --all-class
+
+## Prediction
+python selector_pred_v1.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 256 --layer-index 2 --model vgg16 --top-m-neurons 10 --all-class
+```
+
 ## Docker
 
 See `Docker` with the `Dockerfile`

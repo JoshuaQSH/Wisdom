@@ -19,9 +19,8 @@ from captum.metrics import infidelity_perturb_func_decorator, infidelity
 src_path = Path(__file__).resolve().parent / "src"
 sys.path.append(str(src_path))
 
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_model_cifar, get_trainable_modules_main, get_layer_by_name, test_random_class, Logger
+from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, test_model_dataloder, test_random_class, Logger
 from attribution import get_relevance_scores, get_relevance_scores_for_all_layers, get_relevance_scores_for_all_classes
-from visualization import visualize_activation, plot_cluster_infos, visualize_idc_scores
 from idc import IDC
 
 def load_importance_scores(filename):
@@ -49,31 +48,25 @@ if __name__ == '__main__':
     if args.logging:
         start_time = int(round(time.time()*1000))
         timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
-        saved_log_name = args.log_path + 'End2endIDC-{}-{}-{}-{}.log'.format(args.model, args.dataset, args.test_image, timestamp)
+        saved_log_name = args.log_path + '-{}-{}-{}.log'.format(args.model, args.dataset, timestamp)
+        
+        # saved_log_name = args.log_path + 'End2endIDC-{}-{}-{}-{}.log'.format(args.model, args.dataset, args.test_image, timestamp)
         log = Logger(saved_log_name, level='debug')
         log.logger.debug("[=== Model: {}, Dataset: {}, Layers_Index: {}, Topk: {} ==]".format(args.model, args.dataset, args.layer_index, args.top_m_neurons))
     else:
         log = None
     
     ### Model settings
-    if args.model_path != 'None':
-        model_path = args.model_path
-    # A hack here for debugging    
-    elif args.dataset == 'cifar10' and args.model == 'lenet':
-        args.model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/'
-        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/'
-    else:
-        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/'
-    model_path += args.saved_model
+    model_path = os.getenv("HOME") + args.saved_model
     
     ### Dataset settings
     if args.dataset == 'cifar10':
-        trainloader, testloader, test_dataset, classes = load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
+        trainloader, testloader, train_dataset, test_dataset, classes = load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
     elif args.dataset == 'mnist':
-        trainloader, testloader, test_dataset, classes = load_MNIST(batch_size=args.batch_size, root=args.data_path)
+        trainloader, testloader, train_dataset, test_dataset, classes = load_MNIST(batch_size=args.batch_size, root=args.data_path)
     elif args.dataset == 'imagenet':
         # batch_size=32, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False
-        trainloader, testloader, test_dataset, classes = load_ImageNet(batch_size=args.batch_size, 
+        trainloader, testloader, train_dataset, test_dataset, classes = load_ImageNet(batch_size=args.batch_size, 
                                                          root=args.data_path + '/ImageNet', 
                                                          num_workers=2, 
                                                          use_val=False)
@@ -86,21 +79,19 @@ if __name__ == '__main__':
     else:
         device = torch.device("cpu")
     
-    if args.dataset == 'cifar10' and args.model != 'lenet':
-        model, module_name, module = get_model_cifar(model_name=args.model, load_model_path=model_path)
-    else:
-        # We aussume that the SOTA models are pretrained with IMAGENET
-        model, module_name, module = get_model(model_name=args.model)
-
-    if args.dataset == 'mnist' and args.model == 'lenet':
-        model.conv1 = torch.nn.Conv2d(1, 6, 5)
-        model.fc1 = torch.nn.Linear(16 * 16, 120)
-    # For one of the testing demo, we provide the pretrained LeNet5 with CIFAR10    
-    if args.model_path != 'None' and args.model == 'lenet':
-        model.load_state_dict(torch.load(model_path))
-
+    ### Model loading
+    model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
-
+    
+    ### Model evaluation
+    accuracy, avg_loss, f1 = test_model_dataloder(model, testloader, device)
+    if log:
+        log.logger.info("Model test Acc: {}, Loss: {}, F1 Score: {}".format(accuracy, avg_loss, f1))
+        log.logger.info("Test Model Layer: {}".format(trainable_module[args.layer_index]))
+    else:
+        print("Model test Acc: {}, Loss: {}, F1 Score: {}".format(accuracy, avg_loss, f1))
+        print("Test Model Layer: {}".format(trainable_module[args.layer_index]))
+    
     ### Task 1: Data and Model Preparation
     if args.all_class:
         images, labels = None, None
@@ -115,6 +106,7 @@ if __name__ == '__main__':
     else:
         if args.layer_by_layer and not args.end2end:
             # for name in module_name[1:]:
+            print("Looping all the layers for Class: {}".format(args.test_image))
             for i, name in enumerate(trainable_module_name):
                 attribution, mean_attribution = get_relevance_scores(model, images, labels, classes,
                                                                       net_layer=trainable_module[i],
@@ -126,11 +118,11 @@ if __name__ == '__main__':
                 print("{} Saved".format(filename))
        
         elif args.end2end:
-            print("Relevance scores for all layers obtained.")
+            print("Relevance scores for all layers.")
             attribution = get_relevance_scores_for_all_layers(model, images, labels, attribution_method=args.attr)
         
         elif args.all_class:
-            print("Relevance scores for all classes obtained.")
+            print("Relevance scores for all classes.")
             # model, dataloader, net_layer, layer_name='fc1', attribution_method='lrp'
             mean_attribution = get_relevance_scores_for_all_classes(model, trainloader, 
                                                                net_layer=trainable_module[args.layer_index],
@@ -138,14 +130,16 @@ if __name__ == '__main__':
                                                                attribution_method=args.attr)
 
         else:
-            print("Relevance scores for the selected layer (and class) obtained.")
+            print("Relevance scores for Layer: {} and Class {}".format(trainable_module_name[args.layer_index], args.test_image))
             attribution, mean_attribution = get_relevance_scores(model, images, labels, classes,
                                                                   net_layer=trainable_module[args.layer_index],
                                                                   layer_name=trainable_module_name[args.layer_index], 
                                                                   top_m_images=-1, attribution_method=args.attr)
-            # save_importance_scores(attribution, mean_attribution, args.importance_file, args.test_image)
+            filename = args.importance_file.replace('.json', f'{trainable_module_name[args.layer_index]}_{args.test_image}.json')
+            save_importance_scores(attribution, mean_attribution, filename, args.test_image)
+            print("{} Saved".format(filename))
 
-    if args.all_class:
+    if args.num_samples != 0:
         # Sample the testset data for the IDC coverage
         subset_loader, test_images, test_labels = test_random_class(test_dataset, test_all=args.idc_test_all, num_samples=args.num_samples)
     else:
@@ -177,52 +171,35 @@ if __name__ == '__main__':
         kmeans_comb = idc.cluster_activation_values(selected_activations, trainable_module[args.layer_index])
     print("Activation values clustered.")
 
-    ### Evaluate the attribution methods
-    if args.vis_attributions:
-        # List of available attribution methods
-        attribution_methods = [
-            'lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 
-            'ldls', 'lgs', 'lig', 'lfa', 'lrp'
-        ]
-        idc.evaluate_attribution_methods(
-                                    test_images, 
-                                    test_labels, 
-                                    kmeans_comb, 
-                                    module_name[args.layer_index], 
-                                    attribution_methods)
-    
-    else:
-        ### Compute IDC coverage
-        # End to end testing for the whole model
-        if args.end2end:
-            unique_cluster, coverage_rate = idc.compute_idc_test_whole(test_images, 
-                            test_labels,
-                            important_neuron_indices,
-                            kmeans_comb,
-                            args.attr)
-            if log:
-                log.logger.info("Class: {}".format(args.test_image))
-                log.logger.info("Testing Samples: {}, IDC Coverage: {}, Attribution: {}".format(len(test_images), coverage_rate, args.attr))
-            else:
-                print("Number of Testing Samples: {}".format(len(test_images)))
-
+    ### Task 2-3: Compute IDC coverage
+    if args.end2end:
+        unique_cluster, coverage_rate = idc.compute_idc_test_whole(test_images, 
+                        test_labels,
+                        important_neuron_indices,
+                        kmeans_comb,
+                        args.attr)
+        if log:
+            log.logger.info("Class: {}".format(args.test_image))
+            log.logger.info("Testing Samples: {}, IDC Coverage: {}, Attribution: {}".format(len(test_images), coverage_rate, args.attr))
         else:
-            # Test the specific layer
-            # inputs_images, labels, indices, kmeans, net_layer, layer_name, attribution_method='lrp'
-            unique_cluster, coverage_rate = idc.compute_idc_test(inputs_images=test_images, 
-                                                                 labels=test_labels,
-                                                                 indices=important_neuron_indices, 
-                                                                 kmeans=kmeans_comb,
-                                                                 net_layer=trainable_module[args.layer_index],
-                                                                 layer_name=trainable_module_name[args.layer_index],
-                                                                 attribution_method=args.attr)
+            print("Number of Testing Samples: {}".format(len(test_images)))
+
+    else:
+        # inputs_images, labels, indices, kmeans, net_layer, layer_name, attribution_method='lrp'
+        unique_cluster, coverage_rate = idc.compute_idc_test(inputs_images=test_images, 
+                                                                labels=test_labels,
+                                                                indices=important_neuron_indices, 
+                                                                kmeans=kmeans_comb,
+                                                                net_layer=trainable_module[args.layer_index],
+                                                                layer_name=trainable_module_name[args.layer_index],
+                                                                attribution_method=args.attr)
         
-            if log:
-                log.logger.info("Testing Samples: {}, Layner Name:{}, IDC Coverage: {}, Attribution: {}".format(len(test_images), 
-                                                                                                                trainable_module_name[args.layer_index], 
-                                                                                                                coverage_rate, args.attr))
-            else:
-                print("Testing Samples: {}, Layner Name:{}".format(len(test_images), trainable_module_name[args.layer_index]))
+        if log:
+            log.logger.info("Testing Samples: {}, Layner Name:{}, IDC Coverage: {}, Attribution: {}".format(len(test_images), 
+                                                                                                            trainable_module_name[args.layer_index], 
+                                                                                                            coverage_rate, args.attr))
+        else:
+            print("Testing Samples: {}, Layner Name:{}".format(len(test_images), trainable_module_name[args.layer_index]))
     
     ### Infidelity metric
     # infid = infidelity_metric(net, perturb_fn, images, attribution)

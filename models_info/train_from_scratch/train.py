@@ -116,13 +116,17 @@ optimizer = optim.SGD(net.parameters(), lr=args.lr,
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
 
+# Save the torch (DNN) model
 def save_model(model, model_name):
     torch.save(model.state_dict(), model_name + '.pt')
-    print("Model saved as", model_name + '.pt')
+    torch.save(model, model_name + '_whole.pth')
+    print("Model state saved as", model_name + '.pt')
+    print("Whole model saved as", model_name + '_whole.pth')
 
-def load_model(model_class, model_path):
-    model = model_class()
+    
+def load_model(model, model_path):
     model.load_state_dict(torch.load(model_path))
+    breakpoint()
     model.eval()  # Set the model to evaluation mode
     print("Model loaded from", model_path)
     return model
@@ -182,14 +186,14 @@ def test(epoch, model_name):
         }
         if not os.path.isdir('checkpoint'):
             os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt_vgg.pth')
+        torch.save(state, './checkpoint/ckpt.pth')
         best_acc = acc
 
         save_model(net, model_name + '_' + 'CIFAR10-new-2')
-        load_model(net, model_name + '_' + 'CIFAR10-new-2')
+        load_model(net, model_name + '_' + 'CIFAR10-new-2.pt')
         log.logger.info("Epoch: {}, Acc: {}".format(epoch, acc))
 
-for epoch in range(start_epoch, start_epoch+100):
+for epoch in range(start_epoch, start_epoch+200):
     train(epoch)
     test(epoch, model_name=args.model)
     scheduler.step()

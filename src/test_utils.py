@@ -23,8 +23,7 @@ class UtilsTests(unittest.TestCase):
     def test_default_args(self):
         args = self.parser
         self.assertEqual(args.model, 'lenet')
-        self.assertEqual(args.model_path, 'None')
-        self.assertEqual(args.saved_model, 'lenet_cifar10.pt')
+        self.assertEqual(args.saved_model, 'lenet_CIFAR10.pth')
         self.assertEqual(args.dataset, 'cifar10')
         self.assertEqual(args.data_path, '/data/shenghao/dataset/')
         self.assertEqual(args.importance_file, './saved_files/plane_lenet_importance.json')
@@ -34,27 +33,24 @@ class UtilsTests(unittest.TestCase):
         self.assertFalse(args.random_prune)
         self.assertFalse(args.use_silhouette)
         self.assertEqual(args.n_clusters, 2)
-        self.assertFalse(args.cluster_scores)
         self.assertEqual(args.top_m_neurons, 5)
         self.assertEqual(args.batch_size, 256)
         self.assertEqual(args.test_image, 'plane')
-        self.assertFalse(args.test_all)
         self.assertFalse(args.all_class)
         self.assertFalse(args.idc_test_all)
-        self.assertEqual(args.num_samples, 1000)
+        self.assertEqual(args.num_samples, 0)
         self.assertEqual(args.attr, 'lc')
         self.assertEqual(args.layer_index, 1)
-        self.assertFalse(args.all_attr)
         self.assertFalse(args.layer_by_layer)
         self.assertFalse(args.end2end)
-        self.assertFalse(args.vis_attributions)
-        self.assertFalse(args.viz)
+        # self.assertFalse(args.vis_attributions)
+        # self.assertFalse(args.viz)
         self.assertFalse(args.logging)
-        self.assertEqual(args.log_path, './logs/')
+        self.assertEqual(args.log_path, './logs/TestLog')
     
     def test_model_load_cv(self):
         args = self.parser
-        offer_model_name = ['vgg16', 'lenet',
+        offer_model_name = ['vgg16',
                             'convnext_base', 
                             'efficientnet_v2_s', 
                             'efficientnet_v2_m', 
@@ -68,7 +64,8 @@ class UtilsTests(unittest.TestCase):
                             'vit_b_16']
         # offer_model_name = ['mobilenet_v3_small', 'efficientnet_v2_s', 'convnext_base']
         for model_name in offer_model_name:
-            model, module_name, module = utils.get_model(model_name=model_name)
+            load_model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/{}_IMAGENET_whole.pth'.format(model_name)
+            model, module_name, module = utils.get_model(load_model_path=load_model_path)
             print(model_name, len(module_name))
             # print(model_name, module_name)
             total_params = sum(p.numel() for p in model.parameters())
@@ -147,9 +144,9 @@ class UtilsTests(unittest.TestCase):
     def test_dynamic_clustering_idc_all_layers(self):
         args = self.parser
         args.test_image = 'horse'
-        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/lenet_cifar10.pt'
+        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth'
         trainloader, testloader, test_dataset, classes = utils.load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
-        model, module_name, module = utils.get_model_cifar(model_name='lenet', load_model_path=model_path)
+        model, module_name, module = utils.get_model(load_model_path=model_path)
         trainable_module, trainable_module_name = utils.get_trainable_modules_main(model)
         test_image, test_label = utils.get_class_data(testloader, classes, args.test_image)
         images, labels = utils.get_class_data(trainloader, classes, args.test_image)

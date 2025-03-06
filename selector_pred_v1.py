@@ -10,7 +10,7 @@ import torch
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
-from prepare_selector_data import get_layer_info, extract_features, test_model
+from prepare_selector_data import get_layer_info, extract_features, test_model, test_model_dataloder
 from selector_train_v1 import Selector, load_dataset
 
 # Add src directory to sys.path
@@ -20,44 +20,37 @@ sys.path.append(str(src_path))
 from idc import IDC
 from pruning_methods import prune_neurons, ramdon_prune
 from attribution import get_relevance_scores
-from utils import parse_args, normalize_tensor, load_CIFAR, get_model, get_model_cifar, get_class_data, get_trainable_modules_main, test_random_class, save_json, load_json, Logger
+from utils import parse_args, normalize_tensor, load_CIFAR, get_model, get_class_data, get_trainable_modules_main, test_random_class, save_json, load_json, Logger
 from visualization import plot_common_neurons_rate
 
-def prapared_parameters(args):
+def prapared_parameters(args, selector_path='./models_info/saved_models/selector_lenet_h3_2.pt'):
+            
     ### Logger settings
     if args.logging:
         start_time = int(round(time.time()*1000))
         timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
-        saved_log_name = args.log_path + 'SelectorPredTest-{}-{}-L{}-{}.log'.format(args.model, args.dataset, args.layer_index, timestamp)
+        saved_log_name = args.log_path + '-{}-{}-{}-{}.log'.format(args.model, args.dataset, args.layer_index, timestamp)
+        # saved_log_name = args.log_path + 'End2endIDC-{}-{}-{}-{}.log'.format(args.model, args.dataset, args.test_image, timestamp)
         log = Logger(saved_log_name, level='debug')
-        log.logger.debug("[=== Model: {}, Dataset: {}, Layers_Index: {}, TopK: {} ==]".format(args.model, args.dataset, args.layer_index, args.top_m_neurons))
+        log.logger.debug("[=== Model: {}, Dataset: {}, Layers_Index: {}, Topk: {} ==]".format(args.model, args.dataset, args.layer_index, args.top_m_neurons))
     else:
         log = None
     
     ### Model settings
-    if args.model_path != 'None':
-        model_path = args.model_path
-    else:
-        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/'
-    model_path += args.saved_model
+    model_path = os.getenv("HOME") + args.saved_model
     
-    ## Loading models - either 1) from scratch or 2) pretrained
-    if args.dataset == 'cifar10' and args.model != 'lenet':
-        model, module_name, module = get_model_cifar(model_name=args.model, load_model_path=model_path)
-    else:
-        # We aussume that the SOTA models are pretrained with IMAGENET
-        model, module_name, module = get_model(model_name=args.model)
-    
-    # TODO: A Hack here for model loading
-    model.load_state_dict(torch.load(model_path))
+    ### Model loading
+    model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
 
-    selector_path = 'selector_lenet_h3_2.pt'
     layer_info = get_layer_info(trainable_module_name[args.layer_index], trainable_module_name)
     attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
     classes = ('plane', 'car', 'bird', 'cat',
             'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
     num_out = len(attributions)
+    
+    # selector_model = torch.load(selector_path)
+    
     selector_model = Selector(trainable_module[-1].in_features+layer_info.shape[0], num_out, [256, 128, 64])
     selector_model.load_state_dict(torch.load(selector_path))
 
@@ -200,8 +193,15 @@ if __name__ == '__main__':
     original_state = copy.deepcopy(model.state_dict())
     load_file = './saved_files/prepared_data_test_cifar.csv'
     testloader = load_dataset(load_file, attributions, args.batch_size)    
-    trainloader_cifar, testloader_cifar, test_dataset_cifar, classes = load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
+    trainloader_cifar, testloader_cifar, train_dataset_cifar, test_dataset_cifar, classes = load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
+    acc, loss, f1 = test_model_dataloder(model, testloader_cifar)
 
+    if log is not None:
+        log.logger.info("Model test Acc: {}, Loss: {}, F1 Score: {}".format(acc, loss, f1))            
+    else:
+        print("Model test Acc: {}, Loss: {}, F1 Score: {}".format(acc, loss, f1))            
+
+    breakpoint()
     ### Step - 0: IDC Setup
     idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class)
     saved_pred_file = './logs/predit_info_h3.json'

@@ -5,7 +5,11 @@ import glob
 import numpy as np
 import ast
 
+from collections import defaultdict
+
 markers = ['.', 'p', 'o', 'v', '^', '<', '>', '1', '2', '3', '4', '8', 's', 'p', 'P', '*', 'h', 'H', '+', 'x', 'X', 'D', 'd', '|', '_']
+color_Z = ['#ECDFFF', '#D4C4EE', '#BDAADE', '#A690CF', '#8E78BF', '#8C75BC', '#6A579C']
+color_B = ['#d2dee5', '##bdcbd7' '#b7d3dd', '#99b4cc', '#82a4ca']
 
 # Function to parse the log file
 def parse_log_file(log_file):
@@ -284,10 +288,200 @@ def plot_main(plot_all=False, log_file=None, plot_type='neuron'):
         else:
             raise ValueError("Invalid plot type")
 
+def analyze_preparedata_log_file(log_file_path):
+    """
+    Parse the log file and return four data structures:
+
+    1) label_method_rates:    Dict of { (label-method) : rate } or nested dict { label: {method: rate} }
+    2) layer_method_rates:    Dict of { (layer-method) : rate } or nested dict { layer: {method: rate} }
+    3) label_common_neurons:  Dict { label: list_of_neuron_lists }
+    4) layer_common_neurons:  Dict { layer: list_of_neuron_lists }
+    """
+
+    # Counters for how many times each (label, method) occurs
+    label_method_counts = defaultdict(int)
+    # Keep track of how many times each label appears
+    label_counts = defaultdict(int)
+
+    # Same for layers
+    layer_method_counts = defaultdict(int)
+    layer_counts = defaultdict(int)
+
+    # For storing common-neuron lists
+    label_common_neurons = defaultdict(list)
+    layer_common_neurons = defaultdict(list)
+
+    # Regex to identify lines
+    layer_regex = re.compile(
+        r"Layer:\s*(\S+),\s*Common Neurons:\s*(.*)"
+    )
+    label_regex = re.compile(
+        r"Label:\s*(\S+),\s*Optimal method:\s*([a-zA-Z0-9]+)"
+    )
+
+    current_layer = None
+    current_common_neurons = None
+
+    with open(log_file_path, "r") as f:
+        for line in f:
+            line = line.strip()
+
+            # 1) Check if it is a Layer line
+            m_layer = layer_regex.search(line)
+            if m_layer:
+                # Example: "Layer: features.10, Common Neurons: [114]"
+                current_layer = m_layer.group(1)  # e.g. 'features.10'
+                # Parse the bracketed neuron list. We can safely eval or parse ourselves:
+                # e.g. "[32]", "[212]", "[17, 22]", etc.
+                neuron_str = m_layer.group(2).strip()
+                # If it's something like '[]', we want an empty list
+                try:
+                    current_common_neurons = eval(neuron_str)
+                except:
+                    current_common_neurons = []
+                continue
+
+            # 2) Check if it is a Label line
+            m_label = label_regex.search(line)
+            if m_label:
+                # Example: "Label: plane, Optimal method: lrp, Accuracy drop..."
+                label = m_label.group(1)   # e.g. 'plane'
+                method = m_label.group(2)  # e.g. 'lrp'
+
+                # We only record these if we have a current_layer set (from the most recent "Layer: ..." line).
+                if current_layer is not None:
+                    # Update counters for label->method
+                    label_method_counts[(label, method)] += 1
+                    label_counts[label] += 1
+
+                    # Update counters for layer->method
+                    layer_method_counts[(current_layer, method)] += 1
+                    layer_counts[current_layer] += 1
+
+                    # Store common neurons
+                    label_common_neurons[label].append(current_common_neurons)
+                    layer_common_neurons[current_layer].append(current_common_neurons)
+
+                continue
+
+    # Compute rates from the raw counts
+    label_method_rates = {}
+    for (label, method), count in label_method_counts.items():
+        total_for_label = label_counts[label]
+        if total_for_label > 0:
+            rate = count / float(total_for_label)
+        else:
+            rate = 0.0
+        label_method_rates[(label, method)] = rate
+
+    layer_method_rates = {}
+    for (layer, method), count in layer_method_counts.items():
+        total_for_layer = layer_counts[layer]
+        if total_for_layer > 0:
+            rate = count / float(total_for_layer)
+        else:
+            rate = 0.0
+        layer_method_rates[(layer, method)] = rate
+
+    return label_method_rates, layer_method_rates, label_common_neurons, layer_common_neurons
+
+
+def visualize_preparedata_results(label_method_rates, layer_method_rates,
+                      label_common_neurons, layer_common_neurons):
+    """
+    Provide simple visualizations:
+      1) Bar chart of method rates by label
+      2) Bar chart of method rates by layer
+      3) Textual listing of common neurons by label
+      4) Textual listing of common neurons by layer
+    """
+
+    # 1) Visualize method rates by label
+    #    We'll turn label_method_rates (label,method)->rate into a nested structure for plotting:
+    from collections import defaultdict
+
+    # Collect methods per label
+    label_to_methods_rates = defaultdict(dict)
+    for (label, method), rate in label_method_rates.items():
+        label_to_methods_rates[label][method] = rate
+
+    # One simple approach is to pick each label and plot a bar for the methods
+    fig, axes = plt.subplots(nrows=1, ncols=len(label_to_methods_rates), figsize=(5*len(label_to_methods_rates), 4))
+    if len(label_to_methods_rates) == 1:
+        axes = [axes]  # If there's only one label, make it iterable
+
+    for ax, (label, method_dict) in zip(axes, label_to_methods_rates.items()):
+        methods = list(method_dict.keys())
+        rates = list(method_dict.values())
+        ax.bar(methods, rates, color=color_Z[2])
+        ax.set_ylim([0, 1])
+        ax.set_title(f"Label: {label}")
+        ax.set_xlabel("Method")
+        ax.set_ylabel("Rate")
+
+    plt.tight_layout()
+    plt.savefig("label_method_rates.pdf", format='pdf', dpi=1200)
+
+    # 2) Visualize method rates by layer
+    #    Similarly, layer_method_rates -> (layer,method)->rate
+    layer_to_methods_rates = defaultdict(dict)
+    for (layer, method), rate in layer_method_rates.items():
+        layer_to_methods_rates[layer][method] = rate
+
+    fig, axes = plt.subplots(nrows=1, ncols=len(layer_to_methods_rates), figsize=(5*len(layer_to_methods_rates), 4))
+    if len(layer_to_methods_rates) == 1:
+        axes = [axes]
+
+    for ax, (layer, method_dict) in zip(axes, layer_to_methods_rates.items()):
+        methods = list(method_dict.keys())
+        rates = list(method_dict.values())
+        ax.bar(methods, rates, color=color_B[2])
+        ax.set_ylim([0, 1])
+        ax.set_title(f"Layer: {layer}")
+        ax.set_xlabel("Method")
+        ax.set_ylabel("Rate")
+
+    plt.tight_layout()
+    plt.savefig("layer_method_rates.pdf", format='pdf', dpi=1200)
+
+    # 3) Textual listing of common neurons by label
+    fig, axes = plt.subplots(nrows=1, ncols=len(label_common_neurons), figsize=(6*len(label_common_neurons), 4))
+    if len(label_common_neurons) == 1:
+        axes = [axes]
+
+    for ax, (label, neuron_lists) in zip(axes, label_common_neurons.items()):
+        lengths = [len(nlist) for nlist in neuron_lists]
+        ax.bar(range(len(lengths)), lengths, color=color_Z[3])
+        ax.set_title(f"Common Neuron Counts\nLabel: {label}")
+        ax.set_xlabel("Occurrence")
+        ax.set_ylabel("Number of Common Neurons")
+
+    plt.tight_layout()
+    plt.savefig("label_common_neurons.pdf", format='pdf', dpi=1200)
+
+    # 4) Bar charts of the number of common neurons by layer
+    fig, axes = plt.subplots(nrows=1, ncols=len(layer_common_neurons), figsize=(6*len(layer_common_neurons), 4))
+    if len(layer_common_neurons) == 1:
+        axes = [axes]
+
+    for ax, (layer, neuron_lists) in zip(axes, layer_common_neurons.items()):
+        lengths = [len(nlist) for nlist in neuron_lists]
+        ax.bar(range(len(lengths)), lengths, color=color_Z[3])
+        ax.set_title(f"Common Neuron Counts\nLayer: {layer}")
+        ax.set_xlabel("Occurrence")
+        ax.set_ylabel("Number of Common Neurons")
+
+    plt.tight_layout()
+    plt.savefig("layer_common_neurons.pdf", format='pdf', dpi=1200)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--log-file', type=str, default='AttriTest-lenet-cifar10-20241123-222131.log', help='Path to the log file')
     parser.add_argument('--plot-all', action='store_true', help='Plot all log files')
     parser.add_argument('--plot-type', type=str, default='accuracy', choices=['neuron', 'acc'], help='Ploting type for the log file')
     args = parser.parse_args()
-    plot_main(plot_all=args.plot_all, log_file=args.log_file, plot_type=args.plot_type)
+    # plot_main(plot_all=args.plot_all, log_file=args.log_file, plot_type=args.plot_type)
+    
+    log_file_path = "PrepareTestTrainLayerLog-vgg16-cifar10-5-20250226-103933.log"
+    label_method_rates, layer_method_rates, label_common_neurons, layer_common_neurons = analyze_preparedata_log_file(log_file_path)
+    visualize_preparedata_results(label_method_rates, layer_method_rates, label_common_neurons, layer_common_neurons)
