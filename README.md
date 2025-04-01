@@ -1,5 +1,7 @@
 # Torch4DeepImportance
 
+WARNING: This is the old version of torch-deepimportance and will be depreciated soon
+
 A pytorch version for Deepimportance (test version). [TensorFlow version for DeepImportance](https://github.com/DeepImportance/deepimportance_code_release/tree/ga_modifications). 
 
 For the paper, please refer [HERE](https://zenodo.org/records/3628024).
@@ -8,7 +10,7 @@ A Captum lib added.
 
 ## How to run (Captum version)
 
-The Captum version demo is tested and should be fine for further developments. After installing the prerequest libs with `pip`, please go to `captum_demo` for more details.
+The Captum version demo is tested and should be fine for further developments. 
 
 Use `conda` or `pyvenv` to build a virtual environment.
 
