@@ -91,7 +91,7 @@ def get_relevance_scores_for_all_classes(model, dataloader, net_layer, layer_nam
     mean_attribution = total_attribution / num_samples
     return mean_attribution
 
-# TODO: Implement the function to get the relevance scores for all layers [Require testing]
+# TODO: Implement the function to get the relevance scores for all layers [Require testing], should ingore the last layer
 def get_relevance_scores_for_all_layers(model, images, labels, attribution_method='lrp'):
     model.eval()
     layer_relevance_scores = {}
@@ -115,5 +115,4 @@ def get_relevance_scores_for_all_layers(model, images, labels, attribution_metho
 
             mean_relevance = torch.mean(relevance, dim=0)
             layer_relevance_scores[name] = mean_relevance
-
     return layer_relevance_scores

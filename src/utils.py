@@ -58,7 +58,7 @@ class Logger(object):
         th.setFormatter(format_str)
         self.logger.addHandler(sh) 
         self.logger.addHandler(th)
-
+    
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='lenet', help='Model to use for training.')

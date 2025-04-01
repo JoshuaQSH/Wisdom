@@ -5,14 +5,7 @@ import time
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
-from captum.attr import IntegratedGradients
-from captum.attr import Saliency
-from captum.attr import DeepLift
-from captum.attr import NoiseTunnel
-from captum.attr import NeuronConductance
 from captum.attr import visualization as viz
-from captum.attr import LayerConductance, LayerActivation, InternalInfluence, LayerGradientXActivation, LayerGradCam, LayerDeepLift, LayerDeepLiftShap, LayerGradientShap, LayerIntegratedGradients, LayerFeatureAblation, LayerLRP
 from captum.metrics import infidelity_perturb_func_decorator, infidelity
 
 # Add src directory to sys.path
@@ -24,9 +17,16 @@ from attribution import get_relevance_scores, get_relevance_scores_for_all_layer
 from idc import IDC
 
 def load_importance_scores(filename):
-    with open(filename, 'r') as f:
-        data = json.load(f)
-    return torch.tensor(data["importance_scores"]), torch.tensor(data["mean_importance"]), data["class_label"]
+    try:
+        with open(filename, 'r') as f:
+            data = json.load(f)
+        return torch.tensor(data["importance_scores"]), torch.tensor(data["mean_importance"]), data["class_label"]
+    except FileNotFoundError:
+        print(f"Error: File {filename} not found.")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print(f"Error: Failed to parse JSON in {filename}.")
+        sys.exit(1)
 
 def save_importance_scores(importance_scores, mean_importance, filename, class_label):
     scores = importance_scores.cpu().detach().numpy().tolist()
@@ -40,6 +40,19 @@ def save_importance_scores(importance_scores, mean_importance, filename, class_l
     with open(filename, 'w') as f:
         json.dump(data, f)
     print(f"Importance scores saved to {filename}")
+
+def load_dataset(args):
+    if args.dataset == 'cifar10':
+        return load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
+    elif args.dataset == 'mnist':
+        return load_MNIST(batch_size=args.batch_size, root=args.data_path)
+    elif args.dataset == 'imagenet':
+        return load_ImageNet(batch_size=args.batch_size, 
+                             root=os.path.join(args.data_path, 'ImageNet'), 
+                             num_workers=2, 
+                             use_val=False)
+    else:
+        raise ValueError(f"Invalid dataset: {args.dataset}")
 
 if __name__ == '__main__':
     args = parse_args()
@@ -60,24 +73,10 @@ if __name__ == '__main__':
     model_path = os.getenv("HOME") + args.saved_model
     
     ### Dataset settings
-    if args.dataset == 'cifar10':
-        trainloader, testloader, train_dataset, test_dataset, classes = load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
-    elif args.dataset == 'mnist':
-        trainloader, testloader, train_dataset, test_dataset, classes = load_MNIST(batch_size=args.batch_size, root=args.data_path)
-    elif args.dataset == 'imagenet':
-        # batch_size=32, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False
-        trainloader, testloader, train_dataset, test_dataset, classes = load_ImageNet(batch_size=args.batch_size, 
-                                                         root=args.data_path + '/ImageNet', 
-                                                         num_workers=2, 
-                                                         use_val=False)
-    else:
-        raise ValueError(f"Invalid dataset: {args.dataset}")
-    
-    ### Device settings    
-    if torch.cuda.is_available() and args.device != 'cpu':
-        device = torch.device(args.device)
-    else:
-        device = torch.device("cpu")
+    trainloader, testloader, train_dataset, test_dataset, classes = load_dataset(args)
+
+    ### Device settings
+    device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")
     
     ### Model loading
     model, module_name, module = get_model(model_path)
@@ -149,7 +148,8 @@ if __name__ == '__main__':
     idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class)
 
     if args.end2end:
-        important_neuron_indices = idc.select_top_neurons_all(attribution)
+        # TODO: the last attr should be the filtered layer's name, a hack here
+        important_neuron_indices, inorderd_neuron_indices = idc.select_top_neurons_all(attribution, 'fc3')
         activation_values, selected_activations = idc.get_activation_values_for_model(images, classes[labels[0]], important_neuron_indices)
     else:
         # Obtain the important neuron indices

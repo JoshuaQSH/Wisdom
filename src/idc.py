@@ -53,7 +53,7 @@ class IDC:
                     return indices
 
     ## Top-k Neurons Selection [model-wise]
-    def select_top_neurons_all(self, importance_scores_dict):
+    def select_top_neurons_all(self, importance_scores_dict, filter_neuron=None):
         flattened_importance = []
 
         # Flatten and collect importance scores across all layers
@@ -68,15 +68,23 @@ class IDC:
                 mean_attribution = torch.mean(importance_scores, dim=[1, 2])
                 for idx, score in enumerate(mean_attribution):
                     flattened_importance.append((layer_name, score.item(), idx))
+                
+        # Filter out the last layer
+        if filter_neuron is not None:
+            # Filter out the specific layer (e.g., 'fc3')
+            filtered_importance = [item for item in flattened_importance if item[0] != filter_neuron]
+        else:
+            filtered_importance = flattened_importance
         
         # Sort by importance score in descending order
-        flattened_importance = sorted(flattened_importance, key=lambda x: x[1], reverse=True)
+        flattened_importance = sorted(filtered_importance, key=lambda x: x[1], reverse=True)
+        
         # Select top-m neurons across all layers
         if self.top_m_neurons == -1:
             selected = flattened_importance
         else:
             selected = flattened_importance[:self.top_m_neurons]
-        
+                
         # Group selected neurons by layer
         selected_indices = {}
         for layer_name, _, index in selected:
@@ -88,7 +96,8 @@ class IDC:
         for layer_name in selected_indices:
             selected_indices[layer_name] = torch.tensor(selected_indices[layer_name])
         
-        return selected_indices
+        # Neurons Index without and with scores
+        return selected_indices, selected
     
     ## Get the activation values [layer-wise]
     def get_activation_values_for_neurons(self, inputs, important_neuron_indices, layer_name='fc1', dataloader=None):
@@ -338,7 +347,7 @@ class IDC:
         
         model_name = self.model.__class__.__name__
         testing_class = self.classes[labels[0]]
-        self.save_to_json(coverage_rate, model_name, testing_class, layer_name)
+        self.save_to_json(coverage_rate, model_name, testing_class, "Whole model")
         
         return unique_clusters, coverage_rate
 

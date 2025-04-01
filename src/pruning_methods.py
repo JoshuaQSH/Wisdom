@@ -64,8 +64,37 @@ def prune_neurons(model, layer='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 
         else:
             raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
 
+def prune_layers(model, layers_to_prune):
+    """
+    Args:
+        model (torch.nn.Module): The model to prune.
+        layers_to_prune (list of tuples): A list where each tuple contains:
+            - layer_name (str): The name of the layer to prune.
+            - importance_score (float): The importance score (not used in pruning).
+            - neuron_index (int): The index of the neuron to prune.
+    """
+    with torch.no_grad():
+        for layer_name, _, neuron_index in layers_to_prune:
+            # Get the layer by name
+            layer = getattr(model, layer_name, None)
+            if layer is None:
+                raise ValueError(f"Layer '{layer_name}' not found in the model.")
+
+            # Prune the neuron based on its type
+            if isinstance(layer, nn.Linear):
+                # Set weights and biases of the selected neuron to zero
+                layer.weight[neuron_index, :] = 0
+                if layer.bias is not None:
+                    layer.bias[neuron_index] = 0
+            elif isinstance(layer, nn.Conv2d):
+                # Set the weights of the selected filter to zero
+                layer.weight[neuron_index] = 0
+                if layer.bias is not None:
+                    layer.bias[neuron_index] = 0
+            else:
+                raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
+
 def prune_neurons_(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
-    breakpoint()
     layer = getattr(model, layer_name)
     
     with torch.no_grad():

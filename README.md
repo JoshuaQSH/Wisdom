@@ -120,7 +120,10 @@ python run.py \
 --logging # Save the log file
 
 # An LeNet Example
-python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --use-silhouette --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --all-attr --log-path './logs/TestLog' --logging
+python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --use-silhouette --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
+
+# An LeNet end2end example, with logging on
+python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 10 --test-image plane --end2end --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
 
 # A VGG16 example - cifar10
 # attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
@@ -141,6 +144,18 @@ python prepare_selector_data.py \
         --batch-size 256 \
         --layer-index 5 \
         --model vgg16 \
+        --top-m-neurons 10 \
+        --n-clusters 2 \
+        --log-path './logs/PrepareDataLog' \
+        --logging
+
+## Prepare the data, CIFAR10 and LeNet
+python prepare_selector_data.py \
+        --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
+        --dataset cifar10 \
+        --batch-size 256 \
+        --end2end \
+        --model lenet \
         --top-m-neurons 10 \
         --n-clusters 2 \
         --log-path './logs/PrepareDataLog' \
