@@ -1,5 +1,6 @@
 # Torch4DeepImportance
 
+<<<<<<< HEAD
 A pytorch version for Deepimportance (test version). [TensorFlow version for DeepImportance](https://github.com/DeepImportance/deepimportance_code_release/tree/ga_modifications). 
 
 For the paper, please refer [HERE](https://zenodo.org/records/3628024).
@@ -9,12 +10,18 @@ A Captum lib added.
 ## How to run (Captum version)
 
 The Captum version demo is tested and should be fine for further developments. After installing the prerequest libs with `pip`, please go to `captum_demo` for more details.
+=======
+A pytorch version for Deepimportance (test version). [TensorFlow version for DeepImportance](https://github.com/DeepImportance/deepimportance_code_release/tree/ga_modifications). [Paper](https://zenodo.org/records/3628024).
+
+## How to run
+>>>>>>> e78af341affe94b7fcb19ee4b7c0b6c1c8bd3d50
 
 Use `conda` or `pyvenv` to build a virtual environment.
 
 ```shell
 # requriements
 $ pip -r install requirements.txt
+<<<<<<< HEAD
 ```
 
 Run with a script:
@@ -31,11 +38,15 @@ $ python plot_images.py --plot-all
 
 # Selector predict
 $ python selector_pred_v1.py --dataset cifar10 --batch-size 2 --layer-index 2 --model lenet --top-m-neurons 10 --all-attr
+=======
+$ python run.py
+>>>>>>> e78af341affe94b7fcb19ee4b7c0b6c1c8bd3d50
 ```
 
 ## Routes
 
 - Activation values for important neuros (v_1, v_2, ...)
+<<<<<<< HEAD
 - Clustering with Silhoutte score (or with the customized `n_cluster`)
 - Combination of clusters from important neuros
 - Testset comes in (x_1, y_1)
@@ -185,4 +196,15 @@ docker pull your_dockerhub_username/torch-deepimportance:v1
 
 ## testing and debugging
 docker exec -it deepimportance-container bash
+=======
+- Clustering with Silhoutte score
+- Combination of clusters from important neuros
+- Testset comes in (x_1, y_1)
+- Check coverage (See combinations covered by the test set, e.g., 4/6, 1/6 ,....)
+
+IDC and converage rate
+```shell
+(x_1, y_1) -> cluster X
+min(L2(N,V))
+>>>>>>> e78af341affe94b7fcb19ee4b7c0b6c1c8bd3d50
 ```
