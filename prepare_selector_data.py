@@ -22,6 +22,37 @@ from utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, 
 from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from pruning_methods import prune_neurons, prune_layers
 
+class CustomDataset(Dataset):
+    def __init__(self, csv_file, attributions):
+        self.data = pd.read_csv(csv_file)
+        self.attributions = attributions
+        self.method_to_idx = {method: idx for idx, method in enumerate(attributions)}
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        image = torch.tensor(eval(self.data.iloc[idx]['image']), dtype=torch.float32).view(3, 32, 32)
+        label = torch.tensor(self.data.iloc[idx]['label'], dtype=torch.long)
+        layer_info = torch.tensor(eval(self.data.iloc[idx]['layer_info']), dtype=torch.float32)
+        optimal_method = self.data.iloc[idx]['optimal_method']
+        optimal_method_idx = self.method_to_idx[optimal_method]
+        optimal_method_one_hot = torch.zeros(len(self.attributions))
+        optimal_method_one_hot[optimal_method_idx] = 1
+        
+        return image, label, layer_info, optimal_method_one_hot
+
+def test_new_dataset_loading(csv_file='prepared_data.csv', attributions=['lfa', 'ldl']):
+    
+    dataset = CustomDataset(csv_file, attributions)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+    # Training loop
+    for epoch in range(3):
+        for images, labels, layer_infos, optimal_methods in dataloader:
+            # Your training code here
+            print(images.shape, labels.shape, layer_infos.shape, optimal_methods.shape)
+            break
+
 def save_to_csv(train_images, train_labels, layer_info, optimal_method, csv_file):
     # Flatten the train_images and convert to list
     flattened_images = train_images.squeeze(0).flatten().tolist()
