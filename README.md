@@ -43,24 +43,22 @@ $ python selector_pred_v1.py --dataset cifar10 --batch-size 2 --layer-index 2 --
 
 ## TODO
 
-- [x] [**IDC**] `find_optimal_clusters` requires fixing, compute the silhouette score with row by row
 - [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
   - [ ] Architecture analysation block by block, YOLOv5s
-- [x] [**IDC**] End to End layer analyze for LeNet 
-- [x] [**IDC**] Include the results for the random pruning
-- [x] [**IDC**] Pickup the common neurons per method-class
-- [ ] [**IDC**] Prepare the grounp truth data by prunning
-- [ ] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
+- [x] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
     - [x] Rankings, plots
-    - [ ] Transfer learning based training
-    - [ ] Voting
+    - [x] Transfer learning based training
+    - [x] Voting
+- [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
+  - [ ] [**Lib**] GitHub CI for Docker building
+  - [ ] [**Lib**] GitHub CI for Pytest Running with a small demo (MNIST)
+  - [ ] [**Lib**] Extract the small verison libs
+- [ ] [**Lib**] pip package and docker conatiner
 - [ ] [**IDC**] Customized rules for `torch.nn.Sequencial` in LRP
 - [ ] [**IDC**] Add more dataset and models
   - [ ] VGG16 + ImageNet
   - [ ] ConvNext + ImageNet
   - [ ] mobilenet + ImageNet
-- [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
-- [ ] [**Lib**] pip package and docker conatiner
 - [ ] [**IDC**] SOTA methods to compare
 - [ ] [**IDC**] Per feature selector (transfer learning style)
   - [ ] A table for the variances and per input predition scores
@@ -70,13 +68,17 @@ $ python selector_pred_v1.py --dataset cifar10 --batch-size 2 --layer-index 2 --
 
 ## Directory information
 
+- `Docker`: Dockerfile
+- `data`: COCO dataset info
+- `examples`: Small examples (stand-alone) to test captum
 - `images`: All the saved images, including the example images and the heatmap saved by the running demos
+- `logs`: The saved the log files
 - `models_info`: Pre-trained model files (*.pt) and also the model architecture visualisations
   - `train_from_scratch`: This is a standalone file that allows you to train all the CV models from scratch with CIFAR10 dataset
 - `saved_files`: Saved JSON files for the model importances
-- `logs`: The saved the log files
 - `src`: The source files, including the idc implementations and the attribution methods (torch/captum)
-- `examples`: Small examples (stand-alone) to test captum
+- `run.py`: Main entrance for the testing program
+- `test_base.sh`: A baseline testing (DeepImportance based with LRP)
 
 ## Parameters
 ```shell
@@ -119,11 +121,14 @@ python run.py \
 --log-path  '<path>/<name>' # log file path and name: e.g., './logs/TestLog'
 --logging # Save the log file
 
-# An LeNet Example
+# An LeNet Example - CIFAR10
 python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --use-silhouette --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
 
+# An LeNet Example End2End - MNIST
+python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 5 --test-image 1 --end2end --idc-test-all --num-samples 0  --attr lrp --log-path './logs/TestLogMNIST' --logging
+
 # An LeNet end2end example, with logging on
-python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 10 --test-image plane --end2end --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
+python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 10 --test-image plane --end2end --idc-test-all --num-samples 0  --attr lrp --log-path './logs/TestLog' --logging
 
 # A VGG16 example - cifar10
 # attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
@@ -153,7 +158,7 @@ python prepare_selector_data.py \
 python prepare_selector_data.py \
         --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
         --dataset cifar10 \
-        --batch-size 256 \
+        --batch-size 100 \
         --end2end \
         --model lenet \
         --top-m-neurons 10 \
@@ -166,6 +171,10 @@ python selector_pred_v1.py --saved-model '/torch-deepimportance/models_info/save
 
 ## Prediction
 python selector_pred_v1.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 256 --layer-index 2 --model vgg16 --top-m-neurons 10 --all-class
+
+
+# Uc - 3
+python run_pre.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 10 --test-image plane --end2end --num-samples 0  --attr lrp --layer-index 1
 ```
 
 ## Docker

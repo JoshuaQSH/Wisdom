@@ -91,6 +91,7 @@ def parse_args():
     # parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
     parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
     parser.add_argument('--log-path', type=str, default='./logs/TestLog', help='Path (and name) to save the log file.')
+    parser.add_argument('--csv-file', type=str, default='demo_layer_scores.csv', help='The file to save the layer scores.')
 
     args = parser.parse_args()
     # print(args)
@@ -127,7 +128,7 @@ def train_val_dataset(dataset, val_split=0.25):
     datasets = {}
     datasets['train'] = Subset(dataset, train_idx)
     datasets['val'] = Subset(dataset, val_idx)
-    return datasets
+    return datasets, datasets['train'], datasets['val']
 
 def data_loader(root, batch_size=256, workers=1, pin_memory=True, shuffle=False):
     traindir = os.path.join(root, 'train')
@@ -172,7 +173,7 @@ def data_loader(root, batch_size=256, workers=1, pin_memory=True, shuffle=False)
         pin_memory=pin_memory
     )
 
-    return train_loader, val_loader, val_dataset
+    return train_loader, val_loader, train_dataset, val_dataset
 
 def collate_fn(batch):
     images, targets = zip(*batch)
@@ -315,15 +316,15 @@ def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_wor
                                  std=[0.229, 0.224, 0.225])
         ])
         val_dataset = torchvision.datasets.ImageFolder(root=val_path, transform=transform)
-        datasets = train_val_dataset(val_dataset, val_split=0.25)
+        datasets, train_dataset, val_dataset  = train_val_dataset(val_dataset, val_split=0.25)
         dataloaders = {x: DataLoader(datasets[x], batch_size=batch_size, shuffle=True, num_workers=num_workers)
                        for x in ['train', 'val']}
         trainloader = dataloaders['train']
         testloader = dataloaders['val']
     else:
-        trainloader, testloader, val_dataset = data_loader(root, batch_size, num_workers, True)
+        trainloader, testloader, train_dataset, val_dataset = data_loader(root, batch_size, num_workers, True)
 
-    return trainloader, testloader, datasets, val_dataset, classes
+    return trainloader, testloader, train_dataset, val_dataset, classes
 
 #  Load the CIFAR-10 dataset
 def load_CIFAR(batch_size=32, root='./data', large_image=False, shuffle=True):
@@ -355,7 +356,14 @@ def load_CIFAR(batch_size=32, root='./data', large_image=False, shuffle=True):
 
 #  Load the MNIST dataset
 def load_MNIST(batch_size=32, root='./data', channel_first=False, train_all=False):
-    transform_list = [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
+    # transform_list = [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
+    
+    transform_list = [
+        transforms.Resize(32),  # Upscale from 28x28 to 32x32
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ]
+
     if channel_first:
         transform_list.append(transforms.Lambda(lambda x: x.repeat(3, 1, 1)))  # If you want 3 channels
     transform = transforms.Compose(transform_list)
@@ -462,6 +470,22 @@ def get_model(load_model_path='/home/shenghao/torch-deepimportance/models_info/s
         module.append(layer)
 
     return model, module_name, module
+
+def mnist_model_state2whole():
+    load_model_path=['/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_MNIST.pt']
+    model_classes = { 'lenet': LeNet}
+    for i, model_name in enumerate(model_classes):
+        model = model_classes[model_name]()
+
+        data_parallel_dict = torch.load(load_model_path[i])
+        new_state_dict = {}
+        for key, value in data_parallel_dict.items():
+            new_key = key.replace('module.', '')  # Remove 'module.' prefix
+            new_state_dict[new_key] = value    
+        
+        model.load_state_dict(new_state_dict)
+        torch.save(model, load_model_path[i].replace('.pt', '_whole.pth'))
+        print("Done with ", model_name)
 
 def cifar_model_state2whole():
     load_model_path=['/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10.pt', 
@@ -575,7 +599,6 @@ def test_model_dataloder(model, dataloader, device='cpu'):
     with torch.no_grad():
         for inputs, labels in dataloader:
             inputs, labels = inputs.to(device), labels.to(device)
-
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             running_loss += loss.item() * inputs.size(0)
@@ -726,5 +749,4 @@ if __name__ == '__main__':
     # trainloader, testloader, c = load_COCO()
     # model, module_name, module = get_model('/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth')
     # print(model)
-    # print(module)
-    
+    # print(module)    

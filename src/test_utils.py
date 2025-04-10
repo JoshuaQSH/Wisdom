@@ -47,6 +47,7 @@ class UtilsTests(unittest.TestCase):
         # self.assertFalse(args.viz)
         self.assertFalse(args.logging)
         self.assertEqual(args.log_path, './logs/TestLog')
+        self.assertEqual(args.csv_file, 'demo_layer_scores.csv')
     
     def test_model_load_cv(self):
         args = self.parser
@@ -145,7 +146,7 @@ class UtilsTests(unittest.TestCase):
         args = self.parser
         args.test_image = 'horse'
         model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth'
-        trainloader, testloader, test_dataset, classes = utils.load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
+        trainloader, testloader, train_dataset, test_dataset, classes = utils.load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
         model, module_name, module = utils.get_model(load_model_path=model_path)
         trainable_module, trainable_module_name = utils.get_trainable_modules_main(model)
         test_image, test_label = utils.get_class_data(testloader, classes, args.test_image)
@@ -157,7 +158,7 @@ class UtilsTests(unittest.TestCase):
                   n_clusters=2, 
                   use_silhouette=True, 
                   test_all_classes=True)
-        important_neuron_indices = idc.select_top_neurons_all(attribution)
+        important_neuron_indices, inorderd_neuron_indices = idc.select_top_neurons_all(attribution, 'fc3')
         activation_values, selected_activations = idc.get_activation_values_for_model(images, classes[labels[0]], important_neuron_indices)
         kmeans_comb = idc.cluster_activation_values_all(selected_activations)
         unique_cluster, coverage_rate = idc.compute_idc_test_whole(test_image, 
@@ -168,23 +169,23 @@ class UtilsTests(unittest.TestCase):
 
     def test_load_CIFAR(self):
         args = self.parser
-        trainloader, testloader, test_dataset, classes = utils.load_CIFAR(batch_size=args.batch_size, root=args.data_path)
+        trainloader, testloader, train_dataset, test_dataset, classes = utils.load_CIFAR(batch_size=args.batch_size, root=args.data_path)
         self.assertEqual(next(iter(trainloader))[1].shape[0], args.batch_size)
-        self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 3, 224, 224))
+        self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 3, 32, 32))
         self.assertEqual(classes[0], 'plane')
     
     def test_load_IMAGE(self):
         args = self.parser
-        trainloader, testloader, val_dataset, classes = utils.load_ImageNet(batch_size=args.batch_size, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False)
+        trainloader, testloader, train_dataset, val_dataset, classes = utils.load_ImageNet(batch_size=args.batch_size, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False)
         self.assertEqual(next(iter(trainloader))[1].shape[0], args.batch_size)
         self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 3, 224, 224))
         self.assertEqual(classes[0], 'tench')
     
     def test_load_MNIST(self):
         args = self.parser
-        trainloader, testloader, test_dataset, classes = utils.load_MNIST(batch_size=args.batch_size, root='/data/shenghao/dataset/MNIST', channel_first=False, train_all=False)
+        trainloader, testloader, train_dataset, test_dataset, classes = utils.load_MNIST(batch_size=args.batch_size, root='/data/shenghao/dataset/MNIST', channel_first=False, train_all=False)
         self.assertEqual(next(iter(trainloader))[1].shape[0], args.batch_size)
-        self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 1, 28, 28))
+        self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 1, 32, 32))
         self.assertEqual(classes[0], '0')
     
     def test_load_COCO(self):

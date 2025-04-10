@@ -268,7 +268,7 @@ class IDC:
             if len(activation_values.shape) > 2:
                 activation_values = torch.mean(activation_values, dim=[2, 3])
             all_activations.append(activation_values)
-
+        
         all_activations_tensor = torch.cat(all_activations, dim=1)
 
         total_neurons = all_activations_tensor.shape[1]
@@ -301,11 +301,10 @@ class IDC:
                     cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].reshape(-1, 1))
                 except ValueError as e:
                     if "Buffer dtype mismatch" in str(e):
-                        print("Type mismatch detected. Converting to float64 and retrying...")
+                        # print("Type mismatch detected. Converting to float64 and retrying...")
                         cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].astype(np.float64).reshape(-1, 1))
                     else:
                         raise e                
-                
                 sample_clusters.append(cluster[0])  # Append the cluster ID
                 if update_total_combination:
                     self.total_combination *= kmeans_models[neuron_idx].n_clusters
@@ -328,11 +327,12 @@ class IDC:
                 activation_values.append(torch.mean(selected_activations[layer_name], dim=[2, 3]))
             else:
                 activation_values.append(selected_activations[layer_name])
+        
         # TODO: assign_clusters here, some bugs HERE
         all_activations_tensor = torch.cat(activation_values, dim=1)
         cluster_labels = self.assign_clusters(all_activations_tensor, kmeans)
         unique_clusters = set(cluster_labels)
-        # total_combination = pow(self.n_clusters, all_activations_tensor.shape[1])
+        # total_combination = pow(self.n_clusters, all_activaptions_tensor.shape[1])
         total_combination = self.total_combination
         if all_activations_tensor.shape[0] > total_combination:
             max_coverage = 1
