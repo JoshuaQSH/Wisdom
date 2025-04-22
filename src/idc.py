@@ -1,24 +1,73 @@
 # src/idc.py
 import torch
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score, silhouette_samples
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, MeanShift, SpectralClustering
+from sklearn.metrics import silhouette_score
 from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from utils import load_kmeans_model, save_kmeans_model, get_layer_by_name
 from visualization import visualize_activation, visualize_idc_scores
 import json
 import numpy as np
 
+def get_cluster_function(name):
+    """
+    Returns the clustering class from sklearn based on the provided name.
+    """
+    cluster_algorithms = {
+        "KMeans": KMeans,
+        "DBSCAN": DBSCAN,
+        "AgglomerativeClustering": AgglomerativeClustering,
+        "MeanShift": MeanShift,
+        "SpectralClustering": SpectralClustering
+    }
+
+    if name not in cluster_algorithms:
+        raise ValueError(f"Clustering method '{name}' is not supported. Choose from {list(cluster_algorithms.keys())}")
+
+    return cluster_algorithms[name]
+
 class IDC:
-    def __init__(self, model, classes, top_m_neurons, n_clusters, use_silhouette, test_all_classes):
+    def __init__(self, model, classes, top_m_neurons, n_clusters, use_silhouette, test_all_classes, clustering_method_name):
         self.model = model
         self.classes = classes
         self.top_m_neurons = top_m_neurons
-        self.n_clusters = n_clusters
         self.use_silhouette = use_silhouette
         self.test_all_classes = test_all_classes
         self.total_combination = 1
+        
+        # Initialize clustering method
+        self.clustering_method = get_cluster_function(clustering_method_name)
+        self.n_clusters = n_clusters
+        self.cluster_centers_ = None
+        
+    
+    def cluster_fit(self, samples):
+        """
+        Fit the clustering model to the samples.
+        Adds an "All Zeros" cluster manually to the samples before fitting.
+        """
+        # Add an "All Zeros" cluster manually
+        all_zeros_cluster = np.zeros((1, samples.shape[1]))
+        sample_with_zeros = np.vstack([samples, all_zeros_cluster])
+
+        # Fit the clustering method
+        self.clustering_method.fit(sample_with_zeros)
+        self.cluster_centers_ = self.clustering_method.cluster_centers_
+
+        # Initialize cluster_groups with the fitted clusters
+        cluster_groups = []
+        for i in range(samples.shape[1]):
+            cluster_groups.append(self.clustering_method)
+
+        # Add a dummy cluster for "All Zeros"
+        cluster_groups.append(self.clustering_method)  # Assuming the last cluster is "All Zeros"
+
+        return cluster_groups
     
     def save_to_json(self, coverage_rate, model_name, testing_class, testing_layer, file_path='coverage_rate.json'):
+        """
+        Save the coverage rate to a JSON file.
+        """
+
         data = {
             'coverage_rate': coverage_rate,
             'model_name': model_name,
@@ -31,6 +80,9 @@ class IDC:
 
     ## Top-k Neurons Selection [layer-wise]
     def select_top_neurons(self, importance_scores):
+        """
+        Select the top-k neurons based on importance scores.
+        """
         if self.top_m_neurons == -1:
             # print("Selecting all neurons.")
             if importance_scores.dim() == 1:
@@ -54,6 +106,9 @@ class IDC:
 
     ## Top-k Neurons Selection [model-wise]
     def select_top_neurons_all(self, importance_scores_dict, filter_neuron=None):
+        """
+        Select the top-k neurons based on importance scores across all layers.
+        """
         flattened_importance = []
 
         # Flatten and collect importance scores across all layers
@@ -101,6 +156,13 @@ class IDC:
     
     ## Get the activation values [layer-wise]
     def get_activation_values_for_neurons(self, inputs, important_neuron_indices, layer_name='fc1', dataloader=None):
+        """
+        Get the activation values for a specific layer.
+        @param inputs: Input data.
+        @param important_neuron_indices: Indices of important neurons.
+        @param layer_name: Name of the layer to get activation values from.
+        @param dataloader: DataLoader for the dataset.
+        """
         activation_values = []
         
         def hook_fn(module, input, output):
@@ -139,6 +201,12 @@ class IDC:
 
     ## Get the activation values [model-wise]
     def get_activation_values_for_model(self, inputs, labels, important_neuron_indices):
+        """
+        Get the activation values for the entire model.
+        @param inputs: Input data.
+        @param labels: Labels for the input data.
+        @param important_neuron_indices: Indices of important neurons.
+        """
         self.model.eval()
         activation_dict = {}
         print("Getting the Class: {}".format(labels))
@@ -169,10 +237,16 @@ class IDC:
 
     ## Find the optimal number of clusters
     def find_optimal_clusters(self, scores, min_k=2, max_k=10):
+        """
+        Find the optimal number of clusters using silhouette score.
+        @param scores: Importance scores.
+        @param min_k: Minimum number of clusters.
+        @param max_k: Maximum number of clusters.
+        """
         scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
         silhouette_list = []
         for n_clusters in range(min_k, max_k):
-            clusterer = KMeans(n_clusters=n_clusters, random_state=10)
+            clusterer = self.clustering_method(n_clusters=n_clusters, random_state=10)
             cluster_labels = clusterer.fit_predict(scores_np)
             silhouette_avg = silhouette_score(scores_np, cluster_labels)
             silhouette_list.append(silhouette_avg)
@@ -181,29 +255,10 @@ class IDC:
         best_k = silhouette_list.index(max(silhouette_list)) + min_k
         print("Best number of clusters: ", best_k)
         return best_k
-
-    ## Cluster the importance scores [layer-wise]
-    def cluster_importance_scores(self, importance_scores, n_clusters, layer_name='fc1'):
-        if layer_name[:-1] == 'fc':
-            importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
-            kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-            cluster_labels = kmeans.fit_predict(importance_scores_np)
-        elif layer_name[:-1] == 'conv':
-            importance_scores = torch.mean(importance_scores, dim=[2, 3])
-            importance_scores_np = importance_scores.cpu().detach().numpy().reshape(-1, 1)
-            kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-            cluster_labels = kmeans.fit_predict(importance_scores_np)
-        else:
-            raise ValueError(f"Invalid layer name: {layer_name}")
-        
-        print("The cluster labels: {}, etc.".format(cluster_labels[:10]))
-        save_kmeans_model(kmeans, './saved_files/kmeans_impo_{}.pkl'.format(layer_name))    
-        
-        return cluster_labels, kmeans
     
     ## Cluster the importance scores [layer-wise]
     def cluster_activation_values(self, activation_values, layer_name):
-        kmeans_comb = []
+        cluster_groups = []
         
         if isinstance(layer_name, torch.nn.Linear):
             n_neurons = activation_values.shape[1]
@@ -212,7 +267,7 @@ class IDC:
                     optimal_k = self.find_optimal_clusters(activation_values, 2, 10)
                 else:
                     optimal_k = self.n_clusters
-                kmeans_comb.append(KMeans(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
+                cluster_groups.append(self.clustering_method(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
 
         elif isinstance(layer_name, torch.nn.Conv2d):
             activation_values = torch.mean(activation_values, dim=[2, 3])
@@ -221,47 +276,17 @@ class IDC:
                 if self.use_silhouette:
                     self.n_clusters = self.find_optimal_clusters(activation_values, 2, 10)
 
-                kmeans_comb.append(KMeans(n_clusters=self.n_clusters).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
+                cluster_groups.append(self.clustering_method(n_clusters=self.n_clusters).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
         else:
             raise ValueError(f"Invalid layer name: {layer_name}")
         
-        # save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
-        # print("KMeans model saved! Name: kmeans_acti_{}.pkl".format(layer_name))
+        # save_cluster(cluster_groups, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
+        # print("Clusters saved! Name: kmeans_acti_{}.pkl".format(layer_name))
         
-        return kmeans_comb
-
-    ## Cluster the importance scores [layer-wise]
-    def cluster_activation_values_(self, activation_values, layer_name='fc1'):
-        kmeans_comb = []
-        
-        if layer_name[:-1] == 'fc':
-            n_neurons = activation_values.shape[1]
-            for i in range(n_neurons):
-                if self.use_silhouette:
-                    optimal_k = self.find_optimal_clusters(activation_values, 2, 10)
-                else:
-                    optimal_k = self.n_clusters
-                kmeans_comb.append(KMeans(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
-
-        elif layer_name[:-1] == 'conv':
-            activation_values = torch.mean(activation_values, dim=[2, 3])
-            n_neurons = activation_values.shape[1]
-            for i in range(n_neurons):
-                if self.use_silhouette:
-                    self.n_clusters = self.find_optimal_clusters(activation_values, 2, 10)
-
-                kmeans_comb.append(KMeans(n_clusters=self.n_clusters).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
-        else:
-            raise ValueError(f"Invalid layer name: {layer_name}")
-        
-        # save_kmeans_model(kmeans_comb, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
-        # print("KMeans model saved! Name: kmeans_acti_{}.pkl".format(layer_name))
-        
-        return kmeans_comb
+        return cluster_groups
 
     ## Cluster the importance scores [model-wise]
     def cluster_activation_values_all(self, activation_dict):
-        kmeans_models = {}
         
         all_activations = []
         for layer_name, activation_values in activation_dict.items():
@@ -272,21 +297,21 @@ class IDC:
         all_activations_tensor = torch.cat(all_activations, dim=1)
 
         total_neurons = all_activations_tensor.shape[1]
-        kmeans_comb = []
+        cluster_groups = []
         for i in range(total_neurons):
             if self.use_silhouette:
                 self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].reshape(-1, 1), 2, 10)
             
-            kmeans_model = KMeans(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))
-            kmeans_comb.append(kmeans_model)
+            cluster_ = self.clustering_method(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))
+            # cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))
+            cluster_groups.append(cluster_)
 
-        # print("KMeans models saved for all layers! Name: kmeans_acti_all_layers.pkl")
-        return kmeans_comb
+        return cluster_groups
     
     # A for loop to assign clusters to all the neurons
-    def assign_clusters(self, activations, kmeans_models):
+    def assign_clusters(self, activations, cluster_groups):
         n_samples, n_neurons = activations.shape
-        cluster_assignments = []
+        cluster_comb = []
         update_total_combination = True
         
         # Loop over each test sample
@@ -298,25 +323,26 @@ class IDC:
             # Loop over each neuron and assign it to a cluster
             for neuron_idx in range(n_neurons):
                 try:
-                    cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].reshape(-1, 1))
+                    cluster = cluster_groups[neuron_idx].predict(sample_activations[neuron_idx].reshape(-1, 1))
                 except ValueError as e:
                     if "Buffer dtype mismatch" in str(e):
                         # print("Type mismatch detected. Converting to float64 and retrying...")
-                        cluster = kmeans_models[neuron_idx].predict(sample_activations[neuron_idx].astype(np.float64).reshape(-1, 1))
+                        cluster = cluster_groups[neuron_idx].predict(sample_activations[neuron_idx].astype(np.float64).reshape(-1, 1))
                     else:
-                        raise e                
+                        raise e
+                
                 sample_clusters.append(cluster[0])  # Append the cluster ID
                 if update_total_combination:
-                    self.total_combination *= kmeans_models[neuron_idx].n_clusters
+                    self.total_combination *= cluster_groups[neuron_idx].n_clusters
             
             # Convert to tuple for uniqueness
-            cluster_assignments.append(tuple(sample_clusters))
+            cluster_comb.append(tuple(sample_clusters))
             update_total_combination = False
             
-        return cluster_assignments
+        return cluster_comb
 
     ## Compute the IDC test [model-wise]
-    def compute_idc_test_whole(self, inputs_images, labels, indices, kmeans, attribution_method='lrp'):
+    def compute_idc_test_whole(self, inputs_images, labels, indices, cluster_groups, attribution_method='lrp'):
 
         activation_, selected_activations = self.get_activation_values_for_model(inputs_images, self.classes[labels[0]], indices)
         activation_values = []
@@ -330,8 +356,8 @@ class IDC:
         
         # TODO: assign_clusters here, some bugs HERE
         all_activations_tensor = torch.cat(activation_values, dim=1)
-        cluster_labels = self.assign_clusters(all_activations_tensor, kmeans)
-        unique_clusters = set(cluster_labels)
+        cluster_comb = self.assign_clusters(all_activations_tensor, cluster_groups)
+        unique_clusters = set(cluster_comb)
         # total_combination = pow(self.n_clusters, all_activaptions_tensor.shape[1])
         total_combination = self.total_combination
         if all_activations_tensor.shape[0] > total_combination:
@@ -352,7 +378,7 @@ class IDC:
         return unique_clusters, coverage_rate
 
     ## Compute the IDC test [layer-wise]
-    def compute_idc_test(self, inputs_images, labels, indices, kmeans, net_layer, layer_name, attribution_method='lrp'):
+    def compute_idc_test(self, inputs_images, labels, indices, cluster_groups, net_layer, layer_name, attribution_method='lrp'):
         
         print("The first label for IDC is: {}".format(self.classes[labels[0]]))
         self.test_all_classes = False
@@ -363,9 +389,9 @@ class IDC:
             activation_values = selected_activations
         
         activation_values_np = activation_values.cpu().numpy()
-        cluster_labels = self.assign_clusters(kmeans_models=kmeans, activations=activation_values)
+        cluster_comb = self.assign_clusters(activation_values, cluster_groups)
         
-        unique_clusters = set(cluster_labels)
+        unique_clusters = set(cluster_comb)
         # total_combination = pow(self.n_clusters, activation_values_np.shape[1])
         total_combination = self.total_combination
         if activation_values.shape[0] > total_combination:

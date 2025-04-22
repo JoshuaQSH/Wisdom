@@ -341,12 +341,12 @@ def get_important_dict(attributions, model, train_inputs, train_labels, classes,
     
     for attribution_method in attributions:
         if end2end:
-            print("Relevance scores for all layers.")
+            # print("Relevance scores for all layers.")
             layer_importance_scores = get_relevance_scores_for_all_layers(model, train_inputs, train_labels, attribution_method=attribution_method)
             important_neurons, inorderd_neuron_indices = select_top_neurons_all(layer_importance_scores, top_m_neurons, 'fc3')
             important_neurons_dict[attribution_method] = inorderd_neuron_indices
         else:
-            print("Relevance scores for layer: {}".format(layer_name))
+            # print("Relevance scores for layer: {}".format(layer_name))
             _, layer_importance_scores = get_relevance_scores(model, 
                                                             train_inputs, 
                                                             train_labels, 
@@ -371,7 +371,7 @@ def identify_optimal_method(model, original_state, classes, inputs, labels, impo
     trainable_module_pruned, trainable_module_name_pruned = get_trainable_modules_main(pruned_model)
     layer_name = trainable_module_name_pruned[layer_index]
     net_layer = trainable_module_pruned[layer_index]
-    print("prunned layer name: ", layer_name)
+    # print("prunned layer name: ", layer_name)
     
     original_accuracy, original_loss, f1_score = test_model(model, inputs, labels)
     accuracy_drops = {}
@@ -389,7 +389,7 @@ def identify_optimal_method(model, original_state, classes, inputs, labels, impo
         accuracy_drops[method] = accuracy_drop
         loss_gains[method] = pruned_loss - original_loss
         pruned_model.load_state_dict(original_state)
-        print("Model restored to original state.")
+        # print("Model restored to original state.")
         
     # Find the method with the [MAX(accuracy drop)] or [MAX(loss gain)]
     # optimal_method = max(accuracy_drops, key=accuracy_drops.get)
@@ -443,7 +443,6 @@ def create_train_data_per_class(attributions,
                layer_name, 
                top_m_neurons, 
                original_state, 
-               layer_info,
                layer_index,
                trainloader,
                log,
@@ -455,16 +454,21 @@ def create_train_data_per_class(attributions,
     
     layer_scores = {}
     init_count = 0
-    sample_count = 0
+    current_class = None
     
     for train_images, train_labels in tqdm(trainloader):
-        
-        if train_labels[0] != sample_count:
-            sample_count += 1
-            train_labels_str = [classes[label.item()] for label in train_labels]
-            save_inter_layer_scores_to_csv(layer_scores, train_labels_str[0], "inter_scores_{}.csv".format(sample_count))
-            print("Initializing the layer scores.")
-            layer_scores = {}
+        if current_class is None or train_labels[0].item() != current_class:
+            # Save the layer_scores for the previous class (if any)
+            if current_class is not None:
+                train_labels_str = classes[current_class]
+                save_inter_layer_scores_to_csv(layer_scores, train_labels_str, f"./saved_files/inter_csv/inter_scores_{csv_file}_{train_labels_str}.csv")
+                # Reset layer_scores for the new class
+                layer_scores = {}
+            
+            # Update the current class
+            current_class = train_labels[0].item()
+            # Reset the initialization count for the new class
+            init_count = 0
         
         ### Obtain important neurons using different attribution methods
         important_neurons_dict = get_important_dict(attributions, 
@@ -508,16 +512,14 @@ def create_train_data_per_class(attributions,
         
         if log is not None:
             log.logger.info("Optimal method: {}".format(optimal_method))
-            log.logger.info("Accuracy drop: {}".format(accuracy_drops))
-            log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
+            # log.logger.info("Accuracy drop: {}".format(accuracy_drops))
+            # log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
         else:
             print("Optimal method: {}".format(optimal_method))
-            print("Accuracy drop: {}".format(accuracy_drops))
-            print("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
+            # print("Accuracy drop: {}".format(accuracy_drops))
+            # print("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
     
-    save_layer_scores_to_csv(layer_scores, "{}_{}.csv".format(csv_file, model.__module__[10:]))    
-    print("Layer scores saved to CSV.")
-    print("Trainloader Done.")
+    print("Trainloader per class DONE.")
 
 def create_train_data(attributions, 
                model,
@@ -598,18 +600,18 @@ def create_train_data(attributions,
         
         if log is not None:
             log.logger.info("Optimal method: {}".format(optimal_method))
-            log.logger.info("Accuracy drop: {}".format(accuracy_drops))
-            log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
+            # log.logger.info("Accuracy drop: {}".format(accuracy_drops))
+            # log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
         else:
             print("Optimal method: {}".format(optimal_method))
-            print("Accuracy drop: {}".format(accuracy_drops))
-            print("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
+            # print("Accuracy drop: {}".format(accuracy_drops))
+            # print("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
     
     if end2end:
         save_layer_scores_to_csv(layer_scores, "{}_scores.csv".format(csv_file))    
         print("Layer scores saved to CSV.")
     
-    print("Trainloader Done.")
+    print("Trainloader DONE.")
 
 
 def create_test_data(attributions, 
@@ -786,7 +788,6 @@ if __name__ == '__main__':
                    layer_name=trainable_module_name[args.layer_index], 
                    top_m_neurons=args.top_m_neurons, 
                    original_state=original_state, 
-                   layer_info=layer_info,
                    layer_index=args.layer_index,
                    trainloader=trainloader,
                    log=log,

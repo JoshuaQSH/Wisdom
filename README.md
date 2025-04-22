@@ -4,33 +4,33 @@ A pytorch version for Deepimportance (test version). [TensorFlow version for Dee
 
 For the paper, please refer [HERE](https://zenodo.org/records/3628024).
 
-A Captum lib added.
-
 ## How to run (Captum version)
 
-The Captum version demo is tested and should be fine for further developments. After installing the prerequest libs with `pip`, please go to `captum_demo` for more details.
+The Captum version demo is tested and should be fine for further developments. The docker is still pending.
 
 Use `conda` or `pyvenv` to build a virtual environment.
 
 ```shell
 # requriements
 $ pip -r install requirements.txt
+
+# If you are using anaconda or miniconda virtual environment, do:
+$ conda env create -f requirements_venv.yaml
 ```
 
 Run with a script:
 
 ```shell
-# The default test will be using a customized LeNet-5 with CIFAR10 dataset
-# Usage: ./script.sh <chosen-layer>, <chosen-layer> could be ['fc1', 'fc2', 'conv1', 'conv2']. For the LeNet-5+CIFAR10, we do:
-$ ./script.sh lenetfc1
+# End2end testing the deepimportance with LeNet-5 in MNIST dataset, with fixed cluster number (=2)
+$ ./script.sh test
+
+# Run with Use Case N: `./script.sh caseN`, e.g.:
+$ ./script.sh case1
 
 # To plot the common neurons in different layer per class
 $ cd logs
 # python plot_images.py --plot-all --log-file <log_file_name.log>
 $ python plot_images.py --plot-all
-
-# Selector predict
-$ python selector_pred_v1.py --dataset cifar10 --batch-size 2 --layer-index 2 --model lenet --top-m-neurons 10 --all-attr
 ```
 
 ## Routes
@@ -121,63 +121,72 @@ python run.py \
 --log-path  '<path>/<name>' # log file path and name: e.g., './logs/TestLog'
 --logging # Save the log file
 
-# An LeNet Example - CIFAR10
+# An LeNet Example - CIFAR10 with layer index: 1
 python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --use-silhouette --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
 
-# An LeNet Example End2End - MNIST
-python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 5 --test-image 1 --end2end --idc-test-all --num-samples 0  --attr lrp --log-path './logs/TestLogMNIST' --logging
-
-# An LeNet end2end example, with logging on
+# An LeNet end2end example - CIFAR10
 python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 10 --test-image plane --end2end --idc-test-all --num-samples 0  --attr lrp --log-path './logs/TestLog' --logging
-
-# A VGG16 example - cifar10
-# attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
-python run.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/vgg16_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 50 --test-image plane --idc-test-all --num-samples 0  --attr lrp --end2end --layer-index 1 --log-path './logs/TestLog' --logging
 
 # A VGG16 example - ImageNet
 python run.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/vgg16_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
 
-# mobilenetv2_CIFAR10_whole
-python run.py --model mobilenetv2 --saved-model '/torch-deepimportance/models_info/saved_models/mobilenetv2_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/densenet_impotant.json' --use-silhouette --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 3
-
-
-# UC-2 Selector
-## Prepare selector data
-python prepare_selector_data.py \
+# UC-2: voting data for specific model
+## Prepare data - VGG16
+python prepare_data.py \
         --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' \
         --dataset cifar10 \
-        --batch-size 256 \
+        --batch-size 2 \
         --layer-index 5 \
         --model vgg16 \
         --top-m-neurons 10 \
         --n-clusters 2 \
+        --end2end \
+        --csv-file ordered \
         --log-path './logs/PrepareDataLog' \
         --logging
 
-## Prepare the data, CIFAR10 and LeNet
-python prepare_selector_data.py \
+## Prepare the data, CIFAR10 and LeNet, in orderd
+python prepare_data.py \
         --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
         --dataset cifar10 \
-        --batch-size 100 \
+        --batch-size 2 \
         --end2end \
         --model lenet \
         --top-m-neurons 10 \
         --n-clusters 2 \
+        --csv-file ordered \
         --log-path './logs/PrepareDataLog' \
         --logging
 
-## Prediction - lenet
-python selector_pred_v1.py --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --batch-size 256 --layer-index 2 --model lenet --top-m-neurons 10 --all-class
-
-## Prediction
-python selector_pred_v1.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 256 --layer-index 2 --model vgg16 --top-m-neurons 10 --all-class
-
-
 # Uc - 3
+# Test with the trained data
 python run_pre.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 10 --test-image plane --end2end --num-samples 0  --attr lrp --layer-index 1
 ```
 
-## Docker
+## Metrics reference
+
+Other implmentation for the baseline should include:
+
+Neuron Coverage (NC) [1]
+K-Multisection Neuron Coverage (KMNC) [2]
+Neuron Boundary Coverage (NBC) [2]
+Strong Neuron Activation Coverage (SNAC) [2]
+Top-K Neuron Coverage (TKNC) [2]
+Top-K Neuron Patterns (TKNP) [2]
+Cluster-based Coverage (CC) [3]
+Likelihood Surprise Coverage (LSC) [4]
+Distance-ratio Surprise Coverage (DSC) [5]
+Mahalanobis Distance Surprise Coverage (MDSC) [5]
+
+[1] DeepXplore: Automated whitebox testing of deep learning systems, SOSP 2017.
+[2] DeepGauge: Comprehensive and multi granularity testing criteria for gauging the robustness of deep learning systems, ASE 2018.
+[3] Tensorfuzz: Debugging neural networks with coverage-guided fuzzing, ICML 2019.
+[4] Guiding deep learning system testing using surprise adequacy, ICSE 2019.
+[5] Reducing dnn labelling cost using surprise adequacy: An industrial case study for autonomous driving, FSE Industry Track 2020.
+
+Implementation repo: [NeuraL-Coverage](https://github.com/Yuanyuan-Yuan/NeuraL-Coverage/tree/main)
+
+## Docker [TODO]
 
 See `Docker` with the `Dockerfile`
 

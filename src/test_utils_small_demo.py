@@ -23,19 +23,19 @@ class UtilsTests(unittest.TestCase):
     def test_default_args(self):
         args = self.parser
         self.assertEqual(args.model, 'lenet')
-        self.assertEqual(args.saved_model, 'lenet_CIFAR10.pth')
-        self.assertEqual(args.dataset, 'cifar10')
-        self.assertEqual(args.data_path, '/data/shenghao/dataset/')
-        self.assertEqual(args.importance_file, './saved_files/plane_lenet_importance.json')
+        self.assertEqual(args.saved_model, '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth')
+        self.assertEqual(args.dataset, 'mnist')
+        self.assertEqual(args.data_path, './datasets/')
+        self.assertEqual(args.importance_file, './logs/important.json')
         self.assertEqual(args.epochs, 10)
-        self.assertEqual(args.device, 'cuda:0')
+        self.assertEqual(args.device, 'cpu')
         self.assertFalse(args.large_image)
         self.assertFalse(args.random_prune)
         self.assertFalse(args.use_silhouette)
         self.assertEqual(args.n_clusters, 2)
         self.assertEqual(args.top_m_neurons, 5)
         self.assertEqual(args.batch_size, 256)
-        self.assertEqual(args.test_image, 'plane')
+        self.assertEqual(args.test_image, '1')
         self.assertFalse(args.all_class)
         self.assertFalse(args.idc_test_all)
         self.assertEqual(args.num_samples, 0)
@@ -52,7 +52,7 @@ class UtilsTests(unittest.TestCase):
     
     def test_model_load_lenet(self):
         args = self.parser
-        load_model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth'
+        load_model_path = os.getenv("HOME") + args.saved_model
         model, module_name, module = utils.get_model(load_model_path=load_model_path)
         print("LeNet Model: ", len(module_name))
         total_params = sum(p.numel() for p in model.parameters())
@@ -86,8 +86,7 @@ class UtilsTests(unittest.TestCase):
     
     def test_dynamic_clustering_idc_end2end(self):
         args = self.parser
-        args.test_image = '1'
-        model_path = os.getenv("HOME") + '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth'
+        model_path = os.getenv("HOME") + args.saved_model
         trainloader, testloader, train_dataset, test_dataset, classes = utils.load_MNIST(batch_size=args.batch_size, root=args.data_path)
         model, module_name, module = utils.get_model(load_model_path=model_path)
         trainable_module, trainable_module_name = utils.get_trainable_modules_main(model)
@@ -99,19 +98,20 @@ class UtilsTests(unittest.TestCase):
                   top_m_neurons=10, 
                   n_clusters=2, 
                   use_silhouette=True, 
-                  test_all_classes=True)
+                  test_all_classes=True,
+                  clustering_method_name='KMeans')
         important_neuron_indices, inorderd_neuron_indices = idc.select_top_neurons_all(attribution, 'fc3')
         activation_values, selected_activations = idc.get_activation_values_for_model(images, classes[labels[0]], important_neuron_indices)
-        kmeans_comb = idc.cluster_activation_values_all(selected_activations)
+        cluster_groups = idc.cluster_activation_values_all(selected_activations)
         unique_cluster, coverage_rate = idc.compute_idc_test_whole(test_image, 
                             test_label,
                             important_neuron_indices,
-                            kmeans_comb,
+                            cluster_groups,
                             'lrp')
 
     def test_load_MNIST(self):
         args = self.parser
-        trainloader, testloader, train_dataset, test_dataset, classes = utils.load_MNIST(batch_size=args.batch_size, root='/data/shenghao/dataset/', channel_first=False, train_all=False)
+        trainloader, testloader, train_dataset, test_dataset, classes = utils.load_MNIST(batch_size=args.batch_size, root=args.data_path, channel_first=False, train_all=False)
         self.assertEqual(next(iter(trainloader))[1].shape[0], args.batch_size)
         self.assertEqual(next(iter(trainloader))[0].shape, (args.batch_size, 1, 32, 32))
         self.assertEqual(classes[0], '0')

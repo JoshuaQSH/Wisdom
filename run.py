@@ -145,7 +145,7 @@ if __name__ == '__main__':
         test_images, test_labels = get_class_data(testloader, classes, args.test_image)    
     
     ### Task 2-1: prepare and test the IDC coverage
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class)
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
 
     if args.end2end:
         # TODO: the last attr should be the filtered layer's name, a hack here
@@ -166,9 +166,9 @@ if __name__ == '__main__':
     
     ### Task 2-2: Cluster the activation values
     if args.end2end:
-        kmeans_comb = idc.cluster_activation_values_all(selected_activations)
+        cluster_groups = idc.cluster_activation_values_all(selected_activations)
     else:    
-        kmeans_comb = idc.cluster_activation_values(selected_activations, trainable_module[args.layer_index])
+        cluster_groups = idc.cluster_activation_values(selected_activations, trainable_module[args.layer_index])
     print("Activation values clustered.")
 
     ### Task 2-3: Compute IDC coverage
@@ -176,7 +176,7 @@ if __name__ == '__main__':
         unique_cluster, coverage_rate = idc.compute_idc_test_whole(test_images, 
                         test_labels,
                         important_neuron_indices,
-                        kmeans_comb,
+                        cluster_groups,
                         args.attr)
         if log:
             log.logger.info("Class: {}".format(args.test_image))
@@ -189,7 +189,7 @@ if __name__ == '__main__':
         unique_cluster, coverage_rate = idc.compute_idc_test(inputs_images=test_images, 
                                                                 labels=test_labels,
                                                                 indices=important_neuron_indices, 
-                                                                kmeans=kmeans_comb,
+                                                                cluster_groups=cluster_groups,
                                                                 net_layer=trainable_module[args.layer_index],
                                                                 layer_name=trainable_module_name[args.layer_index],
                                                                 attribution_method=args.attr)

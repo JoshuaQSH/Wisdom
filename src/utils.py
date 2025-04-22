@@ -62,12 +62,12 @@ class Logger(object):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='lenet', help='Model to use for training.')
-    parser.add_argument('--saved-model', type=str, default='lenet_CIFAR10.pth', help='Saved model name.')
-    parser.add_argument('--dataset', type=str, default='cifar10', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
-    parser.add_argument('--data-path', type=str, default='/data/shenghao/dataset/', help='Path to the data directory.')
-    parser.add_argument('--importance-file', type=str, default='./saved_files/plane_lenet_importance.json', help='The file to save the importance scores.')
+    parser.add_argument('--saved-model', type=str, default='/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth', help='Saved model name.')
+    parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
+    parser.add_argument('--data-path', type=str, default='./datasets/', help='Path to the data directory.')
+    parser.add_argument('--importance-file', type=str, default='./logs/important.json', help='The file to save the importance scores.')
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
-    parser.add_argument('--device', type=str, default='cuda:0', help='Device to use for training.')
+    parser.add_argument('--device', type=str, default='cpu', help='Device to use for training.')
     parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset with the resized images.')
     parser.add_argument('--random-prune', action='store_true', help='Randomly prune the neurons.')
     parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
@@ -76,7 +76,7 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
 
     # IDC Testing 
-    parser.add_argument('--test-image', type=str, default='plane', help='Test image name. For the single image testing.')
+    parser.add_argument('--test-image', type=str, default='1', help='Test image name. For the single image testing.')
     parser.add_argument('--all-class', action='store_true', help='Attributions collected for all the classes.')
     parser.add_argument('--idc-test-all', action='store_true', help='Using all the test images for the Coverage testing.')
     parser.add_argument('--num-samples', type=int, default=0, help='Sampling number for the test images (against with the `idc-test-all`).')
@@ -462,7 +462,7 @@ def get_layer_by_name(model, layer_name):
 def get_model(load_model_path='/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth'):
     module_name = []
     module = []
-    model = torch.load(load_model_path)
+    model = torch.load(load_model_path, weights_only=False)
     
     # Alternatively, to get all submodule names (including nested ones)
     for name, layer in model.named_modules():

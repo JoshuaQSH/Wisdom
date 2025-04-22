@@ -101,7 +101,7 @@ def get_relevance_scores_for_all_layers(model, images, labels, attribution_metho
 
     for name, layer in model.named_modules():
         if isinstance(layer, (torch.nn.Linear, torch.nn.Conv2d)):
-            print(f"Processing layer: {name}, Attribution: {attribution_method}")
+            # print(f"Processing layer: {name}, Attribution: {attribution_method}")
             
             neuron_cond_class = attribution_classes[attribution_method]
             neuron_cond = neuron_cond_class(model, layer)
