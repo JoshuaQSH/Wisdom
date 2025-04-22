@@ -168,20 +168,33 @@ python run_pre.py --model lenet --saved-model '/torch-deepimportance/models_info
 Other implmentation for the baseline should include:
 
 Neuron Coverage (NC) [1]
+
 K-Multisection Neuron Coverage (KMNC) [2]
+
 Neuron Boundary Coverage (NBC) [2]
+
 Strong Neuron Activation Coverage (SNAC) [2]
+
 Top-K Neuron Coverage (TKNC) [2]
+
 Top-K Neuron Patterns (TKNP) [2]
+
 Cluster-based Coverage (CC) [3]
+
 Likelihood Surprise Coverage (LSC) [4]
+
 Distance-ratio Surprise Coverage (DSC) [5]
+
 Mahalanobis Distance Surprise Coverage (MDSC) [5]
 
 [1] DeepXplore: Automated whitebox testing of deep learning systems, SOSP 2017.
+
 [2] DeepGauge: Comprehensive and multi granularity testing criteria for gauging the robustness of deep learning systems, ASE 2018.
+
 [3] Tensorfuzz: Debugging neural networks with coverage-guided fuzzing, ICML 2019.
+
 [4] Guiding deep learning system testing using surprise adequacy, ICSE 2019.
+
 [5] Reducing dnn labelling cost using surprise adequacy: An industrial case study for autonomous driving, FSE Industry Track 2020.
 
 Implementation repo: [NeuraL-Coverage](https://github.com/Yuanyuan-Yuan/NeuraL-Coverage/tree/main)
