@@ -1,11 +1,8 @@
 import argparse
 import os
-import sys
-from pathlib import Path
 import urllib
 import urllib.request
 import json
-import random
 import logging
 from logging import handlers
 
@@ -22,15 +19,9 @@ from torch.utils.data import Subset
 
 from sklearn.model_selection import train_test_split
 
-# Add src directory to sys.path
-src_path = Path(__file__).resolve().parent / "src"
-sys.path.append(str(src_path))
-
-import model_hub
-# from model_hub import LeNet, Net
-from models_cv import *
-from YOLOv5.yolo import *
-from YOLOv5.datasets import *
+from models_info.models_cv import *
+from models_info.YOLOv5.yolo import *
+from models_info.YOLOv5.datasets import *
 
 class Logger(object):
     level_relations = {
@@ -181,7 +172,7 @@ def collate_fn(batch):
     return images, targets
 
 # Load COCO dataset
-def load_COCO_old(batch_size=32, root='/home/shenghao/torch-deepimportance/yolov5/data/coco', num_workers=2):
+def load_COCO_old(batch_size=32, root='./yolov5/data/coco', num_workers=2):
     # Define paths to annotations
     ann_train = os.path.join(root, 'annotations', 'instances_train2017.json')
     ann_val = os.path.join(root, 'annotations', 'instances_val2017.json')
@@ -296,7 +287,7 @@ def load_COCO(batch_size=32, data_path='../data/elephant.yaml', img_size=[640, 6
     return trainloader, testloader, c
 
 # Load the ImageNet dataset
-def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False):
+def load_ImageNet(batch_size=32, root='./datasets/ImageNet', num_workers=2, use_val=False):
     
     val_path = os.path.join(root, 'val/')
     url = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"
@@ -327,7 +318,7 @@ def load_ImageNet(batch_size=32, root='/data/shenghao/dataset/ImageNet', num_wor
     return trainloader, testloader, train_dataset, val_dataset, classes
 
 #  Load the CIFAR-10 dataset
-def load_CIFAR(batch_size=32, root='./data', large_image=False, shuffle=True):
+def load_CIFAR(batch_size=32, root='./datasets', large_image=False, shuffle=True):
 
     if large_image:
         transform = transforms.Compose([
@@ -355,7 +346,7 @@ def load_CIFAR(batch_size=32, root='./data', large_image=False, shuffle=True):
 
 
 #  Load the MNIST dataset
-def load_MNIST(batch_size=32, root='./data', channel_first=False, train_all=False):
+def load_MNIST(batch_size=32, root='./datasets', channel_first=False, train_all=False):
     # transform_list = [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
     
     transform_list = [
@@ -459,7 +450,7 @@ def get_layer_by_name(model, layer_name):
             layer = getattr(layer, part)
     return layer
 
-def get_model(load_model_path='/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth'):
+def get_model(load_model_path='./models_info/saved_models/lenet_CIFAR10_whole.pth'):
     module_name = []
     module = []
     model = torch.load(load_model_path, weights_only=False)
@@ -472,7 +463,7 @@ def get_model(load_model_path='/home/shenghao/torch-deepimportance/models_info/s
     return model, module_name, module
 
 def mnist_model_state2whole():
-    load_model_path=['/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_MNIST.pt']
+    load_model_path=['./models_info/saved_models/lenet_MNIST.pt']
     model_classes = { 'lenet': LeNet}
     for i, model_name in enumerate(model_classes):
         model = model_classes[model_name]()
@@ -488,13 +479,13 @@ def mnist_model_state2whole():
         print("Done with ", model_name)
 
 def cifar_model_state2whole():
-    load_model_path=['/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10.pt', 
-                     '/home/shenghao/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10.pt', 
-                     '/home/shenghao/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10.pt',
-                     '/home/shenghao/torch-deepimportance/models_info/saved_models/densenet_CIFAR10.pt',
-                     '/home/shenghao/torch-deepimportance/models_info/saved_models/mobilenetv2_CIFAR10.pt',
-                     '/home/shenghao/torch-deepimportance/models_info/saved_models/shufflenetv2_CIFAR10.pt',
-                     '/home/shenghao/torch-deepimportance/models_info/saved_models/efficientnet_CIFAR10.pt']
+    load_model_path=['./models_info/saved_models/lenet_CIFAR10.pt', 
+                     './models_info/saved_models/vgg16_CIFAR10.pt', 
+                     './models_info/saved_models/resnet18_CIFAR10.pt',
+                     './models_info/saved_models/densenet_CIFAR10.pt',
+                     './models_info/saved_models/mobilenetv2_CIFAR10.pt',
+                     './models_info/saved_models/shufflenetv2_CIFAR10.pt',
+                     './models_info/saved_models/efficientnet_CIFAR10.pt']
     
     model_classes = {
         'lenet': LeNet,
@@ -551,7 +542,7 @@ def imagenet_model_state2whole():
         # "IMAGENET1K_V2", "IMAGENET1K_V1"
         model = model_func(weights="IMAGENET1K_V1")        
         print(f"{model_name} model loaded with weights.")
-        torch.save(model, f"/home/shenghao/torch-deepimportance/models_info/saved_models/{model_name}_IMAGENET_whole.pth")
+        torch.save(model, f"./models_info/saved_models/{model_name}_IMAGENET_whole.pth")
         print("Done with ", model_name)
 
 def get_class_data(dataloader, classes, target_class):
@@ -740,13 +731,5 @@ def test_selector_dataloader(root):
 if __name__ == '__main__':
     # unit test - model
     args = parse_args()
-    # subset_loader, test_image, test_label = test_random_class(test_dataset, test_all=True, num_samples=1000)
-    # trainloader, testloader, test_dataset, classes = load_ImageNet()
-    # print("Classes: ", classes)
-    # test_model()
-    # test_cifar_models()
-    # test_selector_dataloader(root = args.data_path)
-    # trainloader, testloader, c = load_COCO()
-    # model, module_name, module = get_model('/home/shenghao/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth')
-    # print(model)
-    # print(module)    
+
+

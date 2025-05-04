@@ -8,13 +8,9 @@ import torch
 from captum.attr import visualization as viz
 from captum.metrics import infidelity_perturb_func_decorator, infidelity
 
-# Add src directory to sys.path
-src_path = Path(__file__).resolve().parent / "src"
-sys.path.append(str(src_path))
-
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, test_model_dataloder, test_random_class, Logger
-from attribution import get_relevance_scores, get_relevance_scores_for_all_layers, get_relevance_scores_for_all_classes
-from idc import IDC
+from src.utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, test_model_dataloder, test_random_class, Logger
+from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers, get_relevance_scores_for_all_classes
+from src.idc import IDC
 
 def load_importance_scores(filename):
     try:

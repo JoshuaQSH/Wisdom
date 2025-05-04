@@ -1,20 +1,14 @@
+import time
+import os
+
 import torch
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import matplotlib.pyplot as plt
 
-import time
-import sys
-from pathlib import Path
-import os
-
-# Add src directory to sys.path
-src_path = Path(__file__).resolve().parent / "src"
-sys.path.append(str(src_path))
-
-from utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, test_model_dataloder, test_random_class, Logger
-from attribution import get_relevance_scores, get_relevance_scores_for_all_layers, get_relevance_scores_for_all_classes
-from idc import IDC
+from src.utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, test_model_dataloder, test_random_class, Logger
+from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers, get_relevance_scores_for_all_classes
+from src.idc import IDC
 
 '''
 This script is for IDC pipeline with the selected model and dataset given the important neurons that being chosen from either:

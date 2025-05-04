@@ -1,8 +1,0 @@
-2024-12-14 15:46:03,076 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - DEBUG: [=== Model: vgg16, Dataset: CIFAR10]
-2024-12-14 15:46:35,904 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 0, Acc: 13.46
-2024-12-14 15:46:57,372 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 1, Acc: 20.87
-2024-12-14 15:47:18,723 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 2, Acc: 29.62
-2024-12-14 15:47:40,341 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 3, Acc: 38.4
-2024-12-14 15:48:02,031 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 4, Acc: 48.7
-2024-12-14 15:48:23,386 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 5, Acc: 62.62
-2024-12-14 15:50:07,710 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 10, Acc: 77.14

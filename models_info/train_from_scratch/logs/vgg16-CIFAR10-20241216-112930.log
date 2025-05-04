@@ -1,3 +1,0 @@
-2024-12-16 11:29:30,678 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - DEBUG: [=== Model: vgg16, Dataset: CIFAR10]
-2024-12-16 11:29:54,729 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 0, Acc: 65.62
-2024-12-16 11:30:08,981 - /home/shenghao/torch-deepimportance/models_info/train_from_scratch/train.py - INFO: Epoch: 1, Acc: 71.45

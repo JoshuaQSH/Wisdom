@@ -1,27 +1,19 @@
 import os
 import time
 import copy
-from pathlib import Path
-import sys
 import pandas as pd
 from tqdm import tqdm
 import csv
-import json
 
 from sklearn.metrics import f1_score
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-# Add src directory to sys.path
-src_path = Path(__file__).resolve().parent / "src"
-sys.path.append(str(src_path))
-
-from utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, get_trainable_modules_main, extract_class_to_dataloder, Logger
-from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
-from pruning_methods import prune_neurons, prune_layers
+from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, get_trainable_modules_main, extract_class_to_dataloder, Logger
+from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers
+from src.pruning_methods import prune_neurons, prune_layers
 
 class CustomDataset(Dataset):
     def __init__(self, csv_file, attributions):
@@ -188,7 +180,6 @@ def prepare_data(args):
     elif args.dataset == 'mnist':
         trainloader, testloader, train_dataset, test_dataset, classes = load_MNIST(batch_size=args.batch_size, root=args.data_path)
     elif args.dataset == 'imagenet':
-        # batch_size=32, root='/data/shenghao/dataset/ImageNet', num_workers=2, use_val=False
         trainloader, testloader, train_dataset, test_dataset, classes = load_ImageNet(batch_size=args.batch_size, 
                                                          root=args.data_path + '/ImageNet', 
                                                          num_workers=2, 
@@ -766,31 +757,31 @@ if __name__ == '__main__':
     #             log=log)
     
     # set across_attr_method = True to get the top-K neurons across all the attribution methods
-    # create_train_data(attributions=attributions, 
-    #                model=model,
-    #                classes=classes, 
-    #                net_layer=trainable_module[args.layer_index], 
-    #                layer_name=trainable_module_name[args.layer_index], 
-    #                top_m_neurons=args.top_m_neurons, 
-    #                original_state=original_state, 
-    #                layer_info=layer_info,
-    #                layer_index=args.layer_index,
-    #                trainloader=trainloader,
-    #                log=log,
-    #                end2end=args.end2end,
-    #                across_attr_method=True,
-    #                csv_file=args.csv_file)
-    
-    create_train_data_per_class(attributions=attributions, 
+    create_train_data(attributions=attributions, 
                    model=model,
                    classes=classes, 
                    net_layer=trainable_module[args.layer_index], 
                    layer_name=trainable_module_name[args.layer_index], 
                    top_m_neurons=args.top_m_neurons, 
                    original_state=original_state, 
+                   layer_info=layer_info,
                    layer_index=args.layer_index,
                    trainloader=trainloader,
                    log=log,
                    end2end=args.end2end,
                    across_attr_method=True,
                    csv_file=args.csv_file)
+    
+    # create_train_data_per_class(attributions=attributions, 
+    #                model=model,
+    #                classes=classes, 
+    #                net_layer=trainable_module[args.layer_index], 
+    #                layer_name=trainable_module_name[args.layer_index], 
+    #                top_m_neurons=args.top_m_neurons, 
+    #                original_state=original_state, 
+    #                layer_index=args.layer_index,
+    #                trainloader=trainloader,
+    #                log=log,
+    #                end2end=args.end2end,
+    #                across_attr_method=True,
+    #                csv_file=args.csv_file)

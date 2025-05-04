@@ -1,12 +1,23 @@
 # src/idc.py
+"""
+Should be moved to the coverage.py in the future for better maintainability.
+
+This module implements the IDC (Importance Distribution Clustering) method for analyzing the
+importance of neurons in neural networks. It provides functionality for clustering neuron activations
+
+@shenghao_qiu
+"""
+import json
+
+
 import torch
+import numpy as np
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, MeanShift, SpectralClustering
 from sklearn.metrics import silhouette_score
-from attribution import get_relevance_scores, get_relevance_scores_for_all_layers
-from utils import load_kmeans_model, save_kmeans_model, get_layer_by_name
-from visualization import visualize_activation, visualize_idc_scores
-import json
-import numpy as np
+
+from .attribution import get_relevance_scores, get_relevance_scores_for_all_layers
+from .utils import load_kmeans_model, save_kmeans_model, get_layer_by_name
+from .visualization import visualize_activation, visualize_idc_scores
 
 def get_cluster_function(name):
     """
