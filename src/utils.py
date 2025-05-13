@@ -72,7 +72,7 @@ def parse_args():
     parser.add_argument('--idc-test-all', action='store_true', help='Using all the test images for the Coverage testing.')
     parser.add_argument('--num-samples', type=int, default=0, help='Sampling number for the test images (against with the `idc-test-all`).')
 
-    parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp'],  help='The attribution method to use.')
+    parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp', 'random'],  help='The attribution method to use.')
     parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
     parser.add_argument('--layer-by-layer', action='store_true', help='Capturing all the module layer in the model, same as end2end.')
     parser.add_argument('--end2end', action='store_true', help='End to end testing for the whole model.')
@@ -82,6 +82,7 @@ def parse_args():
     # parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
     parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
     parser.add_argument('--log-path', type=str, default='./logs/TestLog', help='Path (and name) to save the log file.')
+    parser.add_argument('--inordered-dataset', action='store_true', help='Whether the dataset is ordered.')
     parser.add_argument('--csv-file', type=str, default='demo_layer_scores.csv', help='The file to save the layer scores.')
 
     args = parser.parse_args()
@@ -373,6 +374,23 @@ def load_MNIST(batch_size=32, root='./datasets', channel_first=False, train_all=
     
     return train_loader, test_loader, train_dataset, test_dataset, classes
 
+
+def get_data(dataset_name, batch_size, data_path, large_image):
+    ### Dataset settings
+    if dataset_name == 'cifar10':
+        trainloader, testloader, train_dataset, test_dataset, classes = load_CIFAR(batch_size=batch_size, root=data_path, large_image=large_image, shuffle=True)
+    elif dataset_name == 'mnist':
+        trainloader, testloader, train_dataset, test_dataset, classes = load_MNIST(batch_size=batch_size, root=data_path)
+    elif dataset_name == 'imagenet':
+        trainloader, testloader, train_dataset, test_dataset, classes = load_ImageNet(batch_size=batch_size, 
+                                                         root=data_path + '/ImageNet', 
+                                                         num_workers=2, 
+                                                         use_val=False)
+    else:
+        raise ValueError(f"Invalid dataset: {dataset_name}")
+    
+    return trainloader, testloader, train_dataset, test_dataset, classes
+
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -580,6 +598,7 @@ def extract_class_to_dataloder(dataset, classes, batch_size=100):
 
 # Evaluate the model on the given dataloader and compute accuracy, loss, and F1 score.
 def test_model_dataloder(model, dataloader, device='cpu'):
+    model.to(device)
     model.eval()
     running_loss = 0.0
     all_labels = []

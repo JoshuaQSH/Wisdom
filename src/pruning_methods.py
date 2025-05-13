@@ -1,8 +1,67 @@
 import random
+import copy
 
 import torch
 import torch.nn as nn
 import torch.nn.utils.prune as prune
+
+from src.utils import test_model_dataloder
+
+# def random_prune_whole_model(n, total_neurons, global_neurons, model, test_loader, device, original_acc, final_layer):
+#     n_prune = min(n, total_neurons)
+#     all_candidates = [x for x in global_neurons if x[1] != final_layer]
+#     random_sample = random.sample(all_candidates, n_prune)
+#     rand_model = copy.deepcopy(model)
+#     for _, lname, idx in random_sample:
+#         layer = dict(rand_model.named_modules())[lname]
+#         with torch.no_grad():
+#             if isinstance(layer, nn.Conv2d):
+#                 layer.weight[idx].zero_()
+#                 if layer.bias is not None:
+#                     layer.bias[idx].zero_()
+#             elif isinstance(layer, nn.Linear):
+#                 layer.weight[idx].zero_()
+#                 if layer.bias is not None:
+#                     layer.bias[idx].zero_()
+#     acc_random, avg_loss_random, f1_random = test_model_dataloder(rand_model, test_loader, device)
+#     acc_drop = original_acc - acc_random
+#     print(f"Random N: {n_prune}, Drop: {acc_drop*100:.2f}%")
+
+def random_prune_whole_model(model, num_neurons=5, sparse_prune=False):
+    # Collect all eligible layers
+    eligible_layers = []
+    for name, layer in model.named_modules():
+        if isinstance(layer, (nn.Linear, nn.Conv2d)):
+            eligible_layers.append((name, layer))
+    
+    # Flat list of all neuron indices: [(layer, neuron_idx), ...]
+    all_neuron_indices = []
+    for name, layer in eligible_layers:
+        num_units = layer.out_features if isinstance(layer, nn.Linear) else layer.out_channels
+        all_neuron_indices.extend([(name, idx) for idx in range(num_units)])
+
+    # Randomly select neurons/filters to prune
+    selected = random.sample(all_neuron_indices, min(num_neurons, len(all_neuron_indices)))
+
+    for name, idx in selected:
+        layer = dict(model.named_modules())[name]
+
+        if sparse_prune:
+            amount = 1.0 / (layer.out_features if isinstance(layer, nn.Linear) else layer.out_channels)
+            prune.random_unstructured(layer, name='weight', amount=amount)
+        else:
+            with torch.no_grad():
+                if isinstance(layer, nn.Linear):
+                    layer.weight[idx, :] = 0
+                    if layer.bias is not None:
+                        layer.bias[idx] = 0
+                elif isinstance(layer, nn.Conv2d):
+                    layer.weight[idx, :, :, :] = 0
+                    if layer.bias is not None:
+                        layer.bias[idx] = 0
+                else:
+                    raise ValueError(f"Unsupported layer type: {type(layer)}")
+    return model
 
 def ramdon_prune(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], num_neurons=5, sparse_prune=False):
     layer = getattr(model, layer_name)

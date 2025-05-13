@@ -15,6 +15,8 @@ from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_mod
 from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from src.pruning_methods import prune_neurons, prune_layers
 
+# python prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model lenet --top-m-neurons 10 --n-clusters 2 --csv-file ordered
+
 class CustomDataset(Dataset):
     def __init__(self, csv_file, attributions):
         self.data = pd.read_csv(csv_file)
@@ -327,14 +329,13 @@ def extract_features(model, inputs):
     return features
 
 # Step - 3
-def get_important_dict(attributions, model, train_inputs, train_labels, classes, net_layer, layer_name, top_m_neurons, end2end=False):
+def get_important_dict(attributions, model, device, train_inputs, train_labels, classes, net_layer, layer_name, top_m_neurons, final_layer, end2end=False):
     important_neurons_dict = {}
-    
     for attribution_method in attributions:
         if end2end:
             # print("Relevance scores for all layers.")
-            layer_importance_scores = get_relevance_scores_for_all_layers(model, train_inputs, train_labels, attribution_method=attribution_method)
-            important_neurons, inorderd_neuron_indices = select_top_neurons_all(layer_importance_scores, top_m_neurons, 'fc3')
+            layer_importance_scores = get_relevance_scores_for_all_layers(model, train_inputs, train_labels, device, attribution_method=attribution_method)
+            important_neurons, inorderd_neuron_indices = select_top_neurons_all(layer_importance_scores, top_m_neurons, final_layer)
             important_neurons_dict[attribution_method] = inorderd_neuron_indices
         else:
             # print("Relevance scores for layer: {}".format(layer_name))
@@ -379,9 +380,10 @@ def identify_optimal_method(model, original_state, classes, inputs, labels, impo
         accuracy_drop = original_accuracy - pruned_accuracy
         accuracy_drops[method] = accuracy_drop
         loss_gains[method] = pruned_loss - original_loss
+        
         pruned_model.load_state_dict(original_state)
         # print("Model restored to original state.")
-        
+    
     # Find the method with the [MAX(accuracy drop)] or [MAX(loss gain)]
     # optimal_method = max(accuracy_drops, key=accuracy_drops.get)
     sorted_neurons = weighted_top_neurons(important_neurons_dict, loss_gains)
@@ -470,6 +472,7 @@ def create_train_data_per_class(attributions,
                                                     net_layer, 
                                                     layer_name, 
                                                     top_m_neurons,
+                                                    final_layer,
                                                     end2end)
             
         optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model, 
@@ -514,6 +517,7 @@ def create_train_data_per_class(attributions,
 
 def create_train_data(attributions, 
                model,
+               device,
                classes, 
                net_layer, 
                layer_name, 
@@ -524,11 +528,11 @@ def create_train_data(attributions,
                trainloader,
                log,
                end2end,
+               final_layer,
                across_attr_method,
-               csv_file):
-    
-    model.eval()
-    
+               csv_file,
+               get_intersection=False):
+        
     layer_scores = {}
     init_count = 0
     
@@ -537,15 +541,16 @@ def create_train_data(attributions,
         ### Obtain important neurons using different attribution methods
         important_neurons_dict = get_important_dict(attributions, 
                                                     model,
+                                                    device,
                                                     train_images, 
                                                     train_labels, 
                                                     classes, 
                                                     net_layer, 
                                                     layer_name, 
                                                     top_m_neurons,
+                                                    final_layer,
                                                     end2end)
         
-        get_intersection = False
         if get_intersection:
             save_intersection(important_neurons_dict, log)
             
@@ -559,7 +564,6 @@ def create_train_data(attributions,
                                                                 layer_index,
                                                                 log,
                                                                 end2end)
-        
         layer_index_pairs = [neuron[0] for neuron in sorted_neurons]
         layer_index_pairs_opti = [neuron[0] for neuron in sorted_neurons_opti]
         
@@ -587,142 +591,22 @@ def create_train_data(attributions,
                 for i in range(train_images.size(0)):
                     save_to_csv(train_images[i].unsqueeze(0), train_labels[i].unsqueeze(0), layer_info, optimal_method, "prepared_data_train_cifar_{}.csv".format(model.__module__[10:]))
         
-        b_accuracy, b_total_loss, f1_score = test_model(model, train_images, train_labels)
-        
-        if log is not None:
-            log.logger.info("Optimal method: {}".format(optimal_method))
-            # log.logger.info("Accuracy drop: {}".format(accuracy_drops))
-            # log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
-        else:
-            print("Optimal method: {}".format(optimal_method))
-            # print("Accuracy drop: {}".format(accuracy_drops))
-            # print("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
-    
-    if end2end:
-        save_layer_scores_to_csv(layer_scores, "{}_scores.csv".format(csv_file))    
-        print("Layer scores saved to CSV.")
-    
-    print("Trainloader DONE.")
-
-
-def create_test_data(attributions, 
-               model,
-               classes, 
-               net_layer, 
-               layer_name, 
-               top_m_neurons, 
-               original_state, 
-               layer_info,
-               layer_index,
-               testloader,
-               log,
-               end2end):
-    
-    for test_images, test_labels in testloader:
-        ### Obtain important neurons using different attribution methods
-        important_neurons_dict = get_important_dict(attributions, 
-                                                    model,
-                                                    test_images, 
-                                                    test_labels, 
-                                                    classes, 
-                                                    net_layer, 
-                                                    layer_name, 
-                                                    top_m_neurons,
-                                                    end2end)
-        
-        optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model, 
-                                                                original_state,
-                                                                classes,
-                                                                test_images, 
-                                                                test_labels, 
-                                                                important_neurons_dict, 
-                                                                layer_index,
-                                                                log,
-                                                                end2end)
-        if end2end:
-            pass
-        else:
-            if test_images.size(0) == 1:
-                save_to_csv(test_images, test_labels, layer_info, optimal_method, "prepared_data_train_cifar_{}.csv".format(model.__module__[10:]))
-            else:
-                for i in range(test_images.size(0)):
-                    save_to_csv(test_images[i].unsqueeze(0), test_labels[i].unsqueeze(0), layer_info, optimal_method, "prepared_data_train_cifar_{}.csv".format(model.__module__[10:]))
-        
-        b_accuracy, b_total_loss, f1_score = test_model(model, test_images, test_labels)
+        b_accuracy, b_total_loss, b_f1_score = test_model(model, train_images, train_labels)
         
         if log is not None:
             log.logger.info("Optimal method: {}".format(optimal_method))
             log.logger.info("Accuracy drop: {}".format(accuracy_drops))
-            log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
+            log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}, Before F1 Score: {:.2f}".format(b_accuracy, b_total_loss, b_f1_score))
         else:
             print("Optimal method: {}".format(optimal_method))
             print("Accuracy drop: {}".format(accuracy_drops))
-            print("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
+            print("Before Acc: {:.2f}%, Before Loss: {:.2f}, Before F1 Score: {:.2f}".format(b_accuracy, b_total_loss, b_f1_score))
     
-    print("Testloader Done.")
+    if end2end:
+        save_layer_scores_to_csv(layer_scores, "./saved_files/pre_csv/{}.csv".format(csv_file))    
+        print("Layer scores saved to CSV.")
     
-
-def train_data_layer_check(attributions, 
-               model,
-               classes, 
-               net_layer, 
-               layer_name, 
-               top_m_neurons, 
-               original_state, 
-               trainloader,
-               log):
-    
-    model.eval()
-    
-    tested_label = -1
-    
-    for train_images, train_labels in tqdm(trainloader):
-        if tested_label == train_labels[0].item():
-            continue
-        else:
-            tested_label = train_labels[0].item()
-        
-        for index, layer in enumerate(net_layer[1:-1]):
-            ### Obtain important neurons using different attribution methods
-            important_neurons_dict = get_important_dict(attributions, 
-                                                        model,
-                                                        train_images, 
-                                                        train_labels, 
-                                                        classes, 
-                                                        layer, 
-                                                        layer_name[index + 1], 
-                                                        top_m_neurons)
-        
-            sets = {k: set(v.tolist()) for k, v in important_neurons_dict.items()}
-            intersection = list(set.intersection(*sets.values()))
-        
-            if log is not None:
-                log.logger.info("Layer: {}, Common Neurons: {}".format(layer_name[index + 1], intersection))
-            else:
-                print("Layer: {}, Common Neurons: {}".format(layer_name[index + 1], intersection))
-            
-            optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model, 
-                                                                original_state,
-                                                                classes, 
-                                                                train_images, 
-                                                                train_labels, 
-                                                                important_neurons_dict, 
-                                                                index + 1,
-                                                                log)
-        
-        
-            b_accuracy, b_total_loss, f1_score = test_model(model, train_images, train_labels)
-            
-            if log is not None:
-                log.logger.info("Optimal method: {}".format(optimal_method))
-                log.logger.info("Accuracy drop: {}".format(accuracy_drops))
-                log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
-            else:
-                print("Optimal method: {}".format(optimal_method))
-                print("Accuracy drop: {}".format(accuracy_drops))
-                print("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
-            
-    print("Trainloader Done.")    
+    print("Trainloader DONE.") 
 
 if __name__ == '__main__':
     args = parse_args()
@@ -730,6 +614,9 @@ if __name__ == '__main__':
         
     ### Data settings
     trainloader, testloader, train_dataset, test_dataset, classes = prepare_data(args)    
+    
+    ### Device settings
+    device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")    
     
     # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
     # attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
@@ -742,24 +629,18 @@ if __name__ == '__main__':
     original_state = copy.deepcopy(model.state_dict())
     layer_info = get_layer_info(trainable_module_name[args.layer_index], trainable_module_name)
     
-    if args.csv_file == 'ordered':
+    if args.inordered_dataset:
         trainloader = extract_class_to_dataloder(train_dataset, classes, args.batch_size)
         testloader = extract_class_to_dataloder(test_dataset, classes, args.batch_size)
-
-    # train_data_layer_check(attributions=attributions, 
-    #             model=model,
-    #             classes=classes, 
-    #             net_layer=trainable_module, 
-    #             layer_name=trainable_module_name, 
-    #             top_m_neurons=args.top_m_neurons, 
-    #             original_state=original_state, 
-    #             trainloader=ordered_loader_train,
-    #             log=log)
     
+    # Skip final classifier layer
+    final_layer = trainable_module_name[-1]
+
     # set across_attr_method = True to get the top-K neurons across all the attribution methods
     create_train_data(attributions=attributions, 
                    model=model,
                    classes=classes, 
+                   device=device,
                    net_layer=trainable_module[args.layer_index], 
                    layer_name=trainable_module_name[args.layer_index], 
                    top_m_neurons=args.top_m_neurons, 
@@ -768,9 +649,11 @@ if __name__ == '__main__':
                    layer_index=args.layer_index,
                    trainloader=trainloader,
                    log=log,
+                   final_layer=final_layer,
                    end2end=args.end2end,
                    across_attr_method=True,
-                   csv_file=args.csv_file)
+                   csv_file=args.csv_file,
+                   get_intersection=False)
     
     # create_train_data_per_class(attributions=attributions, 
     #                model=model,
@@ -782,6 +665,7 @@ if __name__ == '__main__':
     #                layer_index=args.layer_index,
     #                trainloader=trainloader,
     #                log=log,
+    #                final_layer=final_layer,
     #                end2end=args.end2end,
     #                across_attr_method=True,
     #                csv_file=args.csv_file)

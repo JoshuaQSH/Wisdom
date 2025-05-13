@@ -45,9 +45,9 @@ case "$MODE" in
         echo "Running Use Case 1..."
         python3 run.py \
             --model $MODEL_NAME \
-            --saved_model $SAVED_MODEL \
+            --saved-model $SAVED_MODEL \
             --dataset $DATASET_NAME \
-            --data_path $DATASET_DIR \
+            --data-path $DATASET_DIR \
             --importance-file './logs/impotant.json' \
             --device $DEVICE \
             --top-m-neurons $TOP_M \
@@ -56,7 +56,9 @@ case "$MODE" in
             --idc-test-all \
             --test-image $TEST_LABEL \
             --attr $ATTR_METHOD \
-            --layer_index $LAYER_INDEX \
+            --layer-index $LAYER_INDEX \
+            --end2end \
+            --n-clusters 2 \
             --log-path 'logs/TestLog' \
             --logging
         ;;
