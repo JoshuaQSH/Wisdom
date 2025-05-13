@@ -233,7 +233,6 @@ def run_single_train_attr(train_loader, model, device, final_layer):
                     "Neuron Index": neuron_idx,
                     "Relevance Score": float(score)
                 })
-        breakpoint()
         
         # Flatten into a global list of (layer_name, neuron_idx, score) tuples
         flat_scores = []
