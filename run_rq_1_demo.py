@@ -296,5 +296,5 @@ if __name__ == '__main__':
     # RQ 1 run case
     relevance_records, accuracy_records = run_single_train_attr(train_loader, model, device, final_layer)
     
-    # save_results_to_csv(relevance_records, accuracy_records, filename="rq1_"+ args.dataset + "_"+ args.model)
+    save_results_to_csv(relevance_records, accuracy_records, filename="rq1_"+ args.dataset + "_"+ args.model)
     print(" ==== Done with RQ1 ====")
