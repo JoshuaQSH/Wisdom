@@ -7,26 +7,6 @@ import torch.nn.utils.prune as prune
 
 from src.utils import test_model_dataloder
 
-# def random_prune_whole_model(n, total_neurons, global_neurons, model, test_loader, device, original_acc, final_layer):
-#     n_prune = min(n, total_neurons)
-#     all_candidates = [x for x in global_neurons if x[1] != final_layer]
-#     random_sample = random.sample(all_candidates, n_prune)
-#     rand_model = copy.deepcopy(model)
-#     for _, lname, idx in random_sample:
-#         layer = dict(rand_model.named_modules())[lname]
-#         with torch.no_grad():
-#             if isinstance(layer, nn.Conv2d):
-#                 layer.weight[idx].zero_()
-#                 if layer.bias is not None:
-#                     layer.bias[idx].zero_()
-#             elif isinstance(layer, nn.Linear):
-#                 layer.weight[idx].zero_()
-#                 if layer.bias is not None:
-#                     layer.bias[idx].zero_()
-#     acc_random, avg_loss_random, f1_random = test_model_dataloder(rand_model, test_loader, device)
-#     acc_drop = original_acc - acc_random
-#     print(f"Random N: {n_prune}, Drop: {acc_drop*100:.2f}%")
-
 def random_prune_whole_model(model, num_neurons=5, sparse_prune=False):
     # Collect all eligible layers
     eligible_layers = []
@@ -107,6 +87,7 @@ def ramdon_prune(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7,
     #     )
 
 def prune_neurons(model, layer='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+    
     # layer = getattr(model, layer_name)
     with torch.no_grad():
         if isinstance(layer, nn.Linear):
@@ -133,46 +114,21 @@ def prune_layers(model, layers_to_prune):
             - neuron_index (int): The index of the neuron to prune.
     """
     with torch.no_grad():
-        for layer_name, _, neuron_index in layers_to_prune:
-            # Get the layer by name
-            layer = getattr(model, layer_name, None)
+        for lname, _, idx in layers_to_prune:
+            layer = dict(model.named_modules()).get(lname)
             if layer is None:
-                raise ValueError(f"Layer '{layer_name}' not found in the model.")
-
+                raise ValueError(f"Layer '{lname}' not found in the model.")
+            
             # Prune the neuron based on its type
             if isinstance(layer, nn.Linear):
                 # Set weights and biases of the selected neuron to zero
-                layer.weight[neuron_index, :] = 0
+                layer.weight[idx, :] = 0
                 if layer.bias is not None:
-                    layer.bias[neuron_index] = 0
+                    layer.bias[idx] = 0
             elif isinstance(layer, nn.Conv2d):
                 # Set the weights of the selected filter to zero
-                layer.weight[neuron_index] = 0
+                layer.weight[idx] = 0
                 if layer.bias is not None:
-                    layer.bias[neuron_index] = 0
+                    layer.bias[idx] = 0
             else:
                 raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
-
-def prune_neurons_(model, layer_name='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
-    layer = getattr(model, layer_name)
-    
-    with torch.no_grad():
-        if isinstance(layer, nn.Linear):
-            # Set weights and biases of the selected neurons to zero
-            layer.weight[neurons_to_prune, :] = 0
-            if layer.bias is not None:
-                layer.bias[neurons_to_prune] = 0
-        elif isinstance(layer, nn.Conv2d):
-            # Set the weights of the selected filters to zero
-            for f in neurons_to_prune:
-                layer.weight[f] = 0
-                if layer.bias is not None:
-                    layer.bias[f] = 0
-        else:
-            raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
-    # print(
-    #     "Sparsity in weight: {:.2f}%".format(
-    #         100. * float(torch.sum(layer.weight == 0))
-    #         / float(layer.weight.nelement())
-    #     )
-    # )

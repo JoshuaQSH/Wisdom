@@ -11,11 +11,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
-from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, get_trainable_modules_main, extract_class_to_dataloder, Logger
+from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, get_trainable_modules_main, test_model_dataloder, extract_class_to_dataloder, Logger
 from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from src.pruning_methods import prune_neurons, prune_layers
 
-# python prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model lenet --top-m-neurons 10 --n-clusters 2 --csv-file ordered
+
+# python3 prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model vgg16 --top-m-neurons 6 --n-clusters 2 --csv-file vgg16_cifar_t6 --inordered-dataset --device 'cuda:0'
 
 class CustomDataset(Dataset):
     def __init__(self, csv_file, attributions):
@@ -191,43 +192,10 @@ def prepare_data(args):
     
     return trainloader, testloader, train_dataset, test_dataset, classes
 
-# Evaluate the model on the given dataloader and compute accuracy, loss, and F1 score.
-def test_model_dataloder(model, dataloader, device='cpu'):
-    model.eval()
-    running_loss = 0.0
-    all_labels = []
-    all_preds = []
-
+def test_model(model, device, inputs, labels):
     criterion = nn.CrossEntropyLoss()
-
-    with torch.no_grad():
-        for inputs, labels in dataloader:
-            inputs, labels = inputs.to(device), labels.to(device)
-
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            running_loss += loss.item() * inputs.size(0)
-
-            _, preds = torch.max(outputs, 1)
-
-            # Store labels and predictions for metric computation
-            all_labels.extend(labels.cpu().numpy())
-            all_preds.extend(preds.cpu().numpy())
-
-    # Compute average loss
-    avg_loss = running_loss / len(dataloader.dataset)
-
-    # Compute accuracy
-    correct_predictions = sum(p == t for p, t in zip(all_preds, all_labels))
-    accuracy = correct_predictions / len(all_labels)
-
-    # Compute F1 score
-    f1 = f1_score(all_labels, all_preds, average='weighted')
-
-    return accuracy, avg_loss, f1
-
-def test_model(model, inputs, labels):
-    criterion = nn.CrossEntropyLoss()
+    model = model.to(device)
+    inputs, labels = inputs.to(device), labels.to(device)
     model.eval()
     
     total_loss = 0.0
@@ -241,7 +209,7 @@ def test_model(model, inputs, labels):
     total += labels.size(0)
     accuracy = correct / total * 100
     
-    f1_macro = f1_score(predicted, labels, average='macro')
+    f1_macro = f1_score(predicted.cpu().numpy(), labels.cpu().numpy(), average='macro')
     
     return accuracy, total_loss, f1_macro
 
@@ -357,7 +325,7 @@ def get_important_dict(attributions, model, device, train_inputs, train_labels, 
     return important_neurons_dict
 
 # Step - 4
-def identify_optimal_method(model, original_state, classes, inputs, labels, important_neurons_dict, layer_index, log, end2end):
+def identify_optimal_method(model, device, original_state, classes, inputs, labels, important_neurons_dict, layer_index, log, end2end):
     
     pruned_model = copy.deepcopy(model)
     trainable_module_pruned, trainable_module_name_pruned = get_trainable_modules_main(pruned_model)
@@ -365,10 +333,10 @@ def identify_optimal_method(model, original_state, classes, inputs, labels, impo
     net_layer = trainable_module_pruned[layer_index]
     # print("prunned layer name: ", layer_name)
     
-    original_accuracy, original_loss, f1_score = test_model(model, inputs, labels)
+    original_accuracy, original_loss, f1_score = test_model(model, device, inputs, labels)
     accuracy_drops = {}
     loss_gains = {}
-    
+        
     for method, neurons_to_prune in important_neurons_dict.items():
         if end2end:
             prune_layers(pruned_model, neurons_to_prune)
@@ -376,7 +344,7 @@ def identify_optimal_method(model, original_state, classes, inputs, labels, impo
             prune_neurons(pruned_model, net_layer, neurons_to_prune)
         
         # Test the pruned model
-        pruned_accuracy, pruned_loss, f1_score = test_model(pruned_model, inputs, labels)
+        pruned_accuracy, pruned_loss, f1_score = test_model(pruned_model, device, inputs, labels)
         accuracy_drop = original_accuracy - pruned_accuracy
         accuracy_drops[method] = accuracy_drop
         loss_gains[method] = pruned_loss - original_loss
@@ -431,6 +399,7 @@ def voting_neurons(layer_index_pairs, layer_scores):
 
 def create_train_data_per_class(attributions, 
                model,
+               device,
                classes, 
                net_layer, 
                layer_name, 
@@ -475,7 +444,8 @@ def create_train_data_per_class(attributions,
                                                     final_layer,
                                                     end2end)
             
-        optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model, 
+        optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model,
+                                                                device,
                                                                 original_state,
                                                                 classes, 
                                                                 train_images, 
@@ -502,7 +472,7 @@ def create_train_data_per_class(attributions,
             else:
                 layer_scores = voting_neurons(layer_index_pairs_opti, layer_scores)
         
-        b_accuracy, b_total_loss, f1_score = test_model(model, train_images, train_labels)
+        b_accuracy, b_total_loss, f1_score = test_model(model, device, train_images, train_labels)
         
         if log is not None:
             log.logger.info("Optimal method: {}".format(optimal_method))
@@ -555,7 +525,8 @@ def create_train_data(attributions,
             save_intersection(important_neurons_dict, log)
             
         # TODO - 1: whole model testing
-        optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model, 
+        optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model,
+                                                                device,
                                                                 original_state,
                                                                 classes, 
                                                                 train_images, 
@@ -591,7 +562,7 @@ def create_train_data(attributions,
                 for i in range(train_images.size(0)):
                     save_to_csv(train_images[i].unsqueeze(0), train_labels[i].unsqueeze(0), layer_info, optimal_method, "prepared_data_train_cifar_{}.csv".format(model.__module__[10:]))
         
-        b_accuracy, b_total_loss, b_f1_score = test_model(model, train_images, train_labels)
+        b_accuracy, b_total_loss, b_f1_score = test_model(model, device, train_images, train_labels)
         
         if log is not None:
             log.logger.info("Optimal method: {}".format(optimal_method))
@@ -639,8 +610,8 @@ if __name__ == '__main__':
     # set across_attr_method = True to get the top-K neurons across all the attribution methods
     create_train_data(attributions=attributions, 
                    model=model,
-                   classes=classes, 
                    device=device,
+                   classes=classes, 
                    net_layer=trainable_module[args.layer_index], 
                    layer_name=trainable_module_name[args.layer_index], 
                    top_m_neurons=args.top_m_neurons, 
@@ -657,6 +628,7 @@ if __name__ == '__main__':
     
     # create_train_data_per_class(attributions=attributions, 
     #                model=model,
+    #                device=device,
     #                classes=classes, 
     #                net_layer=trainable_module[args.layer_index], 
     #                layer_name=trainable_module_name[args.layer_index], 

@@ -15,7 +15,7 @@ from src.utils import get_data, parse_args, get_model, test_model_dataloder, get
 
 
 # Example command to run the script:
-# python3 run_rq_1.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path '/data/shenghao/dataset/'  --device 'cuda:0' --batch-size 128 --idc-test-all --num-samples 0
+# python3 run_rq_1_demo.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/'  --device 'cuda:0' --batch-size 128 --idc-test-all --num-samples 0
 
 attribution_methods = {'lrp': 'LRP', 'ldl': 'DeepLIFT', 'ldls': 'SHAP'}
 N_list = [6, 8, 10, 15, 20]
