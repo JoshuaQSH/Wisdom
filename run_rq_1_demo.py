@@ -11,7 +11,7 @@ import torch.nn as nn
 
 from torch.utils.data import DataLoader
 from src.attribution import get_relevance_scores_for_all_layers, get_relevance_scores_dataloader
-from src.utils import get_data, parse_args, get_model, test_model_dataloder, get_trainable_modules_main, Logger
+from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, Logger
 
 
 # Example command to run the script:
@@ -113,7 +113,7 @@ def run_single_attr_test_demo(model, test_loader, original_acc, final_layer, N_l
                         if layer.bias is not None:
                             layer.bias[idx].zero_()
 
-            acc, avg_loss_pruned, f1_pruned = test_model_dataloder(pruned_model, test_loader, device)
+            acc, avg_loss_pruned, f1_pruned = eval_model_dataloder(pruned_model, test_loader, device)
             print(f"Pruned model accuracy ({attr_name}): {acc:.2f}, Loss: {avg_loss_pruned:.2f}, F1 Score: {f1_pruned:.2f}")
             
             # acc = evaluate_model(pruned_model)
@@ -138,7 +138,7 @@ def run_single_attr_test_demo(model, test_loader, original_acc, final_layer, N_l
                         if layer.bias is not None:
                             layer.bias[idx].zero_()
                             
-            acc, avg_loss_pruned, f1_pruned = test_model_dataloder(rand_model, test_loader, device)
+            acc, avg_loss_pruned, f1_pruned = eval_model_dataloder(rand_model, test_loader, device)
             print(f"Pruned model accuracy (Random): {acc:.2f}, Loss: {avg_loss_pruned:.2f}, F1 Score: {f1_pruned:.2f}")
 
             # acc = evaluate_model(rand_model)
@@ -173,7 +173,7 @@ def record_acc_drop_random(total_neurons,
                     layer.weight[idx].zero_()
                     if layer.bias is not None:
                         layer.bias[idx].zero_()
-        acc_random, avg_loss_random, f1_random = test_model_dataloder(rand_model, test_loader, device)
+        acc_random, avg_loss_random, f1_random = eval_model_dataloder(rand_model, test_loader, device)
         acc_drop = original_acc - acc_random
         print(f"Random N: {n_prune}, Drop: {acc_drop*100:.2f}%")
         
@@ -211,7 +211,7 @@ def record_acc_drop(total_neurons,
                     if layer.bias is not None:
                         layer.bias[idx].zero_()
         
-        pruned_acc, avg_loss_pruned, f1_pruned = test_model_dataloder(pruned_model, test_loader, device)
+        pruned_acc, avg_loss_pruned, f1_pruned = eval_model_dataloder(pruned_model, test_loader, device)
         acc_drop = original_acc - pruned_acc
         print(f"Attribution: {attr_method}, N: {n_prune}, Drop: {acc_drop*100:.2f}%")
         
@@ -296,7 +296,7 @@ if __name__ == '__main__':
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path, args.large_image)
     
     # Get the original accuracy
-    original_acc, avg_loss, f1 = test_model_dataloder(model, test_loader, device)
+    original_acc, avg_loss, f1 = eval_model_dataloder(model, test_loader, device)
     print(f"Original accuracy: {original_acc:.2f}, Loss: {avg_loss:.2f}, F1 Score: {f1:.2f}")
 
     # Skip final classifier layer

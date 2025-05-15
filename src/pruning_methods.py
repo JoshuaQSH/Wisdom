@@ -5,8 +5,6 @@ import torch
 import torch.nn as nn
 import torch.nn.utils.prune as prune
 
-from src.utils import test_model_dataloder
-
 def random_prune_whole_model(model, num_neurons=5, sparse_prune=False):
     # Collect all eligible layers
     eligible_layers = []

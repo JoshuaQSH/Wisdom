@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
-from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, get_trainable_modules_main, test_model_dataloder, extract_class_to_dataloder, Logger
+from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, get_trainable_modules_main, eval_model_dataloder, extract_class_to_dataloder, Logger
 from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from src.pruning_methods import prune_neurons, prune_layers
 

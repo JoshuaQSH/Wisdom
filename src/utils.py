@@ -565,7 +565,6 @@ def imagenet_model_state2whole():
 
 def get_class_data(dataloader, classes, target_class):
     max_test_sample = 8000
-
     class_index = classes.index(target_class)
 
     filtered_data = []
@@ -596,8 +595,32 @@ def extract_class_to_dataloder(dataset, classes, batch_size=100):
     
     return ordered_loader
 
+## An end-to-end test for the model (randomly pickup a bunch of images)
+def extract_random_class(test_dataset, test_all=False, num_samples=1000):
+
+    if test_all:
+        subset_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
+    else:
+        indices = torch.randperm(len(test_dataset))[:num_samples]
+        subset = Subset(test_dataset, indices)
+        subset_loader = DataLoader(subset, batch_size=1, shuffle=False)
+    
+    test_image = []
+    test_label = []
+
+    # Iterate through the DataLoader
+    for images, labels in subset_loader:
+        test_image.append(images)
+        test_label.append(labels)
+
+    # Concatenate all batches into single tensors
+    test_image = torch.cat(test_image, dim=0)
+    test_label = torch.cat(test_label, dim=0)
+
+    return subset_loader, test_image, test_label
+
 # Evaluate the model on the given dataloader and compute accuracy, loss, and F1 score.
-def test_model_dataloder(model, dataloader, device='cpu'):
+def eval_model_dataloder(model, dataloader, device='cpu'):
     model.to(device)
     model.eval()
     running_loss = 0.0
@@ -631,30 +654,6 @@ def test_model_dataloder(model, dataloader, device='cpu'):
 
     return accuracy, avg_loss, f1
 
-## An end-to-end test for the model (randomly pickup a bunch of images)
-def test_random_class(test_dataset, test_all=False, num_samples=1000):
-
-    if test_all:
-        subset_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
-    else:
-        indices = torch.randperm(len(test_dataset))[:num_samples]
-        subset = Subset(test_dataset, indices)
-        subset_loader = DataLoader(subset, batch_size=1, shuffle=False)
-    
-    test_image = []
-    test_label = []
-
-    # Iterate through the DataLoader
-    for images, labels in subset_loader:
-        test_image.append(images)
-        test_label.append(labels)
-
-    # Concatenate all batches into single tensors
-    test_image = torch.cat(test_image, dim=0)
-    test_label = torch.cat(test_label, dim=0)
-
-    return subset_loader, test_image, test_label
-
 # See if a neuron is activated
 def is_neuron_activated(activation_value, threshold=0):
     return activation_value > threshold
@@ -662,90 +661,6 @@ def is_neuron_activated(activation_value, threshold=0):
 def is_conv2d_neuron_activated(activation_map, threshold=0):
     return (activation_map > threshold).any().item()
 
-## For the unit test
-def test_model():
-    offer_model_name = ['vgg16', 'lenet',
-                        'convnext_base', 
-                        'efficientnet_v2_s', 
-                        'efficientnet_v2_m', 
-                        'mnasnet1_0', 
-                        'googlenet',
-                        'inception_v3',
-                        'mobilenet_v3_small',
-                        'resnet18',
-                        'resnet152',
-                        'resnext101_32x8d',
-                        'vit_b_16']
-    offer_model_name = ['mobilenet_v3_small', 'efficientnet_v2_s', 'convnext_base']
-    for model_name in offer_model_name:
-         model, module_name, module = get_model(model_name=model_name)
-         print(model_name, len(module_name))
-         # print(model_name, module_name)
-         total_params = sum(p.numel() for p in model.parameters())
-         print(f"Total number of parameters: {total_params}")
-
-# Test the CIFAR models
-def test_cifar_models():
-    model_classes = {
-    'lenet': LeNet,
-    'vgg16': lambda: VGG('VGG16'),
-    'resnet18': ResNet18,
-    'googlenet': GoogLeNet,
-    'densenet': DenseNet121,
-    'resnext29': ResNeXt29_2x64d,
-    'mobilenetv2': MobileNetV2,
-    'shufflenetv2': lambda: ShuffleNetV2(1),
-    'senet': SENet18,
-    'preresnet': PreActResNet18,
-    'mobilenet': MobileNet,
-    'DPN92': DPN92,
-    'efficientnet': EfficientNetB0,
-    'regnet': RegNetX_200MF,
-    'simpledla': SimpleDLA,}
-
-    model_list = ['lenet', 'vgg16', 'resnet18', 'googlenet', 'mobilenet', 'mobilenetv2', 'shufflenet', 'shufflenetv2', 'senet', 'preresnet', 'densenet', 'resnext']
-
-    for model_name in model_list:
-        if model_name in model_classes:
-            model = model_classes[model_name]()
-            print(model_name)    
-            total_params = sum(p.numel() for p in model.parameters())
-            print(f"Total number of parameters: {total_params}")
-            x = torch.randn(1, 3, 32, 32)
-            y = model(x)
-            print(y.size())
-
-def test_selector_dataloader(root):
-    
-    transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),])
-
-    train_dataset = CIFAR10(root=root, train=True, download=True, transform=transform)
-    test_dataset = CIFAR10(root=root, train=False, download=True, transform=transform)
-
-    layer_info = torch.tensor([0., 0., 1., 0., 0.]).repeat(len(train_dataset), 1)  # One-hot vector for all images
-    # Example list of attribution methods
-    attribution_labels = ['lc', 'la', 'ii', 'lc', 'ldl', 'lig', 'lgs', 'lgxa', 'lrp', 'lfa'] * 5000
-    attribution_methods = ['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
-
-    # Create the custom dataset
-    selector_train_dataset = SelectorDataset(train_dataset, layer_info, attribution_labels, attribution_methods)
-
-    # Create DataLoader for training
-    trainloader = DataLoader(selector_train_dataset, batch_size=32, shuffle=True, num_workers=2)
-
-    # Create DataLoader for testing (similarly, you need to create the corresponding test dataset)
-    selector_test_dataset = SelectorDataset(test_dataset, layer_info, attribution_labels, attribution_methods)
-    testloader = torch.utils.data.DataLoader(selector_test_dataset, batch_size=32, shuffle=False, num_workers=2)
-    for images, layer_info, labels in trainloader:
-        print(f"Images shape: {images.shape}")
-        print(f"Layer info shape: {layer_info.shape}")
-        print(f"Labels shape: {labels.shape}")
-        break
 
 if __name__ == '__main__':
     # unit test - model

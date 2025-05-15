@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from src.utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, test_model_dataloder, test_random_class, Logger
+from src.utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, eval_model_dataloder, extract_random_class, Logger
 from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers, get_relevance_scores_for_all_classes
 from src.idc import IDC
 
@@ -109,7 +109,7 @@ if __name__ == '__main__':
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
     
     ### Model evaluation
-    accuracy, avg_loss, f1 = test_model_dataloder(model, testloader, device)
+    accuracy, avg_loss, f1 = eval_model_dataloder(model, testloader, device)
     if log:
         log.logger.info("Model test Acc: {}, Loss: {}, F1 Score: {}".format(accuracy, avg_loss, f1))
     else:
@@ -118,7 +118,7 @@ if __name__ == '__main__':
     ### IDC pipeline
     if args.num_samples != 0:
         # Sample the testset data for the IDC coverage
-        subset_loader, test_images, test_labels = test_random_class(test_dataset, test_all=args.idc_test_all, num_samples=args.num_samples)
+        subset_loader, test_images, test_labels = extract_random_class(test_dataset, test_all=args.idc_test_all, num_samples=args.num_samples)
     else:
         test_images, test_labels = get_class_data(testloader, classes, args.test_image)  
     

@@ -32,5 +32,9 @@ jobs:
 
       - name: Run tests
         run: |
+          echo "Current working directory:"
+          pwd
+          echo "Listing contents:"
+          ls -la
           export PYTHONPATH="${{ github.workspace }}"
-          python unittest/test_small_demo.py
+          pytest unittest/test_small_demo.py
