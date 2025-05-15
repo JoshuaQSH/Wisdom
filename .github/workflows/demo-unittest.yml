@@ -33,4 +33,4 @@ jobs:
       - name: Run tests
         run: |
           export PYTHONPATH="${{ github.workspace }}"
-          pytest unittest/test_small_demo.py
+          python unittest/test_small_demo.py
