@@ -41,6 +41,15 @@ def prapared_parameters(args):
 
     return model, module_name, module, trainable_module, trainable_module_name, log
 
+def wisdom_neurons(csv_file, top_k=10):
+    df = pd.read_csv(csv_file)
+    df_sorted = df.sort_values(by='Score', ascending=False).head(top_k)
+    top_k_neurons = {}
+    for layer_name, group in df_sorted.groupby('LayerName'):
+        top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
+
+    return top_k_neurons
+
 def save_results_to_csv(relevance_records, accuracy_records, filename="rq1"):
     
     # Save relevance scores to CSV

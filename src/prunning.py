@@ -86,6 +86,33 @@ class PruningMethods:
                 - neuron_index (int): Index of the neuron/filter to prune.
                 e.g., [('features.10', 0.46760982275009155, 15), ('features.20', 0.44575604796409607, 243), ...]
         """
+        for lname, _, idx in layers_to_prune:
+            layer = dict(self.model.named_modules()).get(lname)
+            if layer is None:
+                raise ValueError(f"Layer '{lname}' not found in the model.")
+            with torch.no_grad():
+                if isinstance(layer, nn.Conv2d):
+                    layer.weight[idx].zero_()
+                    if layer.bias is not None:
+                        layer.bias[idx].zero_()
+                elif isinstance(layer, nn.Linear):
+                    layer.weight[idx].zero_()
+                    if layer.bias is not None:
+                        layer.bias[idx].zero_()
+                else:
+                    raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
+    
+    def prune_across_layers_(self, layers_to_prune):
+        """
+        Prune neurons or filters across multiple layers.
+
+        Args:
+            layers_to_prune (list of tuples): List of tuples where each tuple contains:
+                - layer_name (str): Name of the layer to prune.
+                - relative_importance (float): Relative importance score of the neuron/filter.
+                - neuron_index (int): Index of the neuron/filter to prune.
+                e.g., [('features.10', 0.46760982275009155, 15), ('features.20', 0.44575604796409607, 243), ...]
+        """
         with torch.no_grad():
             for layer_name, neuron_index in layers_to_prune:
                 layer = dict(self.model.named_modules()).get(layer_name)

@@ -20,8 +20,8 @@ from torch.utils.data import Subset
 from sklearn.model_selection import train_test_split
 
 from models_info.models_cv import *
-from models_info.YOLOv5.yolo import *
-from models_info.YOLOv5.datasets import *
+# from models_info.YOLOv5.yolo import *
+# from models_info.YOLOv5.datasets import *
 
 class Logger(object):
     level_relations = {

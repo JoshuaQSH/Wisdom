@@ -25,9 +25,12 @@ It includes the following steps:
 4. Set the device (GPU or CPU) - most of cases, we use CPU.
 5. IDC counting for the selected model and dataset.
 
+python run_pre.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --device cpu --n-cluster 2 --top-m-neurons 6 --test-image plane --end2end --num-samples 0 --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_t6.csv' --idc-test-all 
+
 @ Author: Shenghao Qiu
 @ Date: 2025-04-01
 '''
+
 
 def load_dataset(args):
     if args.dataset == 'cifar10':
@@ -65,7 +68,7 @@ def process_neurons(csv_file, top_k=10, visualize=False):
     
 def idc_count(args, model, classes, test_images, test_labels, csv_file):
     # IDC pipeline
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class)
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
     top_k_neurons = process_neurons(csv_file, args.top_m_neurons, True)
     activation_values, selected_activations = idc.get_activation_values_for_model(test_images, classes[test_labels[0]], top_k_neurons)
     kmeans_comb = idc.cluster_activation_values_all(selected_activations)

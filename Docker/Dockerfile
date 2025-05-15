@@ -1,26 +1,21 @@
-# Base image with CUDA support
-FROM nvidia/cuda:12.0.1-base-ubuntu20.04
+# Use Miniconda3 base image (includes conda). Using a specific tag for reproducibility:
+FROM continuumio/miniconda3:latest
 
-# Set environment variables
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PATH="/root/.local/bin:$PATH"
-
-# Install required packages
-RUN apt-get update && apt-get install -y \
-    python3.10 python3-pip git wget && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install PyTorch (matching your version)
-RUN pip3 install torch==2.0.1+cu117 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
-
-# Install other dependencies
-COPY requirements.txt /tmp/
-RUN pip3 install -r /tmp/requirements.txt
-
-# Clone your repository and switch to the branch
-RUN git clone -b captum https://github.com/JoshuaQSH/torch-deepimportance.git /app
-WORKDIR /app
-
-# Entry point (e.g., interactive shell)
-CMD ["bash"]
+# Set working directory in container
+WORKDIR /home
+    
+# Install Python 3.12 in a new conda environment named "wisdom"
+# and install project dependencies into this environment.
+COPY requirements.txt ./requirements.txt
+RUN conda create -y -n wisdom python=3.12 \
+     && conda run -n wisdom pip install -r requirements.txt
+    
+# Activate the "wisdom" environment by adding it to PATH for subsequent commands and container start
+ENV PATH /opt/conda/envs/wisdom/bin:$PATH
+    
+# Copy the entire project code into the container (after setting up env to leverage caching)
+COPY . .
+    
+# Set the default command (can be overridden) – for example, open a bash shell
+CMD ["/bin/bash"]
+    

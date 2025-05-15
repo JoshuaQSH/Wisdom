@@ -114,7 +114,7 @@ if __name__ == '__main__':
        
         elif args.end2end:
             print("Relevance scores for all layers.")
-            attribution = get_relevance_scores_for_all_layers(model, images, labels, attribution_method=args.attr)
+            attribution = get_relevance_scores_for_all_layers(model, images, labels, device, attribution_method=args.attr)
         
         elif args.all_class:
             print("Relevance scores for all classes.")
