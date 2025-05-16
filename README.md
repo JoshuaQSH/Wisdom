@@ -175,7 +175,14 @@ How to run
 ```shell
 # MODELNAME: [lenet, vgg16, resnet18]
 # DATASET: [mnist, cifar10]
-python3 run_rq_1.py --model <MODELNAME> --saved-model /path/to/the/savedmodel/pth --dataset <DATASET> --data-path /path/to/dataset --device cpu --batch-size 128 --idc-test-all --num-samples 0
+# Pretrained relevant scores: ./saved_files/pre_csv/<MODELNAME>_<DATASET>.csv
+python run_rq_1_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu  --csv-file /path/to/wisdom/weights/csv
+
+# Or simply run the script we prepared
+./run_rq_1.sh
+
+# Train from scratch
+./run_rq_1.sh 1
 ```
 
 ### RQ 2: Diversity
