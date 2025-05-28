@@ -148,7 +148,7 @@ def test_dynamic_clustering_idc_end2end():
         assert important_neuron_indices is not None and len(important_neuron_indices) > 0
         
         activation_values, selected_activations = idc.get_activation_values_for_model(
-            images, classes[labels[0]], important_neuron_indices
+            images, important_neuron_indices
         )
         assert activation_values['conv1'].shape == (batch_size, 6, 28, 28)
         assert activation_values['fc3'].shape == (batch_size, 10)
@@ -232,7 +232,7 @@ def test_dynamic_clustering_idc_end2end_mnist(data_path, saved_model_path, test_
     assert len(important_neuron_indices) > 0
     
     activation_values, selected_activations = idc.get_activation_values_for_model(
-        images, classes[labels[0]], important_neuron_indices
+        images, important_neuron_indices
     )
     assert activation_values['conv1'].shape == (len(images), 6, 28, 28)
     assert activation_values['fc3'].shape == (len(images), 10)

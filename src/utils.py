@@ -5,6 +5,7 @@ import urllib.request
 import json
 import logging
 from logging import handlers
+import time
 
 import torch
 import torchvision
@@ -22,6 +23,46 @@ from sklearn.model_selection import train_test_split
 from models_info.models_cv import *
 # from models_info.YOLOv5.yolo import *
 # from models_info.YOLOv5.datasets import *
+    
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=str, default='lenet', help='Model to use for training.')
+    parser.add_argument('--saved-model', type=str, default='/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth', help='Saved model name.')
+    parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
+    parser.add_argument('--data-path', type=str, default='./datasets/', help='Path to the data directory.')
+    parser.add_argument('--importance-file', type=str, default='./logs/important.json', help='The file to save the importance scores.')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
+    parser.add_argument('--device', type=str, default='cpu', help='Device to use for training.')
+    parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset with the resized images.')
+    parser.add_argument('--random-prune', action='store_true', help='Randomly prune the neurons.')
+    parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
+    parser.add_argument('--n-clusters', type=int, default=2, help='Number of clusters to use for KMeans.')
+    parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
+    parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
+
+    # IDC Testing 
+    parser.add_argument('--test-image', type=str, default='1', help='Test image name. For the single image testing.')
+    parser.add_argument('--all-class', action='store_true', help='Attributions collected for all the classes.')
+    parser.add_argument('--idc-test-all', action='store_true', help='Using all the test images for the Coverage testing.')
+    parser.add_argument('--num-samples', type=int, default=0, help='Sampling number for the test images (against with the `idc-test-all`).')
+
+    parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp', 'random', 'wisdom'],  help='The attribution method to use.')
+    parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
+    parser.add_argument('--layer-by-layer', action='store_true', help='Capturing all the module layer in the model, same as end2end.')
+    parser.add_argument('--end2end', action='store_true', help='End to end testing for the whole model.')
+    
+    # General arguments
+    # parser.add_argument('--vis-attributions', action='store_true', help='Visualize the attributions.')
+    # parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
+    parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
+    parser.add_argument('--log-path', type=str, default='./logs/TestLog', help='Path (and name) to save the log file.')
+    parser.add_argument('--inordered-dataset', action='store_true', help='Whether the dataset is ordered.')
+    parser.add_argument('--csv-file', type=str, default='demo_layer_scores.csv', help='The file to save the layer scores.')
+
+    args = parser.parse_args()
+    # print(args)
+    
+    return args
 
 class Logger(object):
     level_relations = {
@@ -49,46 +90,57 @@ class Logger(object):
         th.setFormatter(format_str)
         self.logger.addHandler(sh) 
         self.logger.addHandler(th)
-    
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default='lenet', help='Model to use for training.')
-    parser.add_argument('--saved-model', type=str, default='/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth', help='Saved model name.')
-    parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
-    parser.add_argument('--data-path', type=str, default='./datasets/', help='Path to the data directory.')
-    parser.add_argument('--importance-file', type=str, default='./logs/important.json', help='The file to save the importance scores.')
-    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
-    parser.add_argument('--device', type=str, default='cpu', help='Device to use for training.')
-    parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset with the resized images.')
-    parser.add_argument('--random-prune', action='store_true', help='Randomly prune the neurons.')
-    parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
-    parser.add_argument('--n-clusters', type=int, default=2, help='Number of clusters to use for KMeans.')
-    parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
-    parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
 
-    # IDC Testing 
-    parser.add_argument('--test-image', type=str, default='1', help='Test image name. For the single image testing.')
-    parser.add_argument('--all-class', action='store_true', help='Attributions collected for all the classes.')
-    parser.add_argument('--idc-test-all', action='store_true', help='Using all the test images for the Coverage testing.')
-    parser.add_argument('--num-samples', type=int, default=0, help='Sampling number for the test images (against with the `idc-test-all`).')
+# Logger configuration
+def _configure_logging(enable_logging: bool, args, level: str = "info") -> logging.Logger:
+    if not enable_logging:
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+        return logging.getLogger(__name__)
 
-    parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp', 'random'],  help='The attribution method to use.')
-    parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
-    parser.add_argument('--layer-by-layer', action='store_true', help='Capturing all the module layer in the model, same as end2end.')
-    parser.add_argument('--end2end', action='store_true', help='End to end testing for the whole model.')
+    log_level = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+        "crit": logging.CRITICAL,
+    }.get(level.lower(), logging.INFO)
     
-    # General arguments
-    # parser.add_argument('--vis-attributions', action='store_true', help='Visualize the attributions.')
-    # parser.add_argument('--viz', action='store_true', help='Visualize the input and its relevance.')
-    parser.add_argument('--logging', action="store_true", help="Whether to log the training process")
-    parser.add_argument('--log-path', type=str, default='./logs/TestLog', help='Path (and name) to save the log file.')
-    parser.add_argument('--inordered-dataset', action='store_true', help='Whether the dataset is ordered.')
-    parser.add_argument('--csv-file', type=str, default='demo_layer_scores.csv', help='The file to save the layer scores.')
+    start_ms = int(time.time() * 1000)
+    timestamp = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
+    logfile = f"{args.log_path}-{args.model}-{args.dataset}-{timestamp}.log"
 
-    args = parser.parse_args()
-    # print(args)
+    logger = logging.getLogger("Wisdom")
+    logger.setLevel(log_level)
     
-    return args
+    handler = logging.FileHandler(logfile)
+    formatter = logging.Formatter("%(asctime)s — %(levelname)s — %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.debug(
+        "[=== Model: %s, Dataset: %s, Layers_Index: %s, Topk: %s ===]",
+        args.model,
+        args.dataset,
+        args.layer_index,
+        args.top_m_neurons,
+    )
+    return logger
+
+# Decide which testing mode is active
+def _select_testing_mode(args) -> str:
+    flag_to_mode = {
+        args.layer_by_layer: "layer_by_layer",
+        args.end2end: "end2end",
+        args.all_class: "all_class",
+    }
+
+    active = [mode for flag, mode in flag_to_mode.items() if flag]
+
+    if len(active) > 1:
+        raise ValueError(
+            f"Flags are mutually exclusive, but got: {', '.join(active)}"
+        )
+
+    return active[0] if active else "layer-wise"
 
 def convert_tensors(obj):
     """Recursively convert Tensors to lists"""
@@ -288,14 +340,17 @@ def load_COCO(batch_size=32, data_path='../data/elephant.yaml', img_size=[640, 6
     return trainloader, testloader, c
 
 # Load the ImageNet dataset
-def load_ImageNet(batch_size=32, root='./datasets/ImageNet', num_workers=2, use_val=False):
+def load_ImageNet(batch_size=32, root='./datasets/ImageNet', num_workers=2, use_val=False, label_path='./datasets/imagenet_labels.json'):
     
     val_path = os.path.join(root, 'val/')
-    url = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"
-    urllib.request.urlretrieve(url, "imagenet_labels.json")
+    
+    if not os.path.exists(label_path):
+        url = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"
+        urllib.request.urlretrieve(url, "imagenet_labels.json")
+        label_path = "imagenet_labels.json"
 
     # Load the labels from the JSON file
-    with open("imagenet_labels.json") as f:
+    with open(label_path) as f:
         classes = json.load(f)
     
     if use_val:

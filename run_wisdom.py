@@ -70,7 +70,7 @@ def idc_count(args, model, classes, test_images, test_labels, csv_file):
     # IDC pipeline
     idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
     top_k_neurons = process_neurons(csv_file, args.top_m_neurons, True)
-    activation_values, selected_activations = idc.get_activation_values_for_model(test_images, classes[test_labels[0]], top_k_neurons)
+    activation_values, selected_activations = idc.get_activation_values_for_model(test_images, top_k_neurons)
     kmeans_comb = idc.cluster_activation_values_all(selected_activations)
     unique_cluster, coverage_rate = idc.compute_idc_test_whole(test_images, 
                         test_labels,

@@ -211,16 +211,14 @@ class IDC:
         return activation_values, selected_activations
 
     ## Get the activation values [model-wise]
-    def get_activation_values_for_model(self, inputs, labels, important_neuron_indices):
+    def get_activation_values_for_model(self, inputs, important_neuron_indices):
         """
         Get the activation values for the entire model.
         @param inputs: Input data.
-        @param labels: Labels for the input data.
         @param important_neuron_indices: Indices of important neurons.
         """
         self.model.eval()
         activation_dict = {}
-        print("Getting the Class: {}".format(labels))
         
         def hook_fn(module, input, output, layer_name):
             activation_dict[layer_name] = output.detach()
@@ -355,7 +353,7 @@ class IDC:
     ## Compute the IDC test [model-wise]
     def compute_idc_test_whole(self, inputs_images, labels, indices, cluster_groups, attribution_method='lrp'):
 
-        activation_, selected_activations = self.get_activation_values_for_model(inputs_images, self.classes[labels[0]], indices)
+        activation_, selected_activations = self.get_activation_values_for_model(inputs_images, indices)
         activation_values = []
         for layer_name, importance_scores in selected_activations.items():
             layer = get_layer_by_name(self.model, layer_name)

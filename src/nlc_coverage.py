@@ -324,9 +324,11 @@ class LSC(SurpriseCoverage):
             # if (np.isnan(SA).any()) or (not np.isinf(SA).any()):
             #     continue
             if self.num_class <= 1:
-                lsa = np.asscalar(-self.kde_cache[int(label.cpu())].logpdf(np.expand_dims(SA, 1)))
+                lsa = (-self.kde_cache[int(label.cpu())].logpdf(np.expand_dims(SA, 1))).item()
+                # lsa = np.asscalar(-self.kde_cache[int(label.cpu())].logpdf(np.expand_dims(SA, 1)))
             else:
-                lsa = np.asscalar(-self.kde_cache[int(label.cpu())].score_samples(np.expand_dims(SA, 0)))
+                lsa = (-self.kde_cache[int(label.cpu())].score_samples(np.expand_dims(SA, 0))).item()
+                # lsa = np.asscalar(-self.kde_cache[int(label.cpu())].score_samples(np.expand_dims(SA, 0)))
             if (not np.isnan(lsa)) and (not np.isinf(lsa)):
                 cove_set.add(int(lsa / self.threshold))
         cove_set = self.coverage_set.union(cove_set)
@@ -718,14 +720,14 @@ class TKNP(Coverage):
     def init_variable(self, hyper):
         assert hyper is not None
         self.k = hyper
-        layer_pattern = {}
-        network_pattern = set()
+        self.layer_pattern = {}
+        self.network_pattern = set()
         self.current = 0
         for (layer_name, layer_size) in self.layer_size_dict.items():
             self.layer_pattern[layer_name] = set()
         self.coverage_dict = {
-            'layer_pattern': layer_pattern,
-            'network_pattern': network_pattern
+            'layer_pattern': self.layer_pattern,
+            'network_pattern': self.network_pattern
         }
 
     def calculate(self, data):
@@ -775,6 +777,7 @@ class CC(Coverage):
         self.threshold = hyper
         self.distant_dict = {}
         self.flann_dict = {}
+        self.current = 0
 
         for (layer_name, layer_size) in self.layer_size_dict.items():
             self.flann_dict[layer_name] = FLANN()

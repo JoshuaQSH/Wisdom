@@ -15,8 +15,10 @@ from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_mod
 from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from src.pruning_methods import prune_neurons, prune_layers
 
-
+# python3 prepare_data.py --data-path /data/shenghao/dataset --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_IMAGENET_whole.pth' --dataset imagenet --batch-size 8 --end2end --model vgg16 --top-m-neurons 6 --n-clusters 2 --csv-file resnet18_imagenet_b8 --device 'cuda:1'
 # python3 prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model vgg16 --top-m-neurons 6 --n-clusters 2 --csv-file vgg16_cifar_t6 --inordered-dataset --device 'cuda:0'
+# python3 prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model vgg16 --top-m-neurons 6 --n-clusters 2 --csv-file vgg16_testonly --inordered-dataset --device 'cuda:0'
+
 
 class CustomDataset(Dataset):
     def __init__(self, csv_file, attributions):
@@ -389,7 +391,6 @@ def voting_init(layer_scores, trainable_module_name, trainable_module, excluded_
     return layer_scores
 
 def voting_neurons(layer_index_pairs, layer_scores):
-    
     # Assign scores in reverse order (higher order = higher score)
     for rank, (layer_name, neuron_index) in enumerate(reversed(layer_index_pairs), start=1):
         if layer_name in layer_scores:
@@ -538,7 +539,6 @@ def create_train_data(attributions,
         layer_index_pairs = [neuron[0] for neuron in sorted_neurons]
         layer_index_pairs_opti = [neuron[0] for neuron in sorted_neurons_opti]
         
-        
         if end2end:
             if init_count == 0:
                 voting_init(layer_scores, trainable_module_name, trainable_module, trainable_module_name[-1])
@@ -590,9 +590,7 @@ if __name__ == '__main__':
     device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")    
     
     # attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp']
-    # attributions = ['lc', 'la', 'ii', 'ldl', 'lgs', 'lig', 'lfa', 'lrp']
     attributions = ['lc', 'la', 'ii', 'ldl', 'ldls', 'lgs', 'lig', 'lrp']
-    # attributions = ['la', 'ii']
         
     ## Saved the index for comparing the Common Neurons across the attributions
     # {'lc': [1, 2, 3, 4, 5], 'la': [1, 2, 3, 4, 5], ...}

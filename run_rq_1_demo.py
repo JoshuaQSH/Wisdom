@@ -1,5 +1,4 @@
 import copy
-import csv
 import random
 import time
 import os
@@ -9,35 +8,17 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-from torch.utils.data import DataLoader
-from src.attribution import get_relevance_scores_for_all_layers, get_relevance_scores_dataloader
-from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, Logger
+from src.attribution import get_relevance_scores_dataloader
+from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main
 
 
 # Example command to run the script:
-# python run_rq_1_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0'  --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_t6.csv'
-# python run_rq_1_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_mnist_t6.csv'
-# python run_rq_1_demo.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/vgg16_cifar_t6.csv'
-# python run_rq_1_demo.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/resnet18_cifar_t6.csv'
+# python run_rq_1_demo.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/resnet18_cifar_b32.csv'
 
 attribution_methods = {'lrp': 'LRP', 'ldl': 'DeepLIFT', 'lgs': 'SHAP', 'Wisdom': 'wisdom'}
-# attribution_methods = {'lrp': 'LRP', 'ldl': 'DeepLIFT', 'Wisdom': 'wisdom'}
-# attribution_methods = {'lgs': 'SHAP', 'Wisdom': 'wisdom'}
-
-
 N_list = [6, 8, 10, 15, 20]
 
-def prapared_parameters(args):
-    ### Logger settings
-    if args.logging:
-        start_time = int(round(time.time()*1000))
-        timestamp = time.strftime('%Y%m%d-%H%M%S',time.localtime(start_time/1000))
-        saved_log_name = args.log_path + '-{}-{}-{}-{}.log'.format(args.model, args.dataset, args.layer_index, timestamp)
-        # saved_log_name = args.log_path + 'PrepareData-{}-{}-L{}-{}.log'.format(args.model, args.dataset, args.layer_index, timestamp)
-        log = Logger(saved_log_name, level='debug')
-        log.logger.debug("[=== Model: {}, Dataset: {}, Layers_Index: {}, TopK: {} ==]".format(args.model, args.dataset, args.layer_index, args.top_m_neurons))
-    else:
-        log = None
+def prapare_data_models(args):
 
     ### Model settings
     model_path = os.getenv("HOME") + args.saved_model
@@ -46,7 +27,7 @@ def prapared_parameters(args):
     model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
 
-    return model, module_name, module, trainable_module, trainable_module_name, log
+    return model, module_name, module, trainable_module, trainable_module_name
 
 def save_results_to_csv(relevance_records, accuracy_records, filename="rq1"):
     
@@ -103,7 +84,7 @@ def run_wisdom_test(model, test_loader, device, csv_file, original_acc, accuracy
         acc_drop = original_acc - acc
         
         accuracy_records.append({
-                "Attribution Method": "Widdom",
+                "Attribution Method": "Wisdom",
                 "Top-N": n_prune,
                 "Accuracy Drop": acc_drop
         })
@@ -242,7 +223,6 @@ def run_single_train_attr(train_loader, test_loader, original_acc, model, device
             # Sort descending by relevance score
             flat_scores.sort(key=lambda x: x[1], reverse=True)
             total_neurons = len(flat_scores)
-            
             # Random pruning baseline
             accuracy_records = record_acc_drop_random(total_neurons=total_neurons, 
                             global_neurons=flat_scores, 
@@ -271,7 +251,7 @@ if __name__ == '__main__':
     device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")
 
     ### Model settings
-    model, module_name, module, trainable_module, trainable_module_name, log = prapared_parameters(args)
+    model, module_name, module, trainable_module, trainable_module_name = prapare_data_models(args)
 
     ### Data settings
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path, args.large_image)

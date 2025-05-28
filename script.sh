@@ -80,7 +80,7 @@ case "$MODE" in
         ;;
     case3)
         echo "Running Use Case 3..."
-        python3 run_pre.py \
+        python3 run_wisdom.py \
             --model $MODEL_NAME \
             --saved_model $SAVED_MODEL \
             --dataset $DATASET_NAME \

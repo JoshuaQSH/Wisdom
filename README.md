@@ -80,7 +80,7 @@ $ python plot_images.py --plot-all
 - `run.py`: Main entrance for the testing program
 - `test_base.sh`: A baseline testing (DeepImportance based with LRP)
 
-## Parameters
+## Parameters and single files running example
 ```shell
 # UC1 - Running IDC test with different attribution methods
 python run.py \
@@ -121,46 +121,71 @@ python run.py \
 --log-path  '<path>/<name>' # log file path and name: e.g., './logs/TestLog'
 --logging # Save the log file
 
-# An LeNet Example - CIFAR10 with layer index: 1
-python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --use-silhouette --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
+# UC-1: IDC results with different attribution methods
+## An LeNet Example - CIFAR10 with layer index: 1 - LRP
+python3 run.py \
+      --model lenet \
+      --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
+      --dataset cifar10 \
+      --data-path '/data/shenghao/dataset/' \
+      --use-silhouette \
+      --device cpu \
+      --n-cluster 2 \
+      --top-m-neurons 5 \
+      --test-image plane \
+      --idc-test-all \
+      --num-samples 0  \
+      --attr lrp \
+      --layer-index 1 \
+      --log-path './logs/TestLog' \
+      --logging
 
-# An LeNet end2end example - CIFAR10
-python run.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 10 --test-image plane --end2end --idc-test-all --num-samples 0  --attr lrp --log-path './logs/TestLog' --logging
-
-# A VGG16 example - ImageNet
-python run.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/vgg16_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 5 --test-image plane --idc-test-all --num-samples 0  --attr lrp --layer-index 1 --log-path './logs/TestLog' --logging
+## An LeNet end2end example - CIFAR10 - LRP
+python3 run.py \
+      --model lenet \
+      --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
+      --dataset cifar10 \
+      --data-path '/data/shenghao/dataset/' \
+      --device cpu \
+      --n-cluster 2 \
+      --top-m-neurons 10 \
+      --test-image plane \
+      --end2end --idc-test-all \
+      --num-samples 0  \
+      --attr lrp \
+      --log-path './logs/TestLog' \
+      --logging
 
 # UC-2: voting data for specific model
-## Prepare data - VGG16
-python prepare_data.py \
-        --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' \
-        --dataset cifar10 \
-        --batch-size 2 \
-        --layer-index 5 \
-        --model vgg16 \
-        --top-m-neurons 10 \
-        --n-clusters 2 \
-        --end2end \
-        --csv-file ordered \
-        --log-path './logs/PrepareDataLog' \
-        --logging
-
-## Prepare the data, CIFAR10 and LeNet, in orderd
-python prepare_data.py \
-        --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
-        --dataset cifar10 \
-        --batch-size 2 \
+## Example: LeNet - MNIST - top/6
+python3 prepare_data.py \
+        --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' \
+        --dataset mnist \
+        --batch-size 32 \
         --end2end \
         --model lenet \
-        --top-m-neurons 10 \
+        --device 'cuda:0' \
+        --top-m-neurons 6 \
         --n-clusters 2 \
-        --csv-file ordered \
-        --log-path './logs/PrepareDataLog' \
-        --logging
+        --csv-file lenet_mnist_b32 \
+        --logging \
+        --log-path './logs/PreLeNetMNISTTopNew-6'
 
 # Uc - 3
-# Test with the trained data
-python run_pre.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --importance-file './saved_files/lenet_impotant.json' --device cpu --n-cluster 2 --top-m-neurons 10 --test-image plane --end2end --num-samples 0  --attr lrp --layer-index 1
+# Apply the WISDOM 
+python3 run_wsidom.py \
+      --model lenet \
+      --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' \
+      --dataset mnist \
+      --data-path '/data/shenghao/dataset/' \
+      --device cpu \
+      --n-cluster 2 \
+      --top-m-neurons 6 \
+      --end2end \
+      --num-samples 0 \
+      --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_mnist_b32.csv' \
+      --idc-test-all 
+
 ```
 
 ## Research Questions
@@ -197,6 +222,20 @@ Notes:
 - $U_O$: original dataset
 - $U_I$: Noise for important pixels
 - $U_R$: Noise for random pixels
+
+How to run
+```shell
+# MODELNAME: [lenet, vgg16, resnet18]
+# DATASET: [mnist, cifar10]
+# Pretrained relevant scores: ./saved_files/pre_csv/<MODELNAME>_<DATASET>.csv
+python run_rq_2_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu  --csv-file /path/to/wisdom/weights/csv --idc-test-all --attr wisdom --top-m-neurons 10 --device 'cuda:0'
+
+# With WISDOM-based pertubation
+./run_rq_2.sh
+
+# With LRP-based pertubation
+./run_rq_2.sh 1
+```
 
 ### RQ 3: Effectiveness (or sensitivity)
 
@@ -250,6 +289,11 @@ Other implmentation for the baseline should include:
 [5] Reducing dnn labelling cost using surprise adequacy: An industrial case study for autonomous driving, FSE Industry Track 2020.
 
 Implementation repo: [NeuraL-Coverage](https://github.com/Yuanyuan-Yuan/NeuraL-Coverage/tree/main)
+
+## Potential improvement and extensions
+
+- [ ] A template-based optimization for all the attribution methods (acceleration)
+- [ ] Attribution methods in LLMs and transformer-based models
 
 ## Docker [TODO]
 

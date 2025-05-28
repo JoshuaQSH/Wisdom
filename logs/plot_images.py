@@ -481,7 +481,7 @@ if __name__ == "__main__":
     parser.add_argument('--plot-type', type=str, default='accuracy', choices=['neuron', 'acc'], help='Ploting type for the log file')
     args = parser.parse_args()
     # plot_main(plot_all=args.plot_all, log_file=args.log_file, plot_type=args.plot_type)
-    
-    log_file_path = "PrepareTestTrainLayerLog-vgg16-cifar10-5-20250226-103933.log"
+    # PreVGG16CIFARTop-6-vgg16-cifar10-1-20250514-114545.log
+    log_file_path = "PreVGG16CIFARTop-20-vgg16-cifar10-1-20250520-192316.log"
     label_method_rates, layer_method_rates, label_common_neurons, layer_common_neurons = analyze_preparedata_log_file(log_file_path)
     visualize_preparedata_results(label_method_rates, layer_method_rates, label_common_neurons, layer_common_neurons)
