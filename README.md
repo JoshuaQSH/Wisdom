@@ -1,4 +1,4 @@
-# Torch4DeepImportance
+# WISDOM: Torch4DeepImportance and beyond
 
 A pytorch version for Deepimportance (test version). [TensorFlow version for DeepImportance](https://github.com/DeepImportance/deepimportance_code_release/tree/ga_modifications). 
 
@@ -44,41 +44,12 @@ $ python plot_images.py --plot-all
 ## TODO
 
 - [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
-  - [ ] Architecture analysation block by block, YOLOv5s
-- [x] [**IDC**] Selectors for different attributors (using the accuracy as the guide)
-    - [x] Rankings, plots
-    - [x] Transfer learning based training
-    - [x] Voting
+- [x] [**CI**] Pytest Running with a small demo (MNIST)
+- [ ] [**CI**] Docker building
 - [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
-  - [ ] [**Lib**] GitHub CI for Docker building
-  - [ ] [**Lib**] GitHub CI for Pytest Running with a small demo (MNIST)
-  - [ ] [**Lib**] Extract the small verison libs
-- [ ] [**Lib**] pip package and docker conatiner
-- [ ] [**IDC**] Customized rules for `torch.nn.Sequencial` in LRP
-- [ ] [**IDC**] Add more dataset and models
-  - [ ] VGG16 + ImageNet
-  - [ ] ConvNext + ImageNet
-  - [ ] mobilenet + ImageNet
-- [ ] [**IDC**] SOTA methods to compare
-- [ ] [**IDC**] Per feature selector (transfer learning style)
-  - [ ] A table for the variances and per input predition scores
+- [ ] [**Lib**] pip package ready
 - [ ] [**IDC**] runtime version + attention
 - [ ] [**YOLO**] YOLO v11
-
-
-## Directory information
-
-- `Docker`: Dockerfile
-- `data`: COCO dataset info
-- `examples`: Small examples (stand-alone) to test captum
-- `images`: All the saved images, including the example images and the heatmap saved by the running demos
-- `logs`: The saved the log files
-- `models_info`: Pre-trained model files (*.pt) and also the model architecture visualisations
-  - `train_from_scratch`: This is a standalone file that allows you to train all the CV models from scratch with CIFAR10 dataset
-- `saved_files`: Saved JSON files for the model importances
-- `src`: The source files, including the idc implementations and the attribution methods (torch/captum)
-- `run.py`: Main entrance for the testing program
-- `test_base.sh`: A baseline testing (DeepImportance based with LRP)
 
 ## Parameters and single files running example
 ```shell
