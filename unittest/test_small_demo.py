@@ -13,7 +13,7 @@ from src.idc import IDC
 MODEL_CLASSES = {
     'lenet': LeNet,
     'vgg16': lambda: VGG('VGG16'),
-    'resnet18': ResNet18,
+    'resnet18': resnet.ResNet18,
     'googlenet': GoogLeNet,
     'densenet': DenseNet121,
     'resnext29': ResNeXt29_2x64d,
@@ -74,6 +74,18 @@ def test_model_infer_cifar(model_name):
     x = torch.randn(1, 3, 32, 32)
     y = model(x)
     assert y.shape == (1, 10), f"{model_name} output shape mismatch: got {y.shape}"
+
+def test_model_infer_imagenet():
+    model = resnet_imagenet.ResNet18(num_classes=1000)
+    model.eval()
+
+    total_params = sum(p.numel() for p in model.parameters())
+    assert total_params > 0, f"ResNet18 has no parameters."
+    print(f"Total number of parameters: {total_params}")
+    
+    x = torch.randn(1, 3, 224, 224)
+    y = model(x)
+    assert y.shape == (1, 1000), f"ResNet18 output shape mismatch: got {y.shape}"
 
 
 @pytest.mark.skipif(
