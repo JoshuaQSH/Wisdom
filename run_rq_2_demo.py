@@ -3,14 +3,15 @@ import random
 import time
 import os
 import math
+import pandas as pd
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 import warnings
-
-
-import pandas as pd
+import numpy as np
 
 import torch
 import torch.nn.functional as F
+from torchvision.utils import make_grid
 from collections import defaultdict
 from captum.attr import LRP
 
@@ -42,7 +43,7 @@ U_R (Random-perturbed): Each image has noise added to a random 2% of its pixels.
 # -----------------------------------------------------------
 
 SEED = 2025  # Random seed for reproducibility
-TOPK = 0.02  # Top-k fraction of pixels to perturb (2%)
+TOPK = 0.2  # Top-k fraction of pixels to perturb (2%)
 start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
 acts = defaultdict(list)
@@ -64,6 +65,98 @@ def toy_train_loader(train_dataset, batch_size, ratio=0.2):
     build_set_A, _ = random_split(train_dataset, [n_build, n_rest])
     build_loader_A = DataLoader(build_set_A, batch_size=batch_size, shuffle=True)
     return build_loader_A
+
+def visualize_pairs(original_loader,
+                    perturbed_loader,
+                    class_names=None,
+                    n_per_class: int = 4,
+                    figsize=(10, 6)):
+    """
+    For each class, draws `n_per_class` *pairs* of images:
+        ▸ left  = original
+        ▸ right = perturbed
+    so you can directly compare them.
+
+    Parameters
+    ----------
+    original_loader   : DataLoader yielding (images, labels)
+    perturbed_loader  : DataLoader yielding (perturbed_images, labels)
+                        ─ must iterate in the same order.
+    class_names       : list of str – prettier y-tick labels (optional)
+    n_per_class       : how many pairs per class to display
+    figsize           : passed to plt.figure
+    """
+    collected = {}                                     # lbl → list[(orig, pert)]
+    for (x, y), (x_t, y_t) in zip(original_loader, perturbed_loader):
+        assert torch.equal(y, y_t), "Loaders out of sync!"
+        for orig, pert, lbl in zip(x, x_t, y):
+            lbl = lbl.item()
+            if lbl not in collected:
+                collected[lbl] = []
+            if len(collected[lbl]) < n_per_class:
+                collected[lbl].append((orig, pert))
+        # early stop when every class satisfied
+        if all(len(v) == n_per_class for v in collected.values()):
+            break
+
+    # flatten into [orig1, pert1, orig2, pert2, …] keeping class order
+    grid_imgs, y_ticks = [], []
+    for lbl in sorted(collected.keys()):
+        for orig, pert in collected[lbl]:
+            grid_imgs.extend([orig, pert])
+        y_ticks.append(lbl)
+
+    # 2 images per pair  →  nrow = 2*n_per_class
+    grid = make_grid(torch.stack(grid_imgs),
+                     nrow=2 * n_per_class,
+                     padding=2)
+    npimg = grid.permute(1, 2, 0).numpy()
+
+    plt.figure(figsize=figsize)
+    cmap = 'gray' if npimg.shape[2] == 1 else None
+    plt.imshow(npimg, cmap=cmap)
+    plt.axis('off')
+
+    # optional class labels on left margin
+    if class_names is None:
+        class_names = [str(i) for i in y_ticks]
+    step = grid.size(2) // (n_per_class * 2)
+    for row, lbl in enumerate(y_ticks):
+        y = row * step + step * 0.5
+        plt.text(-5, y, class_names[lbl], va='center', ha='right')
+    plt.title("Original (left) vs. perturbed (right) – each pair")
+    plt.savefig(f"perturbation_samples.pdf", dpi=1200, format='pdf')
+
+def image_distance_visualization(original_loader, perturbed_loader, n_classes=10, show_plot=True):
+    """
+    Visualizes the original and perturbed images side by side.
+    """
+    class_sum  = np.zeros(n_classes, dtype=np.float64)
+    class_cnt  = np.zeros(n_classes, dtype=np.int64)
+    
+    for (x, y), (x_tilde, y_2) in zip(original_loader, perturbed_loader):
+        assert torch.equal(y, y_2), "Loaders are out of sync!"
+        diff = (x_tilde - x).view(x.size(0), -1)
+        d = diff.norm(p=2, dim=1).cpu().numpy()   # (B,)
+        for lbl in range(n_classes):
+            mask = (y.cpu().numpy() == lbl)
+            class_sum[lbl] += d[mask].sum()
+            class_cnt[lbl] += mask.sum()
+            
+    per_class = class_sum / np.maximum(class_cnt, 1)  # avoid div-by-zero
+    avg_dist  = per_class[class_cnt > 0].mean()
+    
+    if show_plot:
+        plt.figure(figsize=(8,4))
+        plt.bar(range(n_classes), per_class, tick_label=list(range(n_classes)))
+        plt.ylabel("L2-distance")
+        plt.xlabel("Class")
+        plt.title("Perturbation strength per class")
+        plt.savefig(f"perturbation_strength.pdf", dpi=1200, format='pdf')
+    
+    return avg_dist, per_class
+
+    
 
 def set_seed(seed: int = 2025):
     random.seed(seed)
@@ -239,7 +332,7 @@ def build_mask_wisdom(heat: torch.Tensor, k: float = 0.02) -> torch.Tensor:
     return mask, mask_rand
 
 def add_gaussian_noise(imgs: torch.Tensor, mask: torch.Tensor,
-                       mean=0., std=0.3):
+                       mean=0., std=0.1):
     noise = torch.randn_like(imgs) * std + mean
     return torch.where(mask, imgs + noise, imgs).clamp(0., 1.)
 
@@ -533,16 +626,22 @@ def main(args):
     
     build_loader_toy = toy_train_loader(train_dataset, args.batch_size, ratio=0.2)  # Optional: for CC or other methods that need a build loader
     
-    U_I_loader  = DataLoader(U_I_dataset, batch_size=args.batch_size, shuffle=True)
-    U_R_loader  = DataLoader(U_R_dataset, batch_size=args.batch_size, shuffle=True)
+    U_I_loader  = DataLoader(U_I_dataset, batch_size=args.batch_size, shuffle=False)
+    U_R_loader  = DataLoader(U_R_dataset, batch_size=args.batch_size, shuffle=False)
+    
+    # avg_dist, per_class = image_distance_visualization(test_loader, U_I_loader, n_classes=len(classes), show_plot=True)
+    visualize_pairs(U_R_loader, U_I_loader, n_per_class=5)
+
+    # print(f"Average perturbation distance: {avg_dist:.4f}")
+    # print(f"Per-class perturbation distances: {per_class}")
     
     # A simple acc test for the perturbed datasets
     eval_model(model, test_loader, U_I_loader, U_R_loader, device)
     
     # Run the coverage suite
-    print("\n=== Running coverage suite ===")
-    run_coverage_suite(model, build_loader_toy, test_loader, U_I_loader, U_R_loader, device, classes, tag_pre=args.attr + '_')
-    run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_I_loader, U_R_loader, device, classes)
+    # print("\n=== Running coverage suite ===")
+    # run_coverage_suite(model, build_loader_toy, test_loader, U_I_loader, U_R_loader, device, classes, tag_pre=args.attr + '_')
+    # run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_I_loader, U_R_loader, device, classes)
     
 
 if __name__ == '__main__':

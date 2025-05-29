@@ -4,6 +4,7 @@ import copy
 import pandas as pd
 from tqdm import tqdm
 import csv
+import re
 
 from sklearn.metrics import f1_score
 
@@ -11,45 +12,23 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
-from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, get_trainable_modules_main, eval_model_dataloder, extract_class_to_dataloder, Logger
+from src.utils import load_CIFAR, load_MNIST, load_ImageNet, parse_args, get_model, get_trainable_modules_main, extract_class_to_dataloder, patch_resnet_imagenet, eval_model_dataloder, Logger
 from src.attribution import get_relevance_scores, get_relevance_scores_for_all_layers
 from src.pruning_methods import prune_neurons, prune_layers
 
-# python3 prepare_data.py --data-path /data/shenghao/dataset --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_IMAGENET_whole.pth' --dataset imagenet --batch-size 8 --end2end --model vgg16 --top-m-neurons 6 --n-clusters 2 --csv-file resnet18_imagenet_b8 --device 'cuda:1'
-# python3 prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model vgg16 --top-m-neurons 6 --n-clusters 2 --csv-file vgg16_cifar_t6 --inordered-dataset --device 'cuda:0'
-# python3 prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model vgg16 --top-m-neurons 6 --n-clusters 2 --csv-file vgg16_testonly --inordered-dataset --device 'cuda:0'
+from models_info.models_cv.resnet_imagenet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 
 
-class CustomDataset(Dataset):
-    def __init__(self, csv_file, attributions):
-        self.data = pd.read_csv(csv_file)
-        self.attributions = attributions
-        self.method_to_idx = {method: idx for idx, method in enumerate(attributions)}
+### Example usage (ResNet - ImageNet pair):
+# python3 prepare_data.py --data-path /data/shenghao/dataset --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_whole.pth' --dataset imagenet --batch-size 4 --end2end --model resnet18 --top-m-neurons 6 --csv-file resnet18_imagenet_b4 --device 'cuda:0'
+# python3 prepare_data.py --data-path /data/shenghao/dataset --saved-model '/torch-deepimportance/models_info/saved_models/resnet152_IMAGENET_whole.pth' --dataset imagenet --batch-size 4 --end2end --model resnet152 --top-m-neurons 6 --csv-file resnet152_imagenet_b4 --device 'cuda:0'
+### Example usage (VGG16 - CIFAR10 pair):
+# python3 prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model vgg16 --top-m-neurons 6 --csv-file vgg16_cifar_t6 --inordered-dataset --device 'cuda:0'
+# python3 prepare_data.py --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --batch-size 2 --end2end --model vgg16 --top-m-neurons 6 --csv-file vgg16_testonly --inordered-dataset --device 'cuda:0'
 
-    def __len__(self):
-        return len(self.data)
 
-    def __getitem__(self, idx):
-        image = torch.tensor(eval(self.data.iloc[idx]['image']), dtype=torch.float32).view(3, 32, 32)
-        label = torch.tensor(self.data.iloc[idx]['label'], dtype=torch.long)
-        layer_info = torch.tensor(eval(self.data.iloc[idx]['layer_info']), dtype=torch.float32)
-        optimal_method = self.data.iloc[idx]['optimal_method']
-        optimal_method_idx = self.method_to_idx[optimal_method]
-        optimal_method_one_hot = torch.zeros(len(self.attributions))
-        optimal_method_one_hot[optimal_method_idx] = 1
-        
-        return image, label, layer_info, optimal_method_one_hot
+SKIPTEST = True
 
-def test_new_dataset_loading(csv_file='prepared_data.csv', attributions=['lfa', 'ldl']):
-    
-    dataset = CustomDataset(csv_file, attributions)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-    # Training loop
-    for epoch in range(3):
-        for images, labels, layer_infos, optimal_methods in dataloader:
-            # Your training code here
-            print(images.shape, labels.shape, layer_infos.shape, optimal_methods.shape)
-            break
 
 def save_to_csv(train_images, train_labels, layer_info, optimal_method, csv_file):
     # Flatten the train_images and convert to list
@@ -111,9 +90,26 @@ def prapared_parameters(args):
 
     ### Model settings
     model_path = os.getenv("HOME") + args.saved_model
+    if args.dataset == 'imagenet' and re.match(r'resnet\d+', args.model):
+        model_mapping = {
+            'resnet18': ResNet18,
+            'resnet34': ResNet34,
+            'resnet50': ResNet50,
+            'resnet101': ResNet101,
+            'resnet152': ResNet152
+        }
+        model_fit = model_mapping.get(args.model, ResNet18)(num_classes=1000)  # Default to ResNet18 if not found
+        model_fit = model_fit.eval()
+        model = patch_resnet_imagenet(model_fit, model_path, model_name=args.model)
+        module_name = []
+        module = []
+        for name, layer in model.named_modules():
+            module_name.append(name)
+            module.append(layer)    
+    else:
+        ### Model loading
+        model, module_name, module = get_model(model_path)
     
-    ### Model loading
-    model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
 
     return model, module_name, module, trainable_module, trainable_module_name, log
@@ -185,10 +181,7 @@ def prepare_data(args):
     elif args.dataset == 'mnist':
         trainloader, testloader, train_dataset, test_dataset, classes = load_MNIST(batch_size=args.batch_size, root=args.data_path)
     elif args.dataset == 'imagenet':
-        trainloader, testloader, train_dataset, test_dataset, classes = load_ImageNet(batch_size=args.batch_size, 
-                                                         root=args.data_path + '/ImageNet', 
-                                                         num_workers=2, 
-                                                         use_val=False)
+        trainloader, testloader, train_dataset, test_dataset, classes = load_ImageNet(batch_size=args.batch_size,  root=args.data_path+'/ImageNet',  num_workers=2, use_val=False)
     else:
         raise ValueError(f"Invalid dataset: {args.dataset}")
     
@@ -398,94 +391,6 @@ def voting_neurons(layer_index_pairs, layer_scores):
 
     return layer_scores
 
-def create_train_data_per_class(attributions, 
-               model,
-               device,
-               classes, 
-               net_layer, 
-               layer_name, 
-               top_m_neurons, 
-               original_state, 
-               layer_index,
-               trainloader,
-               log,
-               end2end,
-               across_attr_method,
-               csv_file):
-    
-    model.eval()
-    
-    layer_scores = {}
-    init_count = 0
-    current_class = None
-    
-    for train_images, train_labels in tqdm(trainloader):
-        if current_class is None or train_labels[0].item() != current_class:
-            # Save the layer_scores for the previous class (if any)
-            if current_class is not None:
-                train_labels_str = classes[current_class]
-                save_inter_layer_scores_to_csv(layer_scores, train_labels_str, f"./saved_files/inter_csv/inter_scores_{csv_file}_{train_labels_str}.csv")
-                # Reset layer_scores for the new class
-                layer_scores = {}
-            
-            # Update the current class
-            current_class = train_labels[0].item()
-            # Reset the initialization count for the new class
-            init_count = 0
-        
-        ### Obtain important neurons using different attribution methods
-        important_neurons_dict = get_important_dict(attributions, 
-                                                    model,
-                                                    train_images, 
-                                                    train_labels, 
-                                                    classes, 
-                                                    net_layer, 
-                                                    layer_name, 
-                                                    top_m_neurons,
-                                                    final_layer,
-                                                    end2end)
-            
-        optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model,
-                                                                device,
-                                                                original_state,
-                                                                classes, 
-                                                                train_images, 
-                                                                train_labels, 
-                                                                important_neurons_dict, 
-                                                                layer_index,
-                                                                log,
-                                                                end2end)
-        
-        layer_index_pairs = [neuron[0] for neuron in sorted_neurons]
-        layer_index_pairs_opti = [neuron[0] for neuron in sorted_neurons_opti]
-        
-        if init_count == 0:
-            voting_init(layer_scores, trainable_module_name, trainable_module, trainable_module_name[-1])
-            init_count += 1
-            if across_attr_method:
-                layer_scores = voting_neurons(layer_index_pairs, layer_scores)
-            else:
-                layer_scores = voting_neurons(layer_index_pairs_opti, layer_scores)
-        else:
-            init_count += 1
-            if across_attr_method:
-                layer_scores = voting_neurons(layer_index_pairs, layer_scores)
-            else:
-                layer_scores = voting_neurons(layer_index_pairs_opti, layer_scores)
-        
-        b_accuracy, b_total_loss, f1_score = test_model(model, device, train_images, train_labels)
-        
-        if log is not None:
-            log.logger.info("Optimal method: {}".format(optimal_method))
-            # log.logger.info("Accuracy drop: {}".format(accuracy_drops))
-            # log.logger.info("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
-        else:
-            print("Optimal method: {}".format(optimal_method))
-            # print("Accuracy drop: {}".format(accuracy_drops))
-            # print("Before Acc: {:.2f}%, Before Loss: {:.2f}".format(b_accuracy, b_total_loss))
-    
-    print("Trainloader per class DONE.")
-
 def create_train_data(attributions, 
                model,
                device,
@@ -525,7 +430,6 @@ def create_train_data(attributions,
         if get_intersection:
             save_intersection(important_neurons_dict, log)
             
-        # TODO - 1: whole model testing
         optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti = identify_optimal_method(model,
                                                                 device,
                                                                 original_state,
@@ -604,7 +508,11 @@ if __name__ == '__main__':
     
     # Skip final classifier layer
     final_layer = trainable_module_name[-1]
-
+    
+    if not SKIPTEST:
+        acc, loss, f1 = eval_model_dataloder(model, testloader, device=device)
+        print(f'Original Model testing Accuracy: {acc}, Loss: {loss}, F1: {f1}')
+        
     # set across_attr_method = True to get the top-K neurons across all the attribution methods
     create_train_data(attributions=attributions, 
                    model=model,
@@ -623,19 +531,3 @@ if __name__ == '__main__':
                    across_attr_method=True,
                    csv_file=args.csv_file,
                    get_intersection=False)
-    
-    # create_train_data_per_class(attributions=attributions, 
-    #                model=model,
-    #                device=device,
-    #                classes=classes, 
-    #                net_layer=trainable_module[args.layer_index], 
-    #                layer_name=trainable_module_name[args.layer_index], 
-    #                top_m_neurons=args.top_m_neurons, 
-    #                original_state=original_state, 
-    #                layer_index=args.layer_index,
-    #                trainloader=trainloader,
-    #                log=log,
-    #                final_layer=final_layer,
-    #                end2end=args.end2end,
-    #                across_attr_method=True,
-    #                csv_file=args.csv_file)
