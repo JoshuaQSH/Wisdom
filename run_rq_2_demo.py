@@ -15,7 +15,7 @@ from torchvision.utils import make_grid
 from collections import defaultdict
 from captum.attr import LRP
 
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, TensorDataset, random_split, ConcatDataset
 from src.attribution import get_relevance_scores_dataloader
 from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, extract_random_class
 from src.idc import IDC
@@ -30,23 +30,33 @@ from src.nlc_tool import get_layer_output_sizes
 U_I (Importance-perturbed): Each image has Gaussian white noise (mean 0, std 0.3) added to its most important 2% pixels.
 U_R (Random-perturbed): Each image has noise added to a random 2% of its pixels.
 
+U_IO (Importance-perturbed Original): Original images with noise added to the most important 2% pixels.
+U_RO (Random-perturbed Original): Original images with noise added to a random 2% of its pixels.
+
 # Step 1: Get the relevance maps for the test set using Attribution methods (e.g., LRP).
 # Step 2: For each image, find the top 2% most important pixels based on the relevance map (Baseline: random & LRP) and form the new dataset.
 # Step 3: Coverage testing for the perturbed dataset.
 
 """
 
-# python run_rq_2_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv' --idc-test-all --attr lrp --top-m-neurons 10
+# python run_rq_2_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv' --idc-test-all --attr lrp --top-m-neurons 10 --use-silhouette
 
 # -----------------------------------------------------------
 # Helper
 # -----------------------------------------------------------
 
 SEED = 2025  # Random seed for reproducibility
-TOPK = 0.2  # Top-k fraction of pixels to perturb (2%)
+TOPK = 0.01  # Top-k fraction of pixels to perturb (2%)
+SANITY_CHECK = False
 start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
 acts = defaultdict(list)
+
+def vis_santity_check(dataloder1, dataloader2, classes, n_per_class=5):
+    visualize_pairs(dataloder1, dataloader2, n_per_class=n_per_class)
+    avg_dist, per_class = image_distance_visualization(dataloder1, dataloader2, n_classes=len(classes), show_plot=True)
+    print(f"Average perturbation distance: {avg_dist:.4f}")
+    print(f"Per-class perturbation distances: {per_class}")
 
 def prapare_data_models(args):
     ### Model settings
@@ -71,22 +81,8 @@ def visualize_pairs(original_loader,
                     class_names=None,
                     n_per_class: int = 4,
                     figsize=(10, 6)):
-    """
-    For each class, draws `n_per_class` *pairs* of images:
-        ▸ left  = original
-        ▸ right = perturbed
-    so you can directly compare them.
-
-    Parameters
-    ----------
-    original_loader   : DataLoader yielding (images, labels)
-    perturbed_loader  : DataLoader yielding (perturbed_images, labels)
-                        ─ must iterate in the same order.
-    class_names       : list of str – prettier y-tick labels (optional)
-    n_per_class       : how many pairs per class to display
-    figsize           : passed to plt.figure
-    """
-    collected = {}                                     # lbl → list[(orig, pert)]
+    # lbl → list[(orig, pert)]
+    collected = {}                                     
     for (x, y), (x_t, y_t) in zip(original_loader, perturbed_loader):
         assert torch.equal(y, y_t), "Loaders out of sync!"
         for orig, pert, lbl in zip(x, x_t, y):
@@ -200,19 +196,19 @@ def _spawn_coverage_objects(model, layer_size_dict, num_classes):
         'NC'   : NC  (model, layer_size_dict, hyper=0.5),
         'KMNC' : KMNC(model, layer_size_dict, hyper=1000),
         'NBC'  : NBC (model, layer_size_dict),
-        # 'SNAC' : SNAC(model, layer_size_dict),
-        # 'TKNC' : TKNC(model, layer_size_dict, hyper=10),
-        # 'TKNP' : TKNP(model, layer_size_dict, hyper=10), 
-        # 'CC'   : CC  (model, layer_size_dict, hyper=10),
+        'SNAC' : SNAC(model, layer_size_dict),
+        'TKNC' : TKNC(model, layer_size_dict, hyper=10),
+        'TKNP' : TKNP(model, layer_size_dict, hyper=10), 
+        'CC'   : CC  (model, layer_size_dict, hyper=10),
 
         # --- statistical / surprise-based --------------------
-        # 'NLC'  : NLC (model, layer_size_dict),                      # no hyper
-        # 'LSC'  : LSC (model, layer_size_dict,
-        #               hyper=10, min_var=1e-5, num_class=num_classes),
-        # 'DSC'  : DSC (model, layer_size_dict,
-        #               hyper=0.1, min_var=1e-5, num_class=num_classes),
-        # 'MDSC' : MDSC(model, layer_size_dict,
-        #               hyper=10, min_var=1e-5, num_class=num_classes),
+        'NLC'  : NLC (model, layer_size_dict),                      # no hyper
+        'LSC'  : LSC (model, layer_size_dict,
+                      hyper=10, min_var=1e-5, num_class=num_classes),
+        'DSC'  : DSC (model, layer_size_dict,
+                      hyper=0.1, min_var=1e-5, num_class=num_classes),
+        'MDSC' : MDSC(model, layer_size_dict,
+                      hyper=10, min_var=1e-5, num_class=num_classes),
     }
 
 def save_csv_results(updated_column_dict, csv_path='results.csv', tag='original'):
@@ -438,7 +434,7 @@ def quick_patch(name, val, target_loader, total_buckets, cc_ref):
     if name == 'TKNP':
         val = val / len(target_loader.dataset)
     if name == 'NLC':
-        val = 1 - torch.exp(-val)
+        val = val / total_buckets
     if name == 'CC':
         val = val / cc_ref
     
@@ -459,7 +455,7 @@ def run_other_coverage_suite(model,
     layer_size_dict = _infer_layer_sizes(model, sample_batch, device)
     # A hack here, we assume 1000 buckets for DSC/MDSC
     total_buckets = 1000
-    cc_ref = 20123
+    cc_ref = 22000
     
     model_name = kwargs.get('model_name')
     dataset_name = kwargs.get('dataset_name')
@@ -621,27 +617,31 @@ def main(args):
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path, args.large_image)
     if args.attr == 'wisdom':
         U_I_dataset, U_R_dataset = build_sets_wisdom(model, test_loader, device, args.csv_file, TOPK, args.dataset)
+        U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
+        U_RO_dataset = ConcatDataset([test_dataset, U_R_dataset])   # original + random
     else:
         U_I_dataset, U_R_dataset = build_sets(model, test_loader, device, TOPK, args.dataset)
+        U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
+        U_RO_dataset = ConcatDataset([test_dataset, U_R_dataset])   # original + random
     
     build_loader_toy = toy_train_loader(train_dataset, args.batch_size, ratio=0.2)  # Optional: for CC or other methods that need a build loader
     
-    U_I_loader  = DataLoader(U_I_dataset, batch_size=args.batch_size, shuffle=False)
-    U_R_loader  = DataLoader(U_R_dataset, batch_size=args.batch_size, shuffle=False)
+    U_I_loader = DataLoader(U_I_dataset, batch_size=args.batch_size, shuffle=False)
+    U_R_loader = DataLoader(U_R_dataset, batch_size=args.batch_size, shuffle=False)
+    U_IO_loader = DataLoader(U_IO_dataset, batch_size=args.batch_size, shuffle=False)
+    U_RO_loader = DataLoader(U_RO_dataset, batch_size=args.batch_size, shuffle=False)
     
-    # avg_dist, per_class = image_distance_visualization(test_loader, U_I_loader, n_classes=len(classes), show_plot=True)
-    visualize_pairs(U_R_loader, U_I_loader, n_per_class=5)
-
-    # print(f"Average perturbation distance: {avg_dist:.4f}")
-    # print(f"Per-class perturbation distances: {per_class}")
+    ### Helper - visualization and distance between original and perturbed images
+    if SANITY_CHECK:
+        vis_santity_check(test_loader, U_I_loader, classes, n_per_class=4)
     
     # A simple acc test for the perturbed datasets
-    eval_model(model, test_loader, U_I_loader, U_R_loader, device)
+    eval_model(model, test_loader, U_IO_loader, U_RO_loader, device)
     
     # Run the coverage suite
-    # print("\n=== Running coverage suite ===")
-    # run_coverage_suite(model, build_loader_toy, test_loader, U_I_loader, U_R_loader, device, classes, tag_pre=args.attr + '_')
-    # run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_I_loader, U_R_loader, device, classes)
+    print("\n=== Running coverage suite ===")
+    run_coverage_suite(model, build_loader_toy, test_loader, U_IO_loader, U_RO_loader, device, classes, tag_pre=args.attr + '_')
+    run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes)
     
 
 if __name__ == '__main__':
