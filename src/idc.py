@@ -259,10 +259,10 @@ class IDC:
             cluster_labels = clusterer.fit_predict(scores_np)
             silhouette_avg = silhouette_score(scores_np, cluster_labels)
             silhouette_list.append(silhouette_avg)
-            print("For n_clusters =", n_clusters, "The average silhouette_score is :", silhouette_avg)
+            # print("For n_clusters =", n_clusters, "The average silhouette_score is :", silhouette_avg)
             
         best_k = silhouette_list.index(max(silhouette_list)) + min_k
-        print("Best number of clusters: ", best_k)
+        # print("Best number of clusters: ", best_k)
         return best_k
     
     ## Cluster the importance scores [layer-wise]
