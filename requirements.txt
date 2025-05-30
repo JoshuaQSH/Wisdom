@@ -11,3 +11,4 @@ captum
 onnx
 pyyaml
 opencv-python
+kagglehub

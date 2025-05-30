@@ -42,53 +42,13 @@ case "$MODE" in
         python3 run.py --model lenet --saved-model "/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth" --dataset mnist --data-path './datasets/' --importance-file 'logs/impotant.json' --device cpu --n-clusters 2 --top-m-neurons 10 --test-image 1 --idc-test-all --num-samples 0 --attr lrp --end2end --log-path 'logs/DemoLog' --logging
         ;;
     case1)
-        echo "Running Use Case 1..."
-        python3 run.py \
-            --model $MODEL_NAME \
-            --saved-model $SAVED_MODEL \
-            --dataset $DATASET_NAME \
-            --data-path $DATASET_DIR \
-            --importance-file './logs/impotant.json' \
-            --device $DEVICE \
-            --top-m-neurons $TOP_M \
-            --use-silhouette \
-            --num-samples $NUM_SAMPLES \
-            --idc-test-all \
-            --test-image $TEST_LABEL \
-            --attr $ATTR_METHOD \
-            --layer-index $LAYER_INDEX \
-            --end2end \
-            --n-clusters 2 \
-            --log-path 'logs/TestLog' \
-            --logging
+        echo "Running Use Case 1: Empty so far"
         ;;
     prepare)
-        echo "Running Use Case 2: Prepare the data..."
-        python3 prepare_data.py \
-            --model $MODEL_NAME \
-            --saved_model $SAVED_MODEL \
-            --dataset $DATASET_NAME \
-            --data_path $DATASET_DIR \
-            --batch-size 2 \
-            --device $DEVICE \
-            --importance-file './logs/impotant.json' \
-            --top-m-neurons $TOP_M \
-            --num-samples $NUM_SAMPLES \
-            --end2end \
-            --log-path './logs/PrepareDataLog' \
-            --logging
+        echo "Running Use Case 2: Empty so far"
         ;;
     case3)
-        echo "Running Use Case 3..."
-        python3 run_wisdom.py \
-            --model $MODEL_NAME \
-            --saved_model $SAVED_MODEL \
-            --dataset $DATASET_NAME \
-            --data_path $DATASET_DIR \
-            --device $DEVICE \
-            --top-m-neurons $TOP_M \
-            --use-silhouette \
-            --num-samples $NUM_SAMPLES
+        echo "Running Use Case 3: Empty so far"
         ;;
     *)
         # Handle invalid arguments
