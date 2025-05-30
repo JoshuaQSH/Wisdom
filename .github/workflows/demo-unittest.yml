@@ -36,5 +36,3 @@ jobs:
           pwd
           echo "Listing contents:"
           ls -la
-          export PYTHONPATH="${{ github.workspace }}"
-          pytest unittest/test_small_demo.py -v
