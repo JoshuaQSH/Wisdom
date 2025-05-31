@@ -14,7 +14,7 @@ The Pilot's remo: [Stress_Detection](https://github.com/StamatisOrfanos/Stress_D
 
 ## DL Model
 
-
+### TF Version
 | Layer (type) | Output Shape | #Param |
 |---------|--------------|---------------|
 | dense (Dense)          | (None, 2)        |       6 |
@@ -22,8 +22,20 @@ The Pilot's remo: [Stress_Detection](https://github.com/StamatisOrfanos/Stress_D
 | dense_2 (Dense)        | (None, 8)        |      40 |
 | dense_3 (Dense)        | (None, 3)        |      27 |
 
- Total params: 85 (340.00 B)
- Trainable params: 85 (340.00 B)
- Non-trainable params: 0 (0.00 B)
 
- accuracy: 0.7377 - loss: 0.7406
+Total params: 85 (340.00 B)
+Trainable params: 85 (340.00 B)
+Non-trainable params: 0 (0.00 B)
+
+accuracy: 0.7377 - loss: 0.7406
+
+### Torch Version
+
+Total params: 85
+Trainable params: 85
+Non-trainable params: 0
+Total mult-adds (M): 0.00
+
+Val Accuray: 0.7406 - loss: 0.7283
+
+
