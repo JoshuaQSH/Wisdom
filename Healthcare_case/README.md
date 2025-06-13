@@ -38,4 +38,15 @@ Total mult-adds (M): 0.00
 
 Val Accuray: 0.7406 - loss: 0.7283
 
+## Autotuning the model using Neural Network Intelligence (NNI)
+
+```shell
+$ pip install nni
+$ pip install pytorch-lightning
+
+# For AutoML - autotuning the hyperparameters
+$ python nni_main.py
+# For NAS - neural architecture search
+$ python nni_main.py --nas
+```
 
