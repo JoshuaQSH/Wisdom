@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 
 # ---------------------------
 # MLP for HH case
@@ -104,5 +105,6 @@ class MLPv2(nn.Module):
         x = self.dropout(x)
 
         x = self.linear6(x)
+        x = F.softmax(x, dim=1)  # Apply softmax to the output layer for classification
         
         return x
