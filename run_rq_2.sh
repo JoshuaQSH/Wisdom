@@ -2,7 +2,6 @@
 
 RUN_WISDOM_DATA=$@
 
-
 if [ $RUN_WISDOM_DATA -eq 1 ]; then
     echo "Running the wisdom driven pertubation RQ2"
     python run_rq_2_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_mnist_b32.csv' --idc-test-all --attr wisdom --top-m-neurons 10
