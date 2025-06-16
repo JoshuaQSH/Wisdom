@@ -165,14 +165,14 @@ def test_dynamic_clustering_idc_end2end():
         
         cluster_groups = idc.cluster_activation_values_all(selected_activations)
 
-        unique_cluster, coverage_rate = idc.compute_idc_test_whole(
+        coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole(
             test_image,
             important_neuron_indices,
             cluster_groups,
         )
         assert 0.0 <= coverage_rate <= 1.0
-        assert isinstance(unique_cluster, (set, tuple, list))
-        assert len(unique_cluster) >= 1
+        assert total_combination > 0
+        assert 0.0 <= max_coverage <= 1.0
         
 @pytest.mark.parametrize("data_path,saved_model_path,test_image_index,batch_size", [
     (
@@ -249,11 +249,11 @@ def test_dynamic_clustering_idc_end2end_mnist(data_path, saved_model_path, test_
     assert cluster_groups is not None
     assert isinstance(cluster_groups, (set, tuple, list))
     assert len(cluster_groups) >= 1
-    unique_cluster, coverage_rate = idc.compute_idc_test_whole(
+    coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole(
         test_image,
         important_neuron_indices,
         cluster_groups,
     )
     assert 0.0 <= coverage_rate <= 1.0
-    assert isinstance(unique_cluster, (set, tuple, list))
-    assert len(unique_cluster) >= 1
+    assert total_combination > 0
+    assert 0.0 <= max_coverage <= 1.0
