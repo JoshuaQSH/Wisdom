@@ -167,10 +167,8 @@ def test_dynamic_clustering_idc_end2end():
 
         unique_cluster, coverage_rate = idc.compute_idc_test_whole(
             test_image,
-            test_label,
             important_neuron_indices,
             cluster_groups,
-            'lrp'
         )
         assert 0.0 <= coverage_rate <= 1.0
         assert isinstance(unique_cluster, (set, tuple, list))
@@ -253,10 +251,8 @@ def test_dynamic_clustering_idc_end2end_mnist(data_path, saved_model_path, test_
     assert len(cluster_groups) >= 1
     unique_cluster, coverage_rate = idc.compute_idc_test_whole(
         test_image,
-        test_label,
         important_neuron_indices,
         cluster_groups,
-        'lrp'
     )
     assert 0.0 <= coverage_rate <= 1.0
     assert isinstance(unique_cluster, (set, tuple, list))
