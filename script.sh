@@ -39,7 +39,7 @@ fi
 case "$MODE" in
     test)
         echo "Running Test Demo example..."
-        python3 run.py --model lenet --saved-model "/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth" --dataset mnist --data-path './datasets/' --importance-file 'logs/impotant.json' --device cpu --n-clusters 2 --top-m-neurons 10 --test-image 1 --idc-test-all --num-samples 0 --attr lrp --end2end --log-path 'logs/DemoLog' --logging
+        python3 run.py --model lenet --saved-model "/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth" --dataset mnist --data-path './datasets/' --device cpu --n-clusters 2 --top-m-neurons 10 --test-image 1 --idc-test-all --num-samples 0 --attr lrp --end2end --log-path 'logs/DemoLog' --logging
         ;;
     case1)
         echo "Running Use Case 1..."
@@ -48,7 +48,6 @@ case "$MODE" in
             --saved-model $SAVED_MODEL \
             --dataset $DATASET_NAME \
             --data-path $DATASET_DIR \
-            --importance-file './logs/impotant.json' \
             --device $DEVICE \
             --top-m-neurons $TOP_M \
             --use-silhouette \
@@ -71,7 +70,6 @@ case "$MODE" in
             --data_path $DATASET_DIR \
             --batch-size 2 \
             --device $DEVICE \
-            --importance-file './logs/impotant.json' \
             --top-m-neurons $TOP_M \
             --num-samples $NUM_SAMPLES \
             --end2end \
