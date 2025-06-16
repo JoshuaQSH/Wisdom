@@ -12,37 +12,28 @@ Shenghao Qiu, 2025
 
 from __future__ import annotations
 
-import logging
 import os
-import time
-from typing import Tuple, Sequence, Optional, Dict, Any, List
+import json
+from typing import Dict, Any
 
 import torch
 
-from captum.attr import visualization as viz  # noqa: F401  # Imported for completeness.
-from captum.metrics import (  # noqa: F401  # Imported for completeness.
-    infidelity,
-    infidelity_perturb_func_decorator,
-)
-
 from src.attribution import (
-    get_relevance_scores,
-    get_relevance_scores_for_all_classes,
-    get_relevance_scores_for_all_layers,
+    get_relevance_scores_dataloader,
+    get_relevance_score_target_layer,
 )
 from src.idc import IDC
 from src.utils import (
     _configure_logging,
     _select_testing_mode,
     eval_model_dataloder,
-    extract_random_class,
-    get_class_data,
     get_model,
     get_trainable_modules_main,
     load_CIFAR,
     load_ImageNet,
     load_MNIST,
     parse_args,
+    extract_class_to_dataloder,
 )
 
 # -----------------------------------------------------------------------------
@@ -50,7 +41,6 @@ from src.utils import (
 # -----------------------------------------------------------------------------
 
 DatasetLoaders = Dict[str, Any]
-USE_QUICK_ITER_DATA = False
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -84,7 +74,16 @@ def load_dataset(args):
 # Main Routine
 # -----------------------------------------------------------------------------
 def main() -> None:
-    """Entry‑point for IDC coverage computation pipeline."""
+    """Entry‑point for IDC coverage computation pipeline.
+        --all-class: If set, the model will be tested for all classes, equal to batch testing.
+        --class_iters: If set, the model will be tested for each class separately.
+        --end2end: If set, the model will be tested end-to-end, getting all layers relevance.
+    For now, we have four testing modes:
+    1. End2End with all classes
+    2. End2End with single class
+    3. Single layer with all classes
+    4. Single layer with single class
+    """
     args = parse_args()
     logger = _configure_logging(args.logging, args, 'debug')
     
@@ -99,83 +98,41 @@ def main() -> None:
     model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
     
-    testing_mode = _select_testing_mode(args)
-    logger.info("Model: %s, Dataset: %s, Topk: %s, Testing Mode: [%s]", args.model, args.dataset, args.top_m_neurons, testing_mode)
+    testing_mode, mode_descriptions = _select_testing_mode(args)    
+    logger.info("Model: %s, Dataset: %s, Topk: %s, Testing Mode: [%s]", args.model, args.dataset, args.top_m_neurons, ', '.join(mode_descriptions))
 
     accuracy, avg_loss, f1_score = eval_model_dataloder(model, testloader, device)
     logger.info("Test accuracy: %.4f,  loss: %.4f, F1 Score: %.4f", accuracy, avg_loss, f1_score)
-    
+        
     # ------------------------------------------------------------------
     # Task 1: Attribution & importance scores
     # ------------------------------------------------------------------
-    if args.all_class:
-        images, labels = None, None
-    else:
-        if USE_QUICK_ITER_DATA:
-            images, labels = next(iter(trainloader))
+    if not testing_mode['all_class'] and not testing_mode['class_iters']:
+        logger.info("Testing single class: %s", args.test_image)
+        # trainloader = extract_class_to_dataloder(train_dataset, classes, args.batch_size, args.test_image)
+        testloader = extract_class_to_dataloder(test_dataset, classes, args.batch_size, args.test_image)
+    
+    final_layer = trainable_module_name[-1]
+    logger.info("Final layer: %s", final_layer)
+        
+    if testing_mode['end2end']:
+        if testing_mode['all_class']:
+            logger.info("End2End Testing with all classes. Attribution Method: %s", args.attr)
         else:
-            images, labels = get_class_data(trainloader, classes, args.test_image)
-    
-    # Compute new importance scores
-    if args.layer_by_layer and not args.end2end:
-        logger.info("Computing relevance for *all* layers — class %s", args.test_image)
-        for idx, name in enumerate(trainable_module_name):
-            attribution, mean_attribution = get_relevance_scores(
-                model,
-                images,
-                labels,
-                classes,
-                net_layer=trainable_module[idx],
-                layer_name=name,
-                top_m_images=-1,
-                attribution_method=args.attr,
-            )
-    elif args.end2end:
-        logger.info("End2End Testing - getting all layers relevance")
-        attribution = get_relevance_scores_for_all_layers(
-            model,
-            images,
-            labels,
-            device,
-            attribution_method=args.attr,
-        )
-    elif args.all_class:
-        logger.info("Computing relevance for all classes — layer: %s", trainable_module_name[args.layer_index])
-        mean_attribution = get_relevance_scores_for_all_classes(
-            model,
-            trainloader,
-            net_layer=trainable_module[args.layer_index],
-            layer_name=trainable_module_name[args.layer_index],
-            attribution_method=args.attr,
-        )
+            logger.info("End2End Testing with single class: %s. Attribution Method: %s", args.test_image, args.attr) 
+        mean_attribution = get_relevance_scores_dataloader(model, trainloader, device, attribution_method=args.attr)
     else:
-        logger.info(
-            "Computing relevance — layer: %s - class: %s",
-            trainable_module_name[args.layer_index],
-            args.test_image,
-        )
-        attribution, mean_attribution = get_relevance_scores(
-            model,
-            images,
-            labels,
-            classes,
-            net_layer=trainable_module[args.layer_index],
-            layer_name=trainable_module_name[args.layer_index],
-            top_m_images=-1,
-            attribution_method=args.attr,
-        )
+        logger.info("Testing with single layer: %s. Attribution Method: %s", trainable_module_name[args.layer_index], args.attr)
+        if testing_mode['all_class']:
+            logger.info("Single Layer Testing with all classes.")
+        else:
+            logger.info("Single Layer Testing with single class: %s", args.test_image)
+        mean_attribution = get_relevance_score_target_layer(model, trainloader, device, attribution_method=args.attr, target_layer=trainable_module[args.layer_index])
+        
     
     # ------------------------------------------------------------------
-    # Task 2‑1: Select & cluster activations
+    # Task 2-2: Select & cluster activations & Testing IDC coverage
     # ------------------------------------------------------------------
-    if args.num_samples != 0:
-        subset_loader, test_images, test_labels = extract_random_class(
-            test_dataset,
-            test_all=args.idc_test_all,
-            num_samples=args.num_samples,
-        )
-    else:
-        test_images, test_labels = get_class_data(testloader, classes, args.test_image)
     
     idc = IDC(
         model,
@@ -187,85 +144,137 @@ def main() -> None:
         "KMeans",
     )
     
-    if args.end2end:
-        important_neuron_indices, inorderd_indices = idc.select_top_neurons_all(attribution, "fc3")  # noqa: E501, pylint: disable=unused‑variable
-        activation_values, selected_activations = idc.get_activation_values_for_model(
-            images,
+    if testing_mode['end2end']:
+        logger.info("End2End Testing")
+        important_neuron_indices, inorderd_indices = idc.select_top_neurons_all(mean_attribution, final_layer)
+        activation_values, selected_activations = idc.get_activations_model_dataloader(
+            trainloader,
             important_neuron_indices,
         )
-    else:
-        important_neuron_indices = idc.select_top_neurons(mean_attribution)
-        if args.all_class:
-            activation_values, selected_activations = idc.get_activation_values_for_neurons(
-                images,
-                important_neuron_indices,
-                trainable_module_name[args.layer_index],
-                trainloader,
-            )
-        else:
-            activation_values, selected_activations = idc.get_activation_values_for_neurons(
-                images,
-                important_neuron_indices,
-                trainable_module_name[args.layer_index],
-            )
-    
-    # ------------------------------------------------------------------
-    # Task 2‑2: Cluster activations
-    # ------------------------------------------------------------------
-    if args.end2end:
+        
+        # Cluster activation values for all layers
+        logger.info("Clustering activation values for all layers.")
         cluster_groups = idc.cluster_activation_values_all(selected_activations)
+        
+        if not testing_mode['all_class'] and not testing_mode['class_iters']:
+            logger.info("Testing Samples: %s", args.test_image)
+            coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, important_neuron_indices, cluster_groups)
+            logger.info("Attribution Method: %s", args.attr)
+            logger.info("Total INCC combinations: %d", total_combination)
+            logger.info("Max Coverage (the best we can achieve): %.6f%%", max_coverage * 100)
+            logger.info("IDC Coverage: %.6f%%", coverage_rate * 100)
+        
+        elif not testing_mode['all_class'] and testing_mode['class_iters']:
+            logger.info("Iterating over all classes for IDC coverage computation.")
+            results_dict = {}
+            logger.info("Attribution Method: %s", args.attr)
+            
+            for test_class in classes:
+                testloader_iter = extract_class_to_dataloder(test_dataset, classes, args.batch_size, test_class)
+                coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader_iter, important_neuron_indices, cluster_groups)
+                logger.info("IDC Coverage: %.6f%%", coverage_rate * 100)
+                idc.total_combination = 1
+                
+                # Save results for this test class
+                results_dict[test_class] = {
+                    'Test Class': test_class,
+                    'Total Combination': total_combination,
+                    'Max Coverage': max_coverage,
+                    'Coverage Rate': coverage_rate
+                }
+
+            # Save results to JSON file
+            json_filename = f"idc_results_{args.model}_{args.dataset}_class_iters.json"
+            with open(json_filename, 'w') as f:
+                json.dump(results_dict, f, indent=4)
+            logger.info("Results saved to %s", json_filename)
+
+        else:
+            logger.info("Testing all classes.")
+            # IDC coverage computation for end-to-end testing - dataloader
+            coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, important_neuron_indices, cluster_groups)
+            logger.info("Attribution Method: %s", args.attr)
+            logger.info("Total INCC combinations: %d", total_combination)
+            logger.info("Max Coverage (the best we can achieve): %.6f%%", max_coverage * 100)
+            logger.info("IDC Coverage: %.6f%%", coverage_rate * 100)
+        
     else:
+        logger.info("Tested Layer: %s", trainable_module_name[args.layer_index])
+        important_neuron_indices = idc.select_top_neurons(mean_attribution)
+        activation_values, selected_activations = idc.get_activations_neurons_dataloader(trainloader, trainable_module_name[args.layer_index], important_neuron_indices)
+        
+        # Cluster activation values for a specific layer
+        logger.info("Clustering activation values for layer: %s", trainable_module_name[args.layer_index])
         cluster_groups = idc.cluster_activation_values(
             selected_activations,
             trainable_module[args.layer_index],
         )
-    logger.info("Activation values clustered.")
-    
-    # ------------------------------------------------------------------
-    # Task 2‑3: Compute IDC coverage
-    # ------------------------------------------------------------------
-    if args.end2end:
-        unique_cluster, coverage_rate = idc.compute_idc_test_whole(
-            test_images,
-            test_labels,
-            important_neuron_indices,
-            cluster_groups,
-            args.attr,
-        )
-        logger.info(
-            "Test Class %s, Testing Samples: %d, Attribution: %s, IDC Coverage: %.4f",
-            args.test_image,
-            len(test_images),
-            args.attr,
-            coverage_rate,
-        )
-    else:
-        unique_cluster, coverage_rate = idc.compute_idc_test(
-            inputs_images=test_images,
-            labels=test_labels,
-            indices=important_neuron_indices,
-            cluster_groups=cluster_groups,
-            net_layer=trainable_module[args.layer_index],
-            layer_name=trainable_module_name[args.layer_index],
-            attribution_method=args.attr,
-        )
-        logger.info(
-            "Testing Samples: %d, Tested Layer: %s, Attribution: %s, IDC Coverage: %.4f",
-            len(test_images),
-            trainable_module_name[args.layer_index],
-            args.attr,
-            coverage_rate,
-        )
         
-    # ------------------------------------------------------------------
-    # (Optional) Infidelity metric
-    # ------------------------------------------------------------------
-    # infidelity_value = infidelity_metric(net, perturb_fn, images, attribution)
-    # logger.info("Infidelity: %.2f", infidelity_value)
+        if not testing_mode['all_class'] and not testing_mode['class_iters']:
+            logger.info("Testing Samples: %s", args.test_image)
+        
+            # IDC coverage computation for a specific layer - dataloader
+            coverage_rate, total_combination, max_coverage = idc.compute_idc_test_dataloader(
+                dataloader=testloader,
+                indices=important_neuron_indices,
+                cluster_groups=cluster_groups,
+                net_layer=trainable_module[args.layer_index],
+                layer_name=trainable_module_name[args.layer_index],
+            )
+            
+            logger.info("Attribution Method: %s", args.attr)
+            logger.info("Total INCC combinations: %d", total_combination)
+            logger.info("Max Coverage (the best we can achieve): %.6f%%", max_coverage * 100)
+            logger.info("IDC Coverage: %.6f%%", coverage_rate * 100)
+        
+        elif not testing_mode['all_class'] and testing_mode['class_iters']:
+            logger.info("Iterating over all classes for IDC coverage computation.")
+            results_dict = {}
+            logger.info("Attribution Method: %s", args.attr)
+            
+            for test_class in classes:
+                testloader_iter = extract_class_to_dataloder(test_dataset, classes, args.batch_size, test_class)
+                # IDC coverage computation for a specific layer - dataloader
+                coverage_rate, total_combination, max_coverage = idc.compute_idc_test_dataloader(
+                    dataloader=testloader_iter,
+                    indices=important_neuron_indices,
+                    cluster_groups=cluster_groups,
+                    net_layer=trainable_module[args.layer_index],
+                    layer_name=trainable_module_name[args.layer_index],
+                )
+                idc.total_combination = 1
+                logger.info("IDC Coverage: %.6f%%", coverage_rate * 100)
+                
+                # Save results for this test class
+                results_dict[test_class] = {
+                    'Test Class': test_class,
+                    'Test Layer': trainable_module_name[args.layer_index],
+                    'Total Combination': total_combination,
+                    'Max Coverage': max_coverage,
+                    'Coverage Rate': coverage_rate
+                }
 
-# -----------------------------------------------------------------------------
-# Script entry‑point
-# -----------------------------------------------------------------------------
+            # Save results to JSON file
+            json_filename = f"idc_results_{args.model}_{args.dataset}_class_iters.json"
+            with open(json_filename, 'w') as f:
+                json.dump(results_dict, f, indent=4)
+            logger.info("Results saved to %s", json_filename)
+        
+        else:
+            logger.info("Testing all classes.")
+            # IDC coverage computation for a specific layer - dataloader
+            coverage_rate, total_combination, max_coverage = idc.compute_idc_test_dataloader(
+                dataloader=testloader,
+                indices=important_neuron_indices,
+                cluster_groups=cluster_groups,
+                net_layer=trainable_module[args.layer_index],
+                layer_name=trainable_module_name[args.layer_index],
+            )
+            logger.info("Attribution Method: %s", args.attr)
+            logger.info("Total INCC combinations: %d", total_combination)
+            logger.info("Max Coverage (the best we can achieve): %.6f%%", max_coverage * 100)
+            logger.info("IDC Coverage: %.6f%%", coverage_rate * 100)
+    logger.info("IDC coverage computation completed.")
 
 if __name__ == "__main__":
     main()

@@ -27,7 +27,12 @@ def traverse_sequential_rule(layer):
         rules.append(LayerLRP(sub_layer))
     return rules
 
-def get_relevance_scores(model, images, labels, classes, net_layer, layer_name='fc1', top_m_images=-1, attribution_method='lrp'):
+# --------------
+# Attribution for specific images and labels (deprecated)
+# --------------
+
+# Single layer - sepcific images and labels
+def get_relevance_scores(model, images, labels, net_layer, top_m_images=-1, attribution_method='lrp'):
     model.eval()
     model = model.cpu()
 
@@ -35,8 +40,6 @@ def get_relevance_scores(model, images, labels, classes, net_layer, layer_name='
         images = images[:top_m_images]
         labels = labels[:top_m_images]
     
-    # print("Running with {}".format(attribution_method))
-
     outputs = model(images)
     _, predicted = torch.max(outputs, 1)
     
@@ -55,42 +58,7 @@ def get_relevance_scores(model, images, labels, classes, net_layer, layer_name='
     
     return attribution, torch.mean(attribution, dim=0)
 
-def get_relevance_scores_for_all_classes(model, dataloader, net_layer, layer_name='fc1', attribution_method='lrp'):
-    
-    model.eval()
-    model = model.cpu()
-    
-    print("Layer's Name: {}, Module: {}".format(layer_name, net_layer))
-    print("Running with {}".format(attribution_method))
-    
-    if attribution_method not in attribution_classes:
-        raise ValueError(f"Invalid attribution method: {attribution_method}")
-
-    total_attribution = None
-    num_samples = 0
-
-    for images, labels in dataloader:
-        neuron_cond_class = attribution_classes[attribution_method]
-        neuron_cond = neuron_cond_class(model, net_layer)
-        if attribution_method in ['ldl', 'ldls', 'lgs']:
-            attribution = neuron_cond.attribute(images, baselines=torch.zeros_like(images), target=labels)
-        elif attribution_method == 'la':
-            attribution = neuron_cond.attribute(images)
-        else:
-            attribution = neuron_cond.attribute(images, target=labels)
-        
-        # Accumulate attributions and count samples
-        if total_attribution is None:
-            total_attribution = torch.sum(attribution, dim=0)  # Sum attributions across batch
-        else:
-            total_attribution += torch.sum(attribution, dim=0)
-        
-        num_samples += images.size(0)
-
-    # Compute mean attribution
-    mean_attribution = total_attribution / num_samples
-    return mean_attribution
-
+# end2end  - specific images and labels
 def get_relevance_scores_for_all_layers(model, images, labels, device, attribution_method='lrp'):
     model = model.to(device)
     model.eval()
@@ -140,6 +108,11 @@ def get_relevance_scores_for_all_layers(model, images, labels, device, attributi
         layer_relevance_scores[name] /= num_samples
         
     return layer_relevance_scores
+
+
+# --------------
+# Attribution for Dataloader
+# --------------
 
 # Get relevance scores for all layers with the dataloader
 def get_relevance_scores_dataloader(model, dataloader, device, attribution_method='lrp'):
@@ -206,3 +179,62 @@ def get_relevance_scores_dataloader(model, dataloader, device, attribution_metho
         layer_relevance_scores[name] /= num_samples
 
     return layer_relevance_scores
+
+# Get relevance scores for a specific target layer with the dataloader
+def get_relevance_score_target_layer(model, dataloader, device, attribution_method, target_layer):
+    """
+    Computes relevance scores for a specific target layer using the given attribution method.
+    
+    Args:
+        model (nn.Module): Trained PyTorch model
+        dataloader (DataLoader): DataLoader containing the data
+        device (torch.device): Device to run computations on
+        attribution_method (str): Attribution method ('lrp', 'ldl', 'lgs', etc.)
+        target_layer (nn.Module): The specific layer to compute relevance for
+        
+    Returns:
+        torch.Tensor: Mean relevance scores for the target layer
+    """
+    model = model.to(device)
+    model.eval()
+    
+    if attribution_method not in attribution_classes:
+        raise ValueError(f"Invalid attribution method: {attribution_method}")
+    
+    total_relevance = None
+    num_samples = 0
+    
+    # Process data in batches
+    for images, labels in dataloader:
+        images, labels = images.to(device), labels.to(device)
+        
+        # Initialize attribution method for the target layer
+        neuron_cond_class = attribution_classes[attribution_method]
+        neuron_cond = neuron_cond_class(model, target_layer)
+        
+        # Compute relevance using the specified attribution method
+        if attribution_method in ['ldl', 'ldls', 'lgs']:
+            relevance = neuron_cond.attribute(images, baselines=torch.zeros_like(images), target=labels)
+        elif attribution_method == 'la':
+            relevance = neuron_cond.attribute(images)
+        else:
+            relevance = neuron_cond.attribute(images, target=labels)
+        
+        # Sum relevance across batch and spatial dims if Conv2d
+        if relevance.dim() == 4:  # Conv2d layer
+            batch_sum = relevance.sum(dim=(0, 2, 3)).detach().cpu()
+        else:  # Linear layer
+            batch_sum = relevance.sum(dim=0).detach().cpu()
+        
+        # Accumulate relevance scores
+        if total_relevance is None:
+            total_relevance = batch_sum
+        else:
+            total_relevance += batch_sum
+            
+        num_samples += images.size(0)
+    
+    # Compute mean relevance across all samples
+    mean_relevance = total_relevance / num_samples
+    
+    return mean_relevance

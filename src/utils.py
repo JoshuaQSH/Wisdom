@@ -30,26 +30,24 @@ def parse_args():
     parser.add_argument('--saved-model', type=str, default='/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth', help='Saved model name.')
     parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
     parser.add_argument('--data-path', type=str, default='./datasets/', help='Path to the data directory.')
-    parser.add_argument('--importance-file', type=str, default='./logs/important.json', help='The file to save the importance scores.')
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
     parser.add_argument('--device', type=str, default='cpu', help='Device to use for training.')
-    parser.add_argument('--large-image', action='store_true', help='Use CIFAR-10 dataset with the resized images.')
     parser.add_argument('--random-prune', action='store_true', help='Randomly prune the neurons.')
     parser.add_argument('--use-silhouette', action='store_true', help='Whether to use silhouette score for clustering.')
     parser.add_argument('--n-clusters', type=int, default=2, help='Number of clusters to use for KMeans.')
     parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
 
-    # IDC Testing 
-    parser.add_argument('--test-image', type=str, default='1', help='Test image name. For the single image testing.')
-    parser.add_argument('--all-class', action='store_true', help='Attributions collected for all the classes.')
-    parser.add_argument('--idc-test-all', action='store_true', help='Using all the test images for the Coverage testing.')
+    # Testing Mode arguments
+    parser.add_argument('--test-image', type=str, default='1', help='Test image name. For the single image testing. (against with the `all-class`).')
+    parser.add_argument('--all-class', action='store_true', help='Attributions collected for all the classes. When activated, it will equal to batch testing.')
+    parser.add_argument('--class-iters', action='store_true', help='Only valided when doing class-wise testing. If set, the model will be tested for each class separately.')
+    parser.add_argument('--end2end', action='store_true', help='End to end testing for the whole model.')
+    parser.add_argument('--idc-test-all', action='store_true', help='Using all the test images for the Coverage testing. Other wise will only sample some images from the test set.')
     parser.add_argument('--num-samples', type=int, default=0, help='Sampling number for the test images (against with the `idc-test-all`).')
-
     parser.add_argument('--attr', type=str, default='lc', choices=['lc', 'la', 'ii', 'lgxa', 'lgc', 'ldl', 'ldls', 'lgs', 'lig', 'lfa', 'lrp', 'random', 'wisdom'],  help='The attribution method to use.')
     parser.add_argument('--layer-index', type=int, default=1, help='Get the layer index for the model, should start with 1')
-    parser.add_argument('--layer-by-layer', action='store_true', help='Capturing all the module layer in the model, same as end2end.')
-    parser.add_argument('--end2end', action='store_true', help='End to end testing for the whole model.')
+
     
     # General arguments
     # parser.add_argument('--vis-attributions', action='store_true', help='Visualize the attributions.')
@@ -126,21 +124,32 @@ def _configure_logging(enable_logging: bool, args, level: str = "info") -> loggi
     return logger
 
 # Decide which testing mode is active
-def _select_testing_mode(args) -> str:
-    flag_to_mode = {
-        args.layer_by_layer: "layer_by_layer",
-        args.end2end: "end2end",
-        args.all_class: "all_class",
+def _select_testing_mode(args) -> dict:
+    # Return a dictionary with boolean values for each mode
+    testing_mode =  {
+        'end2end': bool(args.end2end),
+        'all_class': bool(args.all_class),
+        'class_iters': bool(args.class_iters)
     }
-
-    active = [mode for flag, mode in flag_to_mode.items() if flag]
-
-    if len(active) > 1:
-        raise ValueError(
-            f"Flags are mutually exclusive, but got: {', '.join(active)}"
-        )
-
-    return active[0] if active else "layer-wise"
+    
+    # Build list of active modes with alternative descriptions for False cases
+    mode_descriptions = []
+    if testing_mode['end2end']:
+        mode_descriptions.append('End2End-Testing')
+    else:
+        mode_descriptions.append('Single-Layer-Testing')
+        
+    if testing_mode['all_class']:
+        mode_descriptions.append('All-Class-Testing')
+    else:
+        mode_descriptions.append('Class-Wise-Testing')
+        
+    if testing_mode['class_iters']:
+        mode_descriptions.append('Iterating-All-Class: On')
+    else:
+        mode_descriptions.append('Iterating-All-Class: Off')
+        
+    return testing_mode, mode_descriptions
 
 def convert_tensors(obj):
     """Recursively convert Tensors to lists"""
@@ -224,121 +233,6 @@ def collate_fn(batch):
     images = torch.stack(images, dim=0)
     return images, targets
 
-# Load COCO dataset
-def load_COCO_old(batch_size=32, root='./yolov5/data/coco', num_workers=2):
-    # Define paths to annotations
-    ann_train = os.path.join(root, 'annotations', 'instances_train2017.json')
-    ann_val = os.path.join(root, 'annotations', 'instances_val2017.json')
-
-    # Define image directories
-    img_dir_train = os.path.join(root, 'images', 'train2017')
-    img_dir_val = os.path.join(root, 'images', 'val2017')
-
-    # Define transformations
-    # 1, 3, 640, 640
-    transform = transforms.Compose([
-        transforms.Resize((640, 640)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-    ])
-
-    # Load datasets
-    train_dataset = CocoDetection(root=img_dir_train, annFile=ann_train, transform=transform)
-    val_dataset = CocoDetection(root=img_dir_val, annFile=ann_val, transform=transform)
-
-    # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate_fn)
-
-    # COCO class names
-    classes = [
-        'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
-        'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
-        'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
-        'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
-        'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-        'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
-        'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
-        'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'TV', 'laptop',
-        'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
-        'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
-        'toothbrush'
-    ]
-
-    return train_loader, val_loader, classes
-
-def load_COCO(batch_size=32, data_path='../data/elephant.yaml', img_size=[640, 640], 
-              cfg='models/yolov5s.yaml',
-              model_stride=[8, 16, 32],
-              single_cls=True, 
-              cache_images=True, 
-              rect=True, 
-              num_workers=2):
-    
-    hyp = {'lr0': 0.01,  # initial learning rate (SGD=1E-2, Adam=1E-3)
-       'momentum': 0.937,  # SGD momentum
-       'weight_decay': 5e-4,  # optimizer weight decay
-       'giou': 0.05,  # giou loss gain
-       'cls': 0.58,  # cls loss gain
-       'cls_pw': 1.0,  # cls BCELoss positive_weight
-       'obj': 1.0,  # obj loss gain (*=img_size/320 if img_size != 320)
-       'obj_pw': 1.0,  # obj BCELoss positive_weight
-       'iou_t': 0.20,  # iou training threshold
-       'anchor_t': 4.0,  # anchor-multiple threshold
-       'fl_gamma': 0.0,  # focal loss gamma (efficientDet default is gamma=1.5)
-       'hsv_h': 0.014,  # image HSV-Hue augmentation (fraction)
-       'hsv_s': 0.68,  # image HSV-Saturation augmentation (fraction)
-       'hsv_v': 0.36,  # image HSV-Value augmentation (fraction)
-       'degrees': 0.0,  # image rotation (+/- deg)
-       'translate': 0.0,  # image translation (+/- fraction)
-       'scale': 0.5,  # image scale (+/- gain)
-       'shear': 0.0}  # image shear (+/- deg)
-    
-    data_path = glob.glob('./**/' + data_path, recursive=True)[0]
-    with open(data_path) as f:
-        data_dict = yaml.load(f, Loader=yaml.FullLoader)  # model dict
-    train_path = data_dict['train']
-    test_path = data_dict['val']
-    nc = 1 if single_cls else int(data_dict['nc'])
-
-    # Image sizes
-    gs = int(max(model_stride))  # grid size (max stride)
-    if any(x % gs != 0 for x in img_size):
-        print('WARNING: --img-size %g,%g must be multiple of %s max stride %g' % (*img_size, cfg, gs))
-    imgsz, imgsz_test = [make_divisible(x, gs) for x in img_size]  # image sizes (train, test)
-
-    dataset = LoadImagesAndLabels(train_path, imgsz, batch_size,
-                                  augment=True,
-                                  hyp=hyp,  # augmentation hyperparameters
-                                  rect=rect,  # rectangular training
-                                  cache_images=cache_images,
-                                  single_cls=single_cls)
-    
-    trainloader = torch.utils.data.DataLoader(dataset,
-                                             batch_size=batch_size,
-                                             num_workers=num_workers,
-                                             shuffle=not rect,  # Shuffle=True unless rectangular training is used
-                                             pin_memory=True,
-                                             collate_fn=dataset.collate_fn)
-
-    # Testloader
-    testloader = torch.utils.data.DataLoader(LoadImagesAndLabels(test_path, imgsz_test, batch_size,
-                                                                 hyp=hyp,
-                                                                 rect=True,
-                                                                 cache_images=cache_images,
-                                                                 single_cls=single_cls),
-                                             batch_size=batch_size,
-                                             num_workers=num_workers,
-                                             pin_memory=True,
-                                             collate_fn=dataset.collate_fn)
-
-    # class frequency
-    labels = np.concatenate(dataset.labels, 0)
-    c = torch.tensor(labels[:, 0])  # classes
-
-    return trainloader, testloader, c
-
 # Load the ImageNet dataset
 def load_ImageNet(batch_size=32, root='./datasets/ImageNet', num_workers=2, use_val=False, label_path='./datasets/imagenet_labels.json'):
     
@@ -374,20 +268,12 @@ def load_ImageNet(batch_size=32, root='./datasets/ImageNet', num_workers=2, use_
     return trainloader, testloader, train_dataset, val_dataset, classes
 
 #  Load the CIFAR-10 dataset
-def load_CIFAR(batch_size=32, root='./datasets', large_image=False, shuffle=True):
+def load_CIFAR(batch_size=32, root='./datasets', shuffle=True):
 
-    if large_image:
-        transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),])
-    else:
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        ])
+    transform = transforms.Compose([
+         transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ])
 
     train_dataset = CIFAR10(root=root, train=True, download=True, transform=transform)
     test_dataset = CIFAR10(root=root, train=False, download=True, transform=transform)
@@ -683,18 +569,41 @@ def get_class_data(dataloader, classes, target_class):
     else:
         return None, None
 
-def extract_class_to_dataloder(dataset, classes, batch_size=100):
-    class_indices = {i: [] for i in range(len(classes))}
+def extract_class_to_dataloder(dataset, classes, batch_size=100, target_class_name=None):
+    # If no specific class is requested, return ordered loader with all classes
+    if target_class_name is None:
+        class_indices = {i: [] for i in range(len(classes))}
+        
+        # Populate the dictionary with indices
+        for idx, (_, label) in enumerate(dataset):
+            class_indices[label].append(idx)
+        
+        ordered_indices = [idx for class_id in range(len(classes)) for idx in class_indices[class_id]]
+        ordered_subset = Subset(dataset, ordered_indices)
+        ordered_loader = DataLoader(ordered_subset, batch_size=batch_size, shuffle=False)
+        
+        return ordered_loader
     
-    # Populate the dictionary with indices
+    # Find the class index for the target class name
+    if target_class_name not in classes:
+        raise ValueError(f"Class '{target_class_name}' not found in classes list")
+    
+    target_class_index = classes.index(target_class_name)
+    
+    # Find all indices that belong to the target class
+    target_indices = []
     for idx, (_, label) in enumerate(dataset):
-        class_indices[label].append(idx)
+        if label == target_class_index:
+            target_indices.append(idx)
     
-    ordered_indices = [idx for class_id in range(len(classes)) for idx in class_indices[class_id]]
-    ordered_subset = Subset(dataset, ordered_indices)
-    ordered_loader = DataLoader(ordered_subset, batch_size=batch_size, shuffle=False)
+    if not target_indices:
+        raise ValueError(f"No samples found for class '{target_class_name}'")
     
-    return ordered_loader
+    # Create subset with only the target class data
+    target_subset = Subset(dataset, target_indices)
+    target_loader = DataLoader(target_subset, batch_size=batch_size, shuffle=False)
+    
+    return target_loader
 
 ## An end-to-end test for the model (randomly pickup a bunch of images)
 def extract_random_class(test_dataset, test_all=False, num_samples=1000):

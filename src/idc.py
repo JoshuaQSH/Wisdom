@@ -15,9 +15,7 @@ import numpy as np
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, MeanShift, SpectralClustering
 from sklearn.metrics import silhouette_score
 
-from .attribution import get_relevance_scores, get_relevance_scores_for_all_layers
-from .utils import load_kmeans_model, save_kmeans_model, get_layer_by_name
-from .visualization import visualize_activation, visualize_idc_scores
+from .utils import get_layer_by_name
 
 def get_cluster_function(name):
     """
@@ -74,20 +72,21 @@ class IDC:
 
         return cluster_groups
     
-    def save_to_json(self, coverage_rate, model_name, testing_class, testing_layer, file_path='coverage_rate.json'):
+    def save_to_json(self, coverage_rate, max_coverage, model_name, testing_layer, file_path='coverage_rate.json'):
         """
         Save the coverage rate to a JSON file.
         """
 
         data = {
-            'coverage_rate': coverage_rate,
-            'model_name': model_name,
-            'testing_class': testing_class,
-            'testing_layer': testing_layer
+            'Total Combination': self.total_combination,
+            'Max Coverage': max_coverage,
+            'Coverage Rate': coverage_rate,
+            'Model Name': model_name,
+            'Testing Layer': testing_layer
         }
         with open(file_path, 'w') as json_file:
             json.dump(data, json_file)
-        print(f"Coverage rate saved to {file_path}")
+        # print(f"Coverage rate saved to {file_path}")
 
     ## Top-k Neurons Selection [layer-wise]
     def select_top_neurons(self, importance_scores):
@@ -166,7 +165,7 @@ class IDC:
         return selected_indices, selected
     
     ## Get the activation values [layer-wise]
-    def get_activation_values_for_neurons(self, inputs, important_neuron_indices, layer_name='fc1', dataloader=None):
+    def get_activations_neurons_sample(self, inputs, important_neuron_indices, layer_name='fc1', dataloader=None):
         """
         Get the activation values for a specific layer.
         @param inputs: Input data.
@@ -209,9 +208,61 @@ class IDC:
             raise ValueError(f"Invalid important_neuron_indices: {important_neuron_indices}")
             
         return activation_values, selected_activations
+    
+    ## Get the activation values [layer-wise]
+    def get_activations_neurons_dataloader(self, dataloader, layer_name, important_neuron_indices):
+        """
+        Get the activation values for a specific layer using a dataloader.
+        @param dataloader: DataLoader containing input data.
+        @param layer_name: Name of the layer to get activation values from.
+        @param important_neuron_indices: Indices of important neurons.
+        @return: activation_dict and selected_activation_dict
+        """
+        activation_values = []
+        def hook_fn(module, input, output):
+            activation_values.append(output.detach())
+        
+        handle = None
+        for name, module in self.model.named_modules():
+            if name == layer_name:
+                handle = module.register_forward_hook(hook_fn)
+                break
+        
+        if handle is None:
+            raise ValueError(f"Layer {layer_name} not found in the model.")
 
-    ## Get the activation values [model-wise]
-    def get_activation_values_for_model(self, inputs, important_neuron_indices):
+        self.model.eval()
+
+        with torch.no_grad():
+            for inputs, labels in dataloader:
+                inputs = inputs.to(next(self.model.parameters()).device)
+                outputs = self.model(inputs)        
+        
+        handle.remove()
+        
+        # Concatenate all activation values from batches
+        all_activations = torch.cat(activation_values, dim=0)
+        
+        # Create activation_dict with the specific layer
+        activation_dict = {layer_name: all_activations}
+        
+        # Create selected_activation_dict based on important_neuron_indices
+        selected_activation_dict = {}
+        if important_neuron_indices is not None:
+            if isinstance(important_neuron_indices, torch.Tensor) and important_neuron_indices.shape[0] > 0:
+                selected_activations = all_activations[:, important_neuron_indices]
+                selected_activation_dict[layer_name] = selected_activations
+            elif isinstance(important_neuron_indices, dict) and layer_name in important_neuron_indices:
+                indices = important_neuron_indices[layer_name]
+                selected_activations = all_activations[:, indices]
+                selected_activation_dict[layer_name] = selected_activations
+            else:
+                raise ValueError(f"Invalid important_neuron_indices: {important_neuron_indices}")
+            
+        return activation_dict, selected_activation_dict
+
+    ## Get the activation [model-wise]
+    def get_activations_model_sample(self, inputs, important_neuron_indices):
         """
         Get the activation values for the entire model.
         @param inputs: Input data.
@@ -234,6 +285,49 @@ class IDC:
         
         for handle in handles:
             handle.remove()
+
+        selected_activation_dict = {}
+        for layer_name, activation_values in activation_dict.items():
+            if important_neuron_indices is not None and layer_name in important_neuron_indices:
+                indices = important_neuron_indices[layer_name]
+                selected_activations = activation_values[:, indices]
+                selected_activation_dict[layer_name] = selected_activations
+
+        return activation_dict, selected_activation_dict
+    
+    ## Get the activation values [model-wise]
+    def get_activations_model_dataloader(self, dataloader, important_neuron_indices):
+        """
+        Get the activation values for the entire model using a dataloader.
+        @param dataloader: DataLoader containing input data.
+        @param important_neuron_indices: Indices of important neurons.
+        @return: activation_dict and selected_activation_dict
+        """
+        self.model.eval()
+        activation_dict = {}
+        
+        def hook_fn(module, input, output, layer_name):
+            if layer_name not in activation_dict:
+                activation_dict[layer_name] = []
+            activation_dict[layer_name].append(output.detach())
+        
+        handles = []
+        for name, module in self.model.named_modules():
+            if isinstance(module, (torch.nn.Linear, torch.nn.Conv2d)):
+                handle = module.register_forward_hook(lambda module, input, output, layer_name=name: hook_fn(module, input, output, layer_name))
+                handles.append(handle)
+
+        with torch.no_grad():
+            for inputs, _ in dataloader:
+                inputs = inputs.to(next(self.model.parameters()).device)
+                self.model(inputs)
+        
+        for handle in handles:
+            handle.remove()
+
+        # Concatenate all batch activations
+        for layer_name in activation_dict:
+            activation_dict[layer_name] = torch.cat(activation_dict[layer_name], dim=0)
 
         selected_activation_dict = {}
         for layer_name, activation_values in activation_dict.items():
@@ -268,24 +362,24 @@ class IDC:
     ## Cluster the importance scores [layer-wise]
     def cluster_activation_values(self, activation_values, layer_name):
         cluster_groups = []
-        
+        activation_values_single = next(iter(activation_values.values()))
         if isinstance(layer_name, torch.nn.Linear):
-            n_neurons = activation_values.shape[1]
+            n_neurons = activation_values_single.shape[1]
             for i in range(n_neurons):
                 if self.use_silhouette:
-                    optimal_k = self.find_optimal_clusters(activation_values, 2, 10)
+                    optimal_k = self.find_optimal_clusters(activation_values_single, 2, 10)
                 else:
                     optimal_k = self.n_clusters
-                cluster_groups.append(self.clustering_method(n_clusters=optimal_k).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
+                cluster_groups.append(self.clustering_method(n_clusters=optimal_k).fit(activation_values_single[:, i].cpu().numpy().reshape(-1, 1)))
 
         elif isinstance(layer_name, torch.nn.Conv2d):
-            activation_values = torch.mean(activation_values, dim=[2, 3])
-            n_neurons = activation_values.shape[1]
+            activation_values_single = torch.mean(activation_values_single, dim=[2, 3])
+            n_neurons = activation_values_single.shape[1]
             for i in range(n_neurons):
                 if self.use_silhouette:
-                    self.n_clusters = self.find_optimal_clusters(activation_values, 2, 10)
+                    self.n_clusters = self.find_optimal_clusters(activation_values_single, 2, 10)
 
-                cluster_groups.append(self.clustering_method(n_clusters=self.n_clusters).fit(activation_values[:, i].cpu().numpy().reshape(-1, 1)))
+                cluster_groups.append(self.clustering_method(n_clusters=self.n_clusters).fit(activation_values_single[:, i].cpu().numpy().reshape(-1, 1)))
         else:
             raise ValueError(f"Invalid layer name: {layer_name}")
         
@@ -351,19 +445,17 @@ class IDC:
         return cluster_comb
 
     ## Compute the IDC test [model-wise]
-    def compute_idc_test_whole(self, inputs_images, labels, indices, cluster_groups, attribution_method='lrp'):
+    def compute_idc_test_whole(self, inputs_images, indices, cluster_groups):
 
-        activation_, selected_activations = self.get_activation_values_for_model(inputs_images, indices)
+        activation_, selected_activations = self.get_activations_model_sample(inputs_images, indices)
         activation_values = []
         for layer_name, importance_scores in selected_activations.items():
             layer = get_layer_by_name(self.model, layer_name)
-            # TODO: VGG16 Conv2D layer seems to have issue
             if isinstance(layer, torch.nn.Conv2d):
                 activation_values.append(torch.mean(selected_activations[layer_name], dim=[2, 3]))
             else:
                 activation_values.append(selected_activations[layer_name])
         
-        # TODO: assign_clusters here, some bugs HERE
         all_activations_tensor = torch.cat(activation_values, dim=1)
         cluster_comb = self.assign_clusters(all_activations_tensor, cluster_groups)
         unique_clusters = set(cluster_comb)
@@ -375,23 +467,18 @@ class IDC:
             max_coverage = all_activations_tensor.shape[0] / total_combination
         
         coverage_rate = len(unique_clusters) / total_combination
-        print("Attribution Method: ", attribution_method)
-        print(f"Total INCC combinations: {total_combination}")
-        print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
-        print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
-        
         model_name = self.model.__class__.__name__
-        testing_class = self.classes[labels[0]]
-        self.save_to_json(coverage_rate, model_name, testing_class, "Whole model")
+        self.save_to_json(coverage_rate, max_coverage, model_name, "Whole model")
         
-        return unique_clusters, coverage_rate
+        return coverage_rate, total_combination, max_coverage
+    
 
     ## Compute the IDC test [layer-wise]
-    def compute_idc_test(self, inputs_images, labels, indices, cluster_groups, net_layer, layer_name, attribution_method='lrp'):
+    def compute_idc_test(self, inputs_images, indices, cluster_groups, net_layer, layer_name):
         
-        print("The first label for IDC is: {}".format(self.classes[labels[0]]))
         self.test_all_classes = False
-        activation_values, selected_activations = self.get_activation_values_for_neurons(inputs_images, indices, layer_name)
+        activation_values, selected_activations = self.get_activations_neurons_sample(inputs_images, indices, layer_name)
+        
         if isinstance(net_layer, torch.nn.Conv2d):
             activation_values = torch.mean(selected_activations, dim=[2, 3])
         else:
@@ -409,27 +496,66 @@ class IDC:
             max_coverage = activation_values.shape[0] / total_combination
         
         coverage_rate = len(unique_clusters) / total_combination
-        print("Attribution Method: ", attribution_method)
-        print(f"Total INCC combinations: ", total_combination)
-        print(f"Max Coverage (the best we can achieve): {max_coverage * 100:.6f}%")
-        print(f"IDC Coverage: {coverage_rate * 100:.6f}%")
-        
         model_name = self.model.__class__.__name__
-        testing_class = self.classes[labels[0]]
-        self.save_to_json(coverage_rate, model_name, testing_class, layer_name)
+        self.save_to_json(coverage_rate, max_coverage, model_name, layer_name)
         
-        return unique_clusters, coverage_rate
+        return coverage_rate, total_combination, max_coverage
     
-    def evaluate_attribution_methods(self, inputs_images, labels, kmeans, layer_name, attribution_methods):
-        idc_scores = {}
-        for method in attribution_methods:
-            print(f"Evaluating method: {method}")
-            # Compute IDC for the given attribution method
-            _, idc_score = self.compute_idc_test(inputs_images, labels, kmeans, layer_name, attribution_method=method)
-            
-            print(f"IDC score for {method}: {idc_score}")
-            # Store the IDC score for this method
-            idc_scores[method] = idc_score
+    ## Compute the IDC test [model-wise]
+    def compute_idc_test_whole_dataloader(self, dataloader, indices, cluster_groups):
+
+        activation_, selected_activations = self.get_activations_model_dataloader(dataloader, indices)
+        activation_values = []
+        for layer_name, importance_scores in selected_activations.items():
+            layer = get_layer_by_name(self.model, layer_name)
+            if isinstance(layer, torch.nn.Conv2d):
+                activation_values.append(torch.mean(selected_activations[layer_name], dim=[2, 3]))
+            else:
+                activation_values.append(selected_activations[layer_name])
         
-        visualize_idc_scores(idc_scores)
-        return idc_scores
+        all_activations_tensor = torch.cat(activation_values, dim=1)
+        cluster_comb = self.assign_clusters(all_activations_tensor, cluster_groups)
+        unique_clusters = set(cluster_comb)
+        # total_combination = pow(self.n_clusters, all_activaptions_tensor.shape[1])
+        total_combination = self.total_combination
+        if all_activations_tensor.shape[0] > total_combination:
+            max_coverage = 1
+        else:
+            max_coverage = all_activations_tensor.shape[0] / total_combination
+        
+        coverage_rate = len(unique_clusters) / total_combination
+        model_name = self.model.__class__.__name__
+        self.save_to_json(coverage_rate, max_coverage, model_name, "Whole model")
+        
+        return coverage_rate, total_combination, max_coverage
+    
+
+    ## Compute the IDC test [layer-wise]
+    def compute_idc_test_dataloader(self, dataloader, indices, cluster_groups, net_layer, layer_name):
+        
+        self.test_all_classes = False
+
+        activation_values, selected_activations = self.get_activations_neurons_dataloader(dataloader, layer_name, indices)
+        selected_activations_single = next(iter(selected_activations.values()))
+        
+        if isinstance(net_layer, torch.nn.Conv2d):
+            activation_values = torch.mean(selected_activations_single, dim=[2, 3])
+        else:
+            activation_values = selected_activations_single
+        
+        activation_values_np = activation_values.cpu().numpy()
+        cluster_comb = self.assign_clusters(activation_values, cluster_groups)
+        
+        unique_clusters = set(cluster_comb)
+        # total_combination = pow(self.n_clusters, activation_values_np.shape[1])
+        total_combination = self.total_combination
+        if activation_values.shape[0] > total_combination:
+            max_coverage = 1
+        else:
+            max_coverage = activation_values.shape[0] / total_combination
+        
+        coverage_rate = len(unique_clusters) / total_combination
+        model_name = self.model.__class__.__name__
+        self.save_to_json(coverage_rate, max_coverage, model_name, layer_name)
+        
+        return coverage_rate, total_combination, max_coverage

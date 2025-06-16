@@ -4,7 +4,7 @@ A pytorch version for Deepimportance (test version). [TensorFlow version for Dee
 
 For the paper, please refer [HERE](https://zenodo.org/records/3628024).
 
-## How to run (Captum version)
+## Prerequest
 
 The Captum version demo is tested and should be fine for further developments. The docker is still pending.
 
@@ -18,40 +18,8 @@ $ pip -r install requirements.txt
 $ conda env create -f requirements_venv.yaml
 ```
 
-Run with a script:
+## How to run
 
-```shell
-# End2end testing the deepimportance with LeNet-5 in MNIST dataset, with fixed cluster number (=2)
-$ ./script.sh test
-
-# Run with Use Case N: `./script.sh caseN`, e.g.:
-$ ./script.sh case1
-
-# To plot the common neurons in different layer per class
-$ cd logs
-# python plot_images.py --plot-all --log-file <log_file_name.log>
-$ python plot_images.py --plot-all
-```
-
-## Routes
-
-- Activation values for important neuros (v_1, v_2, ...)
-- Clustering with Silhoutte score (or with the customized `n_cluster`)
-- Combination of clusters from important neuros
-- Testset comes in (x_1, y_1)
-- Check coverage (See combinations covered by the test set, e.g., 4/6, 1/6 ,....), A.k.a. IDC
-
-## TODO
-
-- [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
-- [x] [**CI**] Pytest Running with a small demo (MNIST)
-- [ ] [**CI**] Docker building
-- [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
-- [ ] [**Lib**] pip package ready
-- [ ] [**IDC**] runtime version + attention
-- [ ] [**YOLO**] YOLO v11
-
-## Parameters and single files running example
 ```shell
 # UC1 - Running IDC test with different attribution methods
 python run.py \
@@ -64,14 +32,14 @@ python run.py \
       # --use-silhouette \
       --n-cluster 2 \ 
       --top-m-neurons 5 \
-      --test-image plane \
-      # --idc-test-all \
+      # --test-image plane \
+      --idc-test-all \
       --num-samples 1000 \
       --attr lrp \
-      --layer-index 1 \
-      # --layer-by-layer \
-      # --end2end \
-      # --all-class \
+      # --layer-index 1 \
+      --end2end \
+      --all-class \
+      # --class-iters \
       --log-path './logs/TestLog' \
       --logging
 
@@ -83,14 +51,21 @@ python run.py \
 --num-sample N # Randomly pick N samples
 --idc-test-all # Choose all the image in one batch
 
-# Choose one or none:
---layer-by-layer # Looping all the layer on a specific class
---end2end # End2End test
---all-class # Test all the class with a given layer
+# Testing mode combinations
+# We currently have four modes:
+# 1. End2End with all classes [--end2end, --all-class]
+# 2. End2End with single class [--end2end, --test-image N]
+# 3. Single layer with all classes [--layer-index, --all-class]
+# 4. Single layer with single class [--layer-index, --test-image N]
+--end2end       # Activate End2End test
+--all-class     # Test all the classes (samples), equal to batch shuffle testing the whole testset
+--layer-index N # A specific layer that would like to be tested (works when --end2end is OFF)
+--test-image M  # A specific class that would like to be tested (works when --all-class is OFF)
+--class-iters   # A class-wise testing following in-ordered class testing (i.e. similar to mode 2 and 4 but will give all the class results)
 
 # Logging
 --log-path  '<path>/<name>' # log file path and name: e.g., './logs/TestLog'
---logging # Save the log file
+--logging                   # Save the log file
 
 # UC-1: IDC results with different attribution methods
 ## An LeNet Example - CIFAR10 with layer index: 1 - LRP
@@ -98,7 +73,7 @@ python3 run.py \
       --model lenet \
       --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
       --dataset cifar10 \
-      --data-path '/data/shenghao/dataset/' \
+      --data-path './dataset/' \
       --use-silhouette \
       --device cpu \
       --n-cluster 2 \
@@ -116,18 +91,19 @@ python3 run.py \
       --model lenet \
       --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
       --dataset cifar10 \
-      --data-path '/data/shenghao/dataset/' \
+      --data-path './dataset/' \
       --device cpu \
       --n-cluster 2 \
       --top-m-neurons 10 \
-      --test-image plane \
-      --end2end --idc-test-all \
+      --end2end \
+      --all-class \
+      --idc-test-all \
       --num-samples 0  \
       --attr lrp \
       --log-path './logs/TestLog' \
       --logging
 
-# UC-2: voting data for specific model
+# UC-2: WISDOM data for specific model
 ## Example: LeNet - MNIST - top/6
 python3 prepare_data.py \
         --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' \
@@ -144,20 +120,49 @@ python3 prepare_data.py \
 
 # Uc - 3
 # Apply the WISDOM 
-python3 run_wsidom.py \
+python3 run_wisdom.py \
       --model lenet \
       --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' \
       --dataset mnist \
-      --data-path '/data/shenghao/dataset/' \
+      --data-path './dataset/' \
       --device cpu \
       --n-cluster 2 \
       --top-m-neurons 6 \
       --end2end \
       --num-samples 0 \
-      --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_mnist_b32.csv' \
+      --csv-file './saved_files/pre_csv/lenet_mnist_b32.csv' \
       --idc-test-all 
 
 ```
+
+### Running script
+
+```shell
+# End2end testing the deepimportance with LeNet-5 in MNIST dataset, with fixed cluster number (=2)
+$ ./script.sh test
+
+# Run with Use Case N: `./script.sh caseN`, e.g.:
+$ ./script.sh case1
+```
+
+## Routes
+
+- Activation values for important neuros (v_1, v_2, ...)
+- Combining and voting for the best attribution methods to come up with a better important neuron set
+- Clustering with Silhoutte score (or with the customized `n_cluster`)
+- Combination of clusters from important neuros
+- Testset comes in (x_1, y_1)
+- Check coverage (See combinations covered by the test set, e.g., 4/6, 1/6 ,....), A.k.a. IDC
+
+## TODO
+
+- [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
+- [x] [**CI**] Pytest Running with a small demo (MNIST)
+- [ ] [**CI**] Docker building
+- [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
+- [ ] [**Lib**] pip package ready
+- [ ] [**IDC**] runtime version + attention
+- [ ] [**YOLO**] YOLO v11
 
 ## Research Questions
 
@@ -217,6 +222,17 @@ Metrics:
 
 $NCov(s) = \frac{Cov(s) - Cov(s_0)}{max(\Delta) - min(\Delta)}$ <br>
 $\Delta = \{Cov(s) - Cov(s_0) | s \in S\}$
+
+How to run
+```shell
+# MODELNAME: [lenet, vgg16, resnet18]
+# DATASET: [mnist, cifar10, imagenet]
+# Pretrained relevant scores: ./saved_files/pre_csv/<MODELNAME>_<DATASET>.csv
+python run_rq_3_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu --csv-file /path/to/wisdom/weights/csv --idc-test-all --attr lrp --top-m-neurons 10
+
+# With WISDOM-based pertubation
+./run_rq_3.sh
+```
 
 ### RQ 4: Correlation
 

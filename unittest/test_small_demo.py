@@ -39,10 +39,8 @@ def test_default_args_parsing():
     assert args.saved_model == "/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth"
     assert args.dataset in ["mnist", "cifar10", "imagenet"]
     assert args.data_path == "./datasets/"
-    assert args.importance_file == "./logs/important.json"
     assert args.epochs == 10
     assert args.device == "cpu"
-    assert args.large_image is False
     assert args.random_prune is False
     assert args.use_silhouette is False
     assert args.n_clusters == 2
@@ -50,16 +48,15 @@ def test_default_args_parsing():
     assert args.batch_size == 256
     assert args.test_image == "1"
     assert args.all_class is False
+    assert args.class_iters is False
+    assert args.end2end is False
     assert args.idc_test_all is False
     assert args.num_samples == 0
     assert args.attr == "lc"
     assert args.layer_index == 1
-    assert args.layer_by_layer is False
-    assert args.end2end is False
     assert args.logging is False
     assert args.log_path == "./logs/TestLog"
     assert args.csv_file == "demo_layer_scores.csv"
-
 
 @pytest.mark.parametrize("model_name", list(MODEL_CLASSES.keys()))
 def test_model_infer_cifar(model_name):

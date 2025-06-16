@@ -259,7 +259,7 @@ if __name__ == '__main__':
     # Get the original accuracy
     original_acc, avg_loss, f1 = eval_model_dataloder(model, test_loader, device)
     print(f"Original accuracy: {original_acc:.2f}, Loss: {avg_loss:.2f}, F1 Score: {f1:.2f}")
-
+    
     # Skip final classifier layer
     final_layer = trainable_module_name[-1]
     

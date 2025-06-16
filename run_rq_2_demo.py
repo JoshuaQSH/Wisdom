@@ -16,7 +16,7 @@ from captum.attr import LRP
 
 from torch.utils.data import DataLoader, TensorDataset, random_split, ConcatDataset
 from src.attribution import get_relevance_scores_dataloader
-from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, extract_random_class
+from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main
 from src.idc import IDC
 from src.nlc_coverage import (
     NC, KMNC, NBC, SNAC, TKNC, TKNP, CC,
@@ -29,8 +29,8 @@ from src.nlc_tool import get_layer_output_sizes
 U_I (Importance-perturbed): Each image has Gaussian white noise (mean 0, std 0.3) added to its most important 2% pixels.
 U_R (Random-perturbed): Each image has noise added to a random 2% of its pixels.
 
-U_IO (Importance-perturbed Original): Original images with noise added to the most important 2% pixels.
-U_RO (Random-perturbed Original): Original images with noise added to a random 2% of its pixels.
+U_IO (Importance-perturbed Dataset + Original Dataset): Original images with noise added to the most important 2% pixels.
+U_RO (Random-perturbed Dataset + Original Dataset): Original images with noise added to a random 2% of its pixels.
 
 # Step 1: Get the relevance maps for the test set using Attribution methods (e.g., LRP).
 # Step 2: For each image, find the top 2% most important pixels based on the relevance map (Baseline: random & LRP) and form the new dataset.
@@ -45,7 +45,7 @@ U_RO (Random-perturbed Original): Original images with noise added to a random 2
 # -----------------------------------------------------------
 
 SEED = 2025  # Random seed for reproducibility
-TOPK = 0.01  # Top-k fraction of pixels to perturb (2%)
+TOPK = 0.02  # Top-k fraction of pixels to perturb (2%)
 SANITY_CHECK = False
 start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
@@ -151,8 +151,6 @@ def image_distance_visualization(original_loader, perturbed_loader, n_classes=10
     
     return avg_dist, per_class
 
-    
-
 def set_seed(seed: int = 2025):
     random.seed(seed)
     torch.manual_seed(seed)
@@ -223,15 +221,7 @@ def save_csv_results(updated_column_dict, csv_path='results.csv', tag='original'
         df.to_csv(csv_path, mode=mode, header=header)
 
     print(f"[{tag}] Updated results saved to {csv_path}")
-
-# def saved_csv_results(df, csv_path, tag='original'):
-#     if csv_path is not None:
-#         mode  = 'a' if os.path.exists(csv_path) else 'w'
-#         header= False if mode == 'a' else True
-#         df.to_csv(csv_path, mode=mode, header=header)
-#         print(f"[{tag}] Results appended to {csv_path}")
         
-
 # -----------------------------------------------------------
 # Wisdom-based input trace
 # -----------------------------------------------------------
@@ -249,7 +239,6 @@ def register_hooks(model, csv_path):
     Returns list of handles and a dict that will fill up per batch.
     """
     layer2score = wisdom_importance_scores(csv_path)
-
     
     activations = defaultdict(list)
     handles = []
@@ -526,28 +515,17 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     
     final_layer = trainable_module_name[-1]
     important_neuron_indices, inorderd_indices = idc.select_top_neurons_all(layer_relevance_scores, final_layer)
-    subset_loader, test_images, test_labels = extract_random_class(
-            test_loader.dataset,
-            test_all=args.idc_test_all,
-            num_samples=args.num_samples,
-    )
-    test_images = test_images.to(device)
-    activation_values, selected_activations = idc.get_activation_values_for_model(test_images, important_neuron_indices)
+    activation_values, selected_activations = idc.get_activations_model_dataloader(test_loader, important_neuron_indices)
+    
     selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations)
-
-    unique_cluster, coverage_rate = idc.compute_idc_test_whole(
-            test_images,
-            test_labels,
-            important_neuron_indices,
-            cluster_groups,
-            'lrp',
-        )
+    coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(test_loader, important_neuron_indices, cluster_groups)
+    
     results = {}
     results['IDC'] = coverage_rate
     df = pd.DataFrame(results, index=[tag])
     save_csv_results(results, "rq2_results_{}_{}_{}.csv".format(args.dataset, args.model, TIMESTAMP), tag=tag)
-    print(f"[{tag}] Testing Samples: {len(test_images)}, IDC Coverage: {coverage_rate:.4f}, Attribution: {args.attr}")
+    print(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: {args.attr}")
     return coverage_rate
 
 def wisdom_coverage(args, model, test_loader, device, classes, tag='original'):
@@ -558,50 +536,39 @@ def wisdom_coverage(args, model, test_loader, device, classes, tag='original'):
         top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
     
     idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
-    subset_loader, test_images, test_labels = extract_random_class(
-            test_loader.dataset,
-            test_all=args.idc_test_all,
-            num_samples=args.num_samples,
-    )
-    test_images = test_images.to(device)
-    
-    activation_values, selected_activations = idc.get_activation_values_for_model(test_images, top_k_neurons)
+
+    activation_values, selected_activations = idc.get_activations_model_dataloader(test_loader, top_k_neurons)
     selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations)
-    unique_cluster, coverage_rate = idc.compute_idc_test_whole(
-            test_images,
-            test_labels,
-            top_k_neurons,
-            cluster_groups,
-            'WISDOM',
-        )
+    coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups)
+
     results = {}
     results['WISDOM'] = coverage_rate
     df = pd.DataFrame(results, index=[tag])
     save_csv_results(results, "rq2_results_{}_{}_{}.csv".format(args.dataset, args.model, TIMESTAMP), tag=tag)
-    print(f"[{tag}] Testing Samples: {len(test_images)}, IDC Coverage: {coverage_rate:.4f}, Attribution: WISDOM")
+    print(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: WISDOM")
     return coverage_rate
 
-def run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_I_loader, U_R_loader, device, classes):
+def run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes):
     """
     Runs the IDC coverage suite on the given model and data loaders.
     """
     dpo_results = idc_coverage(args, model, train_loader, test_loader, classes, trainable_module_name, device, tag='original')
-    dpr_results = idc_coverage(args, model, train_loader, U_R_loader, classes, trainable_module_name, device, tag=args.attr+'_U_R')
-    dpi_results = idc_coverage(args, model, train_loader, U_I_loader, classes, trainable_module_name, device, tag=args.attr+'_U_I')
+    dpr_results = idc_coverage(args, model, train_loader, U_RO_loader, classes, trainable_module_name, device, tag=args.attr+'_U_RO')
+    dpi_results = idc_coverage(args, model, train_loader, U_IO_loader, classes, trainable_module_name, device, tag=args.attr+'_U_IO')
     
     dpo_results_w = wisdom_coverage(args, model, test_loader, device, classes, tag='original')
-    dpr_results_w = wisdom_coverage(args, model, U_R_loader, device, classes, tag=args.attr+'_U_R')
-    dpi_results_w = wisdom_coverage(args, model, U_I_loader, device, classes, tag=args.attr+'_U_I')
+    dpr_results_w = wisdom_coverage(args, model, U_RO_loader, device, classes, tag=args.attr+'_U_RO')
+    dpi_results_w = wisdom_coverage(args, model, U_IO_loader, device, classes, tag=args.attr+'_U_IO')
     
 
-def run_coverage_suite(model, train_loader, test_loader, U_I_loader, U_R_loader, device, classes, tag_pre='lrp_'):
+def run_coverage_suite(model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, tag_pre='lrp_'):
     """
     Runs the full coverage suite on the given model and data loaders.
     """
     uo_results, _ = run_other_coverage_suite(model, train_loader, test_loader, len(classes), device, tag='original', skip_train=True, model_name=args.model, dataset_name=args.dataset)
-    ur_results, _ = run_other_coverage_suite(model, train_loader, U_R_loader, len(classes), device, tag=tag_pre + 'U_R', skip_train=True, model_name=args.model, dataset_name=args.dataset)
-    ui_results, _ = run_other_coverage_suite(model, train_loader, U_I_loader, len(classes), device, tag=tag_pre + 'U_I', skip_train=True, model_name=args.model, dataset_name=args.dataset)
+    ur_results, _ = run_other_coverage_suite(model, train_loader, U_RO_loader, len(classes), device, tag=tag_pre + 'U_RO', skip_train=True, model_name=args.model, dataset_name=args.dataset)
+    ui_results, _ = run_other_coverage_suite(model, train_loader, U_IO_loader, len(classes), device, tag=tag_pre + 'U_IO', skip_train=True, model_name=args.model, dataset_name=args.dataset)
 
 # -----------------------------------------------------------
 # Main entry point
@@ -639,7 +606,7 @@ def main(args):
     
     # Run the coverage suite
     print("\n=== Running coverage suite ===")
-    run_coverage_suite(model, build_loader_toy, test_loader, U_IO_loader, U_RO_loader, device, classes, tag_pre=args.attr + '_')
+    # run_coverage_suite(model, build_loader_toy, test_loader, U_IO_loader, U_RO_loader, device, classes, tag_pre=args.attr + '_')
     run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes)
     
 
