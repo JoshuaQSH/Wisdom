@@ -166,6 +166,8 @@ $ ./script.sh case1
 
 ## Research Questions
 
+Note: While running the scripts, ensure to change the `$DATA_PATH` to your own dataset path.
+
 ### RQ 1: Critical (or important) neurons
 
 Metrics:

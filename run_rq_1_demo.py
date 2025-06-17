@@ -254,7 +254,7 @@ if __name__ == '__main__':
     model, module_name, module, trainable_module, trainable_module_name = prapare_data_models(args)
 
     ### Data settings
-    train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path, args.large_image)
+    train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     
     # Get the original accuracy
     original_acc, avg_loss, f1 = eval_model_dataloder(model, test_loader, device)

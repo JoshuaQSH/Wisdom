@@ -403,7 +403,7 @@ class IDC:
         cluster_groups = []
         for i in range(total_neurons):
             if self.use_silhouette:
-                self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].reshape(-1, 1), 2, 10)
+                self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1), 2, 10)
             
             cluster_ = self.clustering_method(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))
             # cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))

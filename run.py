@@ -52,7 +52,6 @@ def load_dataset(args):
         "cifar10": lambda: load_CIFAR(  # pylint: disable=unnecessary‑lambda
             batch_size=args.batch_size,
             root=args.data_path,
-            large_image=args.large_image,
         ),
         "mnist": lambda: load_MNIST(
             batch_size=args.batch_size,

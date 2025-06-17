@@ -316,10 +316,10 @@ def load_MNIST(batch_size=32, root='./datasets', channel_first=False, train_all=
     return train_loader, test_loader, train_dataset, test_dataset, classes
 
 
-def get_data(dataset_name, batch_size, data_path, large_image):
+def get_data(dataset_name, batch_size, data_path):
     ### Dataset settings
     if dataset_name == 'cifar10':
-        trainloader, testloader, train_dataset, test_dataset, classes = load_CIFAR(batch_size=batch_size, root=data_path, large_image=large_image, shuffle=True)
+        trainloader, testloader, train_dataset, test_dataset, classes = load_CIFAR(batch_size=batch_size, root=data_path, shuffle=True)
     elif dataset_name == 'mnist':
         trainloader, testloader, train_dataset, test_dataset, classes = load_MNIST(batch_size=batch_size, root=data_path)
     elif dataset_name == 'imagenet':

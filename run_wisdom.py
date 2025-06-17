@@ -32,7 +32,7 @@ python run_wisdom.py --model lenet --saved-model '/torch-deepimportance/models_i
 
 def load_dataset(args):
     if args.dataset == 'cifar10':
-        return load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image)
+        return load_CIFAR(batch_size=args.batch_size, root=args.data_path)
     elif args.dataset == 'mnist':
         return load_MNIST(batch_size=args.batch_size, root=args.data_path)
     elif args.dataset == 'imagenet':

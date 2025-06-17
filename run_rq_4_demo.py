@@ -39,13 +39,13 @@ def set_seed(seed: int = 2025) -> None:
         torch.cuda.manual_seed_all(seed)
 
 def prapared_parameters(args):
-    ### Logger settings
+    # Logger settings
     logger = _configure_logging(args.logging, args, 'debug')
 
-    ### Model settings
+    # Model settings
     model_path = os.getenv("HOME") + args.saved_model
     
-    ### Model loading
+    # Model loading
     model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
 
@@ -375,7 +375,7 @@ def main(args):
     model.to(device)
     
     # Data settings
-    train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path, args.large_image)
+    train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     num_classes = len(classes)
     
     logger.info("Starting RQ4 experiment...")

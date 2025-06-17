@@ -16,7 +16,7 @@ from captum.attr import LRP
 
 from torch.utils.data import DataLoader, TensorDataset, random_split, ConcatDataset
 from src.attribution import get_relevance_scores_dataloader
-from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main
+from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, _configure_logging
 from src.idc import IDC
 from src.nlc_coverage import (
     NC, KMNC, NBC, SNAC, TKNC, TKNP, CC,
@@ -44,7 +44,6 @@ U_RO (Random-perturbed Dataset + Original Dataset): Original images with noise a
 # Helper
 # -----------------------------------------------------------
 
-SEED = 2025  # Random seed for reproducibility
 TOPK = 0.02  # Top-k fraction of pixels to perturb (2%)
 SANITY_CHECK = False
 start_ms = int(time.time() * 1000)
@@ -58,14 +57,17 @@ def vis_santity_check(dataloder1, dataloader2, classes, n_per_class=5):
     print(f"Per-class perturbation distances: {per_class}")
 
 def prapare_data_models(args):
-    ### Model settings
+    # Logger settings
+    logger = _configure_logging(args.logging, args, 'debug')
+    
+    # Model settings
     model_path = os.getenv("HOME") + args.saved_model
     
-    ### Model loading
+    # Model loading
     model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
 
-    return model, module_name, module, trainable_module, trainable_module_name
+    return model, module_name, module, trainable_module, trainable_module_name, logger
 
 # A toy train loader for pre-assessing the coverage methods (e.g., CC), use as needed
 def toy_train_loader(train_dataset, batch_size, ratio=0.2):
@@ -398,15 +400,15 @@ def build_sets_wisdom(model, loader, device, csv_path, k, name):
     
     return U_I_dataset, U_R_dataset
 
-def eval_model(model, test_loader, U_I_loader, U_R_loader, device):
+def eval_model(model, test_loader, U_I_loader, U_R_loader, device, logger):
     model.eval()
     original_accuracy, original_avg_loss, original_f1 = eval_model_dataloder(model, test_loader, device)
     accuracy_I, avg_loss_I, f1_I = eval_model_dataloder(model, U_I_loader, device)
     accuracy_R, avg_loss_R, f1_R = eval_model_dataloder(model, U_R_loader, device)
     
-    print(f"Original Accuracy: {original_accuracy:.4f}, Average Loss: {original_avg_loss:.4f}, F1 Score: {original_f1:.4f}")
-    print(f"Accuracy on U_I: {accuracy_I:.4f}, Average Loss on U_I: {avg_loss_I:.4f}, F1 Score on U_I: {f1_I:.4f}")
-    print(f"Accuracy on U_R: {accuracy_R:.4f}, Average Loss on U_R: {avg_loss_R:.4f}, F1 Score on U_R: {f1_R:.4f}")
+    logger.info(f"Original Accuracy: {original_accuracy:.4f}, Average Loss: {original_avg_loss:.4f}, F1 Score: {original_f1:.4f}")
+    logger.info(f"Accuracy on U_I: {accuracy_I:.4f}, Average Loss on U_I: {avg_loss_I:.4f}, F1 Score on U_I: {f1_I:.4f}")
+    logger.info(f"Accuracy on U_R: {accuracy_R:.4f}, Average Loss on U_R: {avg_loss_R:.4f}, F1 Score on U_R: {f1_R:.4f}")
     
 
 # -----------------------------------------------------------
@@ -576,11 +578,11 @@ def run_coverage_suite(model, train_loader, test_loader, U_IO_loader, U_RO_loade
 def main(args):
     device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")
     
-    ### Model settings
-    model, module_name, module, trainable_module, trainable_module_name = prapare_data_models(args)
+    # Model settings
+    model, module_name, module, trainable_module, trainable_module_name, logger = prapare_data_models(args)
 
-    ### Data settings
-    train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path, args.large_image)
+    # Data settings
+    train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     if args.attr == 'wisdom':
         U_I_dataset, U_R_dataset = build_sets_wisdom(model, test_loader, device, args.csv_file, TOPK, args.dataset)
         U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
@@ -602,16 +604,16 @@ def main(args):
         vis_santity_check(test_loader, U_I_loader, classes, n_per_class=4)
     
     # A simple acc test for the perturbed datasets
-    eval_model(model, test_loader, U_IO_loader, U_RO_loader, device)
+    eval_model(model, test_loader, U_I_loader, U_R_loader, device, logger)
     
     # Run the coverage suite
-    print("\n=== Running coverage suite ===")
+    logger.info("=== Running coverage suite ===")
     # run_coverage_suite(model, build_loader_toy, test_loader, U_IO_loader, U_RO_loader, device, classes, tag_pre=args.attr + '_')
     run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes)
     
 
 if __name__ == '__main__':
-    set_seed(SEED)
+    set_seed()
     args = parse_args()
     main(args)
     

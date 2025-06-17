@@ -48,13 +48,13 @@ error_rates = [0.01, 0.05, 0.10]
 # Helper
 # -----------------------------------------------------------
 def prapared_parameters(args):
-    ### Logger settings
+    # Logger settings
     logger = _configure_logging(args.logging, args, 'debug')
     
-    ### Model settings
+    # Model settings
     model_path = os.getenv("HOME") + args.saved_model
     
-    ### Model loading
+    # Model loading
     model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
 
@@ -64,7 +64,6 @@ def set_seed(seed: int = 2025):
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
 
 # ---------------------------------------------------------------------------
 # Coverage helpers for baselines
@@ -362,15 +361,20 @@ def analyze_results(results, dataset_name, model_name, logger):
                 adv_ratio = float(adv_ratio)
                     
                 values = results[method][sample_size][attack_config]
+                values_np = [
+                    t.cpu().numpy() if isinstance(t, torch.Tensor)
+                    else np.array(t)
+                    for t in values
+                ]
                 if values:  # Only include if we have data
                     rows.append({
                         'Method': method,
                         'Sample_Size': sample_size,
                         'Attack': attack_method,
                         'Adv_Ratio': adv_ratio,
-                        'Coverage_Change': np.mean(values),
-                        'Coverage_Change_Std': np.std(values),
-                        'Num_Runs': len(values)
+                        'Coverage_Change': np.mean(values_np),
+                        'Coverage_Change_Std': np.std(values_np),
+                        'Num_Runs': len(values_np)
                     })
         
     results_df = pd.DataFrame(rows)
@@ -397,13 +401,17 @@ def run_experiment(args, num_runs=3):
     model.to(device)
     
     ### Data settings
-    train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path, args.large_image)
+    train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     num_classes = len(classes)
     
     # Baseline templates 
     sample_batch, *_ = next(iter(train_loader))
     layer_size_dict = _infer_layer_sizes(model, sample_batch, device)
     base_templates = initialize_baseline_coverage(model, layer_size_dict, train_loader, num_classes, device)
+    
+    # TODO: Add DeepImportance and Wisdom templates
+    base_templates['DeepImportance'] = None
+    base_templates['Wisdom'] = None
     
     # IDC based (DeepImportance and WISDOM)
     dp_relevance_scores = get_relevance_scores_dataloader(
@@ -462,17 +470,16 @@ def run_experiment(args, num_runs=3):
                     
                     # Test each coverage method
                     for method_name, template in base_templates.items():
-                        coverage_change = calculate_coverage_change(
-                            template, test_dataset, args.batch_size, clean_dataset, mixed_dataset, method_name
-                        )
-                        coverage_change_dp = deepimportance_coverage_change(args, model, trainable_module_name, classes, dp_relevance_scores, clean_dataset, mixed_dataset)
-                        coverage_change_wisdom = wisdom_coverage_change(args, model, classes, wisdom_k_neurons, clean_dataset, mixed_dataset)
+                        if method_name == 'DeepImportance':
+                            coverage_change = deepimportance_coverage_change(args, model, trainable_module_name, classes, dp_relevance_scores, clean_dataset, mixed_dataset)
+                        elif method_name == 'Wisdom':
+                            coverage_change = wisdom_coverage_change(args, model, classes, wisdom_k_neurons, clean_dataset, mixed_dataset)
+                        else:
+                            coverage_change = calculate_coverage_change(
+                                template, test_dataset, args.batch_size, clean_dataset, mixed_dataset, method_name
+                            )
                         results[method_name][sample_size][f"{attack_}_{error_}"].append(coverage_change)
-                        results["DeepImportance"][sample_size][f"{attack_}_{error_}"].append(coverage_change_dp)
-                        results["Wisdom"][sample_size][f"{attack_}_{error_}"].append(coverage_change_wisdom)
                         logger.info(f"{method_name} coverage change: {coverage_change:.4f}")
-                        logger.info(f"DeepImportance coverage change: {coverage_change_dp:.4f}")
-                        logger.info(f"Wisdom coverage change: {coverage_change_wisdom:.4f}")
                         
     # Analyze and Save results to CSV
     results_df = analyze_results(results, args.dataset, args.model, logger)
