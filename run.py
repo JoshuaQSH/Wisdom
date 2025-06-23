@@ -127,7 +127,6 @@ def main() -> None:
         else:
             logger.info("Single Layer Testing with single class: %s", args.test_image)
         mean_attribution = get_relevance_score_target_layer(model, trainloader, device, attribution_method=args.attr, target_layer=trainable_module[args.layer_index])
-        
     
     # ------------------------------------------------------------------
     # Task 2-2: Select & cluster activations & Testing IDC coverage
@@ -154,7 +153,7 @@ def main() -> None:
         # Cluster activation values for all layers
         logger.info("Clustering activation values for all layers.")
         cluster_groups = idc.cluster_activation_values_all(selected_activations)
-        
+                
         if not testing_mode['all_class'] and not testing_mode['class_iters']:
             logger.info("Testing Samples: %s", args.test_image)
             coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, important_neuron_indices, cluster_groups)

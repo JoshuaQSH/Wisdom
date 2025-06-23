@@ -60,9 +60,11 @@ def prapared_parameters(args):
 
     return model, module_name, module, trainable_module, trainable_module_name, logger
 
-def set_seed(seed: int = 2025):
+def set_seed(seed: int = 42):
     random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
 # ---------------------------------------------------------------------------
@@ -91,24 +93,26 @@ def initialize_baseline_coverage(
 ):
     """Initialize a coverage method with given configuration."""
     templates = {}
+    
     # NC 
-    templates["NC"] = NC(model, layer_size, hyper=0.5)
+    # templates["NC"] = NC(model, device, layer_size, hyper=0.5)
 
     # KMNC & NBC & SNAC & TKNC
-    templates["KMNC"] = KMNC(model, layer_size, hyper=10)
-    templates["NBC"] = NBC(model, layer_size)
-    templates["SNAC"] = SNAC(model, layer_size)
-    templates["TKNC"] = TKNC(model, layer_size, hyper=2)
+    # templates["KMNC"] = KMNC(model, device, layer_size, hyper=10)
+    templates["NBC"] = NBC(model, device, layer_size)
+    # templates["SNAC"] = SNAC(model, device, layer_size)
+    # templates["TKNC"] = TKNC(model, device, layer_size, hyper=10)
+    # templates["TKNP"] = TKNC(model, device, layer_size, hyper=10)
 
     # # LSC & DSC & MDSC
-    lsc_kwargs = {"hyper": 0.1, "min_var": 1e-5, "num_class": num_classes}
-    templates["LSC"] = LSC(model, layer_size, **lsc_kwargs)
-    templates["DSC"] = DSC(model, layer_size, **lsc_kwargs)
-    templates["MDSC"] = MDSC(model, layer_size, **lsc_kwargs)
+    # lsc_kwargs = {"hyper": 0.1, "min_var": 1e-5, "num_class": num_classes}
+    # templates["LSC"] = LSC(model, device, layer_size, **lsc_kwargs)
+    # templates["DSC"] = DSC(model, device, layer_size, **lsc_kwargs)
+    # templates["MDSC"] = MDSC(model, device, layer_size, **lsc_kwargs)
     
     # # NLC & CC
-    templates["NLC"] = NLC(model, layer_size)
-    templates["CC"] = CC(model, layer_size, hyper=0.1)
+    templates["NLC"] = NLC(model, device, layer_size)
+    # templates["CC"] = CC(model, device, layer_size, hyper=0.1)
 
     # Build where needed
     for name, metric in templates.items():
@@ -173,7 +177,7 @@ def generate_adversarial_examples(attack_method, model, target, data, num_adv):
 # Coverage change calculation
 # ---------------------------------------------------------------------------
 
-def deepimportance_coverage_change(args, model, trainable_module_name, classes, layer_relevance_scores, clean_data, mixed_data):
+def deepimportance_coverage_change(args, model, trainable_module_name, classes, layer_relevance_scores, train_loader, clean_data, mixed_data):
     idc = IDC(
         model,
         classes,
@@ -183,12 +187,13 @@ def deepimportance_coverage_change(args, model, trainable_module_name, classes, 
         args.all_class,
         "KMeans",
     )
-    final_layer = trainable_module_name[-1]
+    final_layer = trainable_module_name[-1]    
     important_neuron_indices, inorderd_indices = idc.select_top_neurons_all(layer_relevance_scores, final_layer)
-    clean_loader = DataLoader(clean_data, batch_size=args.batch_size, shuffle=False)
-    activation_values, selected_activations = idc.get_activations_model_dataloader(clean_loader, important_neuron_indices)
-    selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
-    cluster_groups = idc.cluster_activation_values_all(selected_activations)
+    activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, important_neuron_indices)
+    selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
+    cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
+    
+    clean_loader = DataLoader(clean_data, batch_size=args.batch_size, shuffle=False)    
     clean_coverage, _, _ = idc.compute_idc_test_whole_dataloader(clean_loader, important_neuron_indices, cluster_groups)
     idc.total_combination = 1
     mixed_loader = DataLoader(mixed_data, batch_size=args.batch_size, shuffle=False)
@@ -198,40 +203,67 @@ def deepimportance_coverage_change(args, model, trainable_module_name, classes, 
     return normalized_change    
     
 
-def wisdom_coverage_change(args, model, classes, wisdom_k_neurons, clean_data, mixed_data):
+def wisdom_coverage_change(args, model, classes, wisdom_k_neurons, train_loader, clean_data, mixed_data):
     idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
+    activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, wisdom_k_neurons)
+    selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
+    cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
+    
     clean_loader = DataLoader(clean_data, batch_size=args.batch_size, shuffle=False)
-    activation_values, selected_activations = idc.get_activations_model_dataloader(clean_loader, wisdom_k_neurons)
-    selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
-    cluster_groups = idc.cluster_activation_values_all(selected_activations)
     clean_coverage, _, _ = idc.compute_idc_test_whole_dataloader(clean_loader, wisdom_k_neurons, cluster_groups)
     idc.total_combination = 1
     mixed_loader = DataLoader(mixed_data, batch_size=args.batch_size, shuffle=False)
     mixed_coverage, _, _ = idc.compute_idc_test_whole_dataloader(mixed_loader, wisdom_k_neurons, cluster_groups)
+    
     normalized_change = abs(mixed_coverage - clean_coverage) / clean_coverage
     return normalized_change
-
 
 def calculate_coverage_change(coverage_method, test_dataset, batch_size, clean_data, mixed_data, method_name):
     coverage_method_clean = copy.deepcopy(coverage_method)
     coverage_method_mixed = copy.deepcopy(coverage_method)
     
-    # Build coverage if needed (for surprise-based methods)
-    if method_name in ['LSC', 'DSC', 'MDSC']:
-        # Use clean data for building
-        build_loader = DataLoader(
-            Subset(test_dataset, list(range(min(1000, len(test_dataset))))),
-            batch_size=32, shuffle=False)
-        coverage_method_clean.build(build_loader)
-        coverage_method_mixed.build(build_loader)
+    # Use clean data for building ranges
+    build_loader = DataLoader(
+        Subset(test_dataset, list(range(min(1000, len(test_dataset))))),
+        batch_size=batch_size, shuffle=False)
         
-    if method_name in ['KMNC', 'NBC', 'SNAC', 'CC']:
-        # Use clean data for building ranges
-        build_loader = DataLoader(
-            Subset(test_dataset, list(range(min(1000, len(test_dataset))))),
-            batch_size=32, shuffle=False)
-        coverage_method_clean.build(build_loader)
-        coverage_method_mixed.build(build_loader)
+    coverage_method_clean.build(build_loader)
+    coverage_method_mixed.build(build_loader)
+    initial_coverage_clean = coverage_method_clean.current
+    initial_coverage_mixed = coverage_method_mixed.current
+    
+    max_coverage_clean = -1
+    max_coverage_mixed = -1
+    
+    if method_name in ['NC', 'KMNC', 'SNAC', 'NBC', 'TKNC']:
+        max_coverage_clean = 1.0
+        max_coverage_mixed = 1.0
+    
+    # Normalize by estimating max patterns
+    elif method_name == 'TKNP':
+        dataset_size_clean = len(clean_data)
+        dataset_size_mixed = len(mixed_data)
+        max_coverage_clean = min(dataset_size_clean, 10000)
+        max_coverage_mixed = min(dataset_size_mixed, 10000)
+    
+    # Build coverage if needed (for surprise-based methods)
+    elif method_name in ['LSC', 'DSC', 'MDSC', 'CC']:
+        dataset_size_clean = len(clean_data)
+        dataset_size_mixed = len(mixed_data)
+        max_coverage_clean = dataset_size_clean
+        max_coverage_mixed = dataset_size_mixed
+    
+    
+    elif method_name in ['NLC']:
+        if initial_coverage_clean == 0:
+            max_coverage_clean = 1.0
+        else:
+            max_coverage_clean = initial_coverage_clean * 2
+        if initial_coverage_mixed == 0:
+            max_coverage_mixed = 1.0
+        else:
+            max_coverage_mixed = initial_coverage_mixed * 2
+        
     
     # Calculate coverage on clean data
     clean_loader = DataLoader(clean_data, batch_size=batch_size, shuffle=False)
@@ -242,12 +274,33 @@ def calculate_coverage_change(coverage_method, test_dataset, batch_size, clean_d
     mixed_loader = DataLoader(mixed_data, batch_size=batch_size, shuffle=False)
     coverage_method_mixed.assess(mixed_loader)
     mixed_coverage = coverage_method_mixed.current
+    
+    if coverage_method == 'NLC':
+        if initial_coverage_clean == 0:
+            ratio_clean = 1.0 if clean_coverage > 0 else 0.0
+        else:
+            ratio_clean = min((clean_coverage - initial_coverage_clean) / initial_coverage_clean, 1.0)
+        
+        if initial_coverage_mixed == 0:
+            ratio_mixed = 1.0 if mixed_coverage > 0 else 0.0
+        else:
+            ratio_mixed = min((mixed_coverage - initial_coverage_mixed) / initial_coverage_mixed, 1.0)
+    else:
+        if max_coverage_clean == 0:
+            ratio_clean = 0.0
+        else:
+            ratio_clean = min(clean_coverage / max_coverage_clean, 1.0)
+        
+        if max_coverage_mixed == 0:
+            ratio_mixed = 0.0
+        else:
+            ratio_mixed = min(mixed_coverage / max_coverage_mixed, 1.0)
         
     # Calculate normalized change
-    if clean_coverage == 0:
+    if ratio_clean == 0:
         return 0  # Avoid division by zero
         
-    normalized_change = abs(mixed_coverage - clean_coverage) / clean_coverage
+    normalized_change = abs(ratio_mixed - ratio_clean) / ratio_clean
     return normalized_change
 
 # ---------------------------------------------------------------------------
@@ -393,7 +446,6 @@ def analyze_results(results, dataset_name, model_name, logger):
 # ---------------------------------------------------------------------------
 
 def run_experiment(args, num_runs=3):
-    set_seed()
     device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")
 
     ### Model settings
@@ -435,6 +487,7 @@ def run_experiment(args, num_runs=3):
     # Main experiment loop
     for run in range(num_runs):
         for sample_size in suite_sizes:
+            
             # Sample correct inputs
             correct_indices = sample_correct_inputs(sample_size, model, test_loader, device)
             if len(correct_indices) < sample_size:
@@ -471,9 +524,9 @@ def run_experiment(args, num_runs=3):
                     # Test each coverage method
                     for method_name, template in base_templates.items():
                         if method_name == 'DeepImportance':
-                            coverage_change = deepimportance_coverage_change(args, model, trainable_module_name, classes, dp_relevance_scores, clean_dataset, mixed_dataset)
+                            coverage_change = deepimportance_coverage_change(args, model, trainable_module_name, classes, dp_relevance_scores, train_loader, clean_dataset, mixed_dataset)
                         elif method_name == 'Wisdom':
-                            coverage_change = wisdom_coverage_change(args, model, classes, wisdom_k_neurons, clean_dataset, mixed_dataset)
+                            coverage_change = wisdom_coverage_change(args, model, classes, wisdom_k_neurons, train_loader, clean_dataset, mixed_dataset)
                         else:
                             coverage_change = calculate_coverage_change(
                                 template, test_dataset, args.batch_size, clean_dataset, mixed_dataset, method_name
@@ -483,9 +536,10 @@ def run_experiment(args, num_runs=3):
                         
     # Analyze and Save results to CSV
     results_df = analyze_results(results, args.dataset, args.model, logger)
-    results_df.to_csv(f'rq3_results_{args.dataset}_{args.model}.csv', index=False)
+    results_df.to_csv(f'rq3demo_results_{args.dataset}_{args.model}.csv', index=False)
     
 if __name__ == "__main__":
+    set_seed()
     args = parse_args()
     # python run_rq_3_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv'
-    run_experiment(args, num_runs=5)
+    run_experiment(args, num_runs=3)

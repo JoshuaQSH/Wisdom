@@ -167,7 +167,7 @@ def get_layer_info(layer_name, trainable_module_name):
 def prepare_data(args):
     ### Dataset settings
     if args.dataset == 'cifar10':
-        trainloader, testloader, train_dataset, test_dataset, classes = load_CIFAR(batch_size=args.batch_size, root=args.data_path, large_image=args.large_image, shuffle=True)
+        trainloader, testloader, train_dataset, test_dataset, classes = load_CIFAR(batch_size=args.batch_size, root=args.data_path, shuffle=True)
     elif args.dataset == 'mnist':
         trainloader, testloader, train_dataset, test_dataset, classes = load_MNIST(batch_size=args.batch_size, root=args.data_path)
     elif args.dataset == 'imagenet':

@@ -1,4 +1,3 @@
-import math
 import os
 import time
 import random
@@ -12,31 +11,24 @@ import torch
 from scipy.stats import pearsonr
 from torch.utils.data import DataLoader, Subset, TensorDataset
 
+from src.attribution import get_relevance_scores_dataloader
+from src.idc import IDC
 from src.utils import get_data, parse_args, get_model, get_trainable_modules_main, _configure_logging
-from src.nlc_tool import get_layer_output_sizes
-from src.nlc_coverage import (
-    NC,
-    KMNC,
-    NBC,
-    LSC,
-    DSC,
-    NLC,
-)
+from src.nlc_coverage import calculate_coverage_ratio
 import torchattacks
 
 
 # python run_rq_4_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv'
 
-
 # -----------------------------------------------------------
 # Helper
 # -----------------------------------------------------------
-def set_seed(seed: int = 2025) -> None:
+def set_seed(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 def prapared_parameters(args):
     # Logger settings
@@ -220,39 +212,86 @@ def pielou_evenness_torch(preds: torch.Tensor) -> float:
 # Coverage helpers for baselines
 # -----------------------------------------------------------
 
-def evaluate_coverage_methods(model, dataloader, layer_size_dict):
+def deepimportance_coverage(args, model, trainable_module_name, classes, layer_relevance_scores, train_loader, target_loader):
+    idc = IDC(
+        model,
+        classes,
+        args.top_m_neurons,
+        args.n_clusters,
+        args.use_silhouette,
+        args.all_class,
+        "KMeans",
+    )
+    final_layer = trainable_module_name[-1]    
+    important_neuron_indices, inorderd_indices = idc.select_top_neurons_all(layer_relevance_scores, final_layer)
+    activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, important_neuron_indices)
+    selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
+    cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
+    
+    # Testing coverage
+    coverage_score, _, _ = idc.compute_idc_test_whole_dataloader(target_loader, important_neuron_indices, cluster_groups)
+
+    return coverage_score    
+    
+
+def wisdom_coverage(args, model, classes, wisdom_k_neurons, train_loader, target_loader):
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
+    activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, wisdom_k_neurons)
+    selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
+    cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
+    
+    # Testing coverage
+    coverage_score, _, _ = idc.compute_idc_test_whole_dataloader(target_loader, wisdom_k_neurons, cluster_groups)
+
+    return coverage_score
+
+def evaluate_coverage_methods(args, model, trainable_module_name, classes, device, train_loader, target_loader):
     model.eval()
     coverage_scores = {}
+    num_class = len(classes)
     
-    # Initialize coverage methods
-    coverage_methods = {
-        'NC': NC(model, layer_size_dict, hyper=0.75),
-        'NBC': NBC(model, layer_size_dict),
-        'KMNC': KMNC(model, layer_size_dict, hyper=1000),
-        'LSC': LSC(model, layer_size_dict, hyper=2000, min_var=1e-5, num_class=10),
-        'DSC': DSC(model, layer_size_dict, hyper=0.1, min_var=1e-5, num_class=10),
-        'NLC': NLC(model, layer_size_dict)
+    # Methods with their typical hyperparameters
+    methods_config = {
+        'NC': {'hyper': 0.5},
+        'KMNC': {'hyper': 1000},
+        'SNAC': {'hyper': None},
+        'NBC': {'hyper': None}, 
+        'TKNC': {'hyper': 10},
+        'TKNP': {'hyper': 10},
+        'LSC': {'hyper': 10, 'min_var': 1e-5, 'num_class': num_class},
+        'DSC': {'hyper': 0.1, 'min_var': 1e-5, 'num_class': num_class},
+        'MDSC': {'hyper': 10, 'min_var': 1e-5, 'num_class': num_class},
+        'NLC': {'hyper': None},
+        'CC': {'hyper': 10}
     }
     
-    # Build coverage methods that require training data
-    build_methods = ['LSC', 'DSC', 'KMNC', 'NBC']
+    for method, config in methods_config.items():
+        ratio = calculate_coverage_ratio(
+                train_loader, target_loader, method, model,
+                hyper=config['hyper'],
+                device=device,
+                min_var=config.get('min_var', 1e-5),
+                num_class=config.get('num_class', num_class)
+            )
+        coverage_scores[method] = ratio
+        print(f"{method}: {ratio:.4f}")
+        
+    # IDC based (DeepImportance and WISDOM)
+    dp_relevance_scores = get_relevance_scores_dataloader(
+            model,
+            train_loader,
+            device,
+            attribution_method='lrp',
+        )
+    df = pd.read_csv(args.csv_file)
+    df_sorted = df.sort_values(by='Score', ascending=False).head(args.top_m_neurons)
+    wisdom_k_neurons = {}
+    for layer_name, group in df_sorted.groupby('LayerName'):
+        wisdom_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
     
-    print("Building coverage methods...")
-    for method_name in build_methods:
-        if method_name in coverage_methods:
-            print(f"Building {method_name}...")
-            coverage_methods[method_name].build(dataloader)
-    
-    # Assess coverage
-    print("Assessing coverage...")
-    for method_name, coverage_method in coverage_methods.items():
-        print(f"Assessing {method_name}...")
-        try:
-            coverage_method.assess(dataloader)
-            coverage_scores[method_name] = coverage_method.current
-        except Exception as e:
-            print(f"Error in {method_name}: {e}")
-            coverage_scores[method_name] = 0.0
+    coverage_scores['DeepImportance'] = deepimportance_coverage(args, model, trainable_module_name, classes, 
+                                                           dp_relevance_scores, train_loader, target_loader)
+    coverage_scores['Wisdom'] = wisdom_coverage(args, model, classes, wisdom_k_neurons, train_loader, target_loader)
     
     return coverage_scores
 
@@ -297,15 +336,8 @@ def stratified_sample(dataset, sample_size, num_classes=10):
 # Main experimental routine
 # -----------------------------------------------------------
 
-def run_experiment(model, test_loader, test_dataset, num_classes=10, sample_sizes=[100, 500, 1000], device='cpu'):
-    # Set random seeds for reproducibility
-    set_seed()
-    
-    # Get layer sizes for coverage computation
-    sample_input, *_ = next(iter(test_loader))
-    sample_input = sample_input.to(device)
-    layer_size_dict = get_layer_output_sizes(model, sample_input)
-    
+def run_experiment(args, model, trainable_module_name, classes, train_loader, test_dataset, sample_sizes=[100, 500, 1000], device='cpu'):
+    num_classes = len(classes)
     results = []
     
     for sample_size in sample_sizes:
@@ -322,7 +354,13 @@ def run_experiment(model, test_loader, test_dataset, num_classes=10, sample_size
         
         # Calculate coverage for clean test cases
         print("Evaluating coverage on clean test cases...")
-        clean_coverage_scores = evaluate_coverage_methods(model, clean_dataloader, layer_size_dict)
+        clean_coverage_scores = evaluate_coverage_methods(args, 
+                                                          model, 
+                                                          trainable_module_name, 
+                                                          classes, 
+                                                          device, 
+                                                          train_loader,
+                                                          clean_dataloader)
         
         # 2. Generate adversarial examples (U_b)
         print(f"Generating {sample_size} adversarial examples...")
@@ -338,7 +376,14 @@ def run_experiment(model, test_loader, test_dataset, num_classes=10, sample_size
         
         # Calculate coverage for adversarial test cases
         print("Evaluating coverage on adversarial test cases...")
-        adv_coverage_scores = evaluate_coverage_methods(model, adv_dataloader, layer_size_dict)
+        adv_coverage_scores = evaluate_coverage_methods(args, 
+                                                          model, 
+                                                          trainable_module_name, 
+                                                          classes, 
+                                                          device, 
+                                                          train_loader,
+                                                          adv_dataloader)
+        
         
         # Store results
         for method_name in clean_coverage_scores.keys():
@@ -379,7 +424,14 @@ def main(args):
     num_classes = len(classes)
     
     logger.info("Starting RQ4 experiment...")
-    results_df = run_experiment(model, test_loader, test_dataset, num_classes=num_classes, sample_sizes=sample_sizes, device=device)
+    results_df = run_experiment(args, 
+                                model, 
+                                trainable_module_name,
+                                classes,
+                                train_loader,
+                                test_dataset, 
+                                sample_sizes=sample_sizes, 
+                                device=device)
     logger.info("Calculating correlations...")
     correlation_df = calculate_correlations(results_df)
     
@@ -393,7 +445,8 @@ def main(args):
     logger.info("\nCorrelation Summary:")
     logger.info(correlation_df.round(4))
     
-
 if __name__ == "__main__":
+    # Set random seeds for reproducibility
+    set_seed()
     args = parse_args()
     main(args)

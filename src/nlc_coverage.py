@@ -9,11 +9,120 @@ from pyflann import FLANN
 from scipy.stats import gaussian_kde
 from sklearn.neighbors import KernelDensity
 
-from .nlc_tool import Estimator, get_layer_output, scale
+from .nlc_tool import Estimator, get_layer_output_sizes, get_layer_output, scale
+
+
+def calculate_coverage_ratio(build_loader, target_loader, coverage_method, model, hyper=None, device='cpu', **kwargs):
+    """
+    Calculate normalized coverage ratio for DNN testing methods.
+    
+    Args:
+        build_loader: DataLoader for building the coverage baseline
+        target_loader: DataLoader for target test data
+        coverage_method: String indicating coverage method 
+                        ('NC', 'KMNC', 'SNAC', 'NBC', 'TKNC', 'TKNP', 'LSC', 'DSC', 'MDSC', 'NLC', 'CC')
+        model: The neural network model
+        hyper: Hyperparameter for coverage methods that require it
+        device: Device to run the model on (e.g., 'cuda' or 'cpu')
+        **kwargs: Additional arguments (e.g., min_var, num_class for surprise coverage methods)
+    
+    Returns:
+        float: Coverage ratio between 0 and 1
+    """
+    
+    # Get a sample to determine layer sizes
+    sample_batch, *_ = next(iter(build_loader))
+    if isinstance(sample_batch, (list, tuple)):
+        sample_batch = sample_batch[0]
+    num_neuron = 0
+    layer_size_dict = get_layer_output_sizes(model, sample_batch.to(device))
+    for layer_name in layer_size_dict.keys():
+        num_neuron += layer_size_dict[layer_name][0]
+    
+    print('Total %d layers: ' % len(layer_size_dict.keys()))
+    print('Total %d neurons: ' % num_neuron)
+    
+    model.to(device)
+        
+    # Initialize coverage method
+    coverage_methods = {
+        'NC': NC,
+        'KMNC': KMNC, 
+        'SNAC': SNAC,
+        'NBC': NBC,
+        'TKNC': TKNC,
+        'TKNP': TKNP,
+        'LSC': LSC,
+        'DSC': DSC, 
+        'MDSC': MDSC,
+        'NLC': NLC,
+        'CC': CC
+    }
+    
+    if coverage_method not in coverage_methods:
+        raise ValueError(f"Unknown coverage method: {coverage_method}")
+    
+    # Surprise coverage methods, min_var and num_class are required
+    if coverage_method in ['LSC', 'DSC', 'MDSC']:
+        min_var = kwargs.get('min_var', 1e-5)
+        num_class = kwargs.get('num_class', 10)
+        cov = coverage_methods[coverage_method](model, device, layer_size_dict, hyper, min_var=min_var, num_class=num_class)
+    else:
+        cov = coverage_methods[coverage_method](model, device, layer_size_dict, hyper)
+        
+    # Build baseline if needed
+    cov.build(build_loader)
+    
+    # Store initial state for ratio calculation
+    initial_coverage = cov.current
+    
+    # Calculate total possible coverage for normalization
+    if coverage_method in ['NC', 'KMNC', 'SNAC', 'NBC', 'TKNC']:
+        total_neurons = sum(layer_size[0] for layer_size in layer_size_dict.values())
+        max_coverage = 1.0
+    
+    # TKNP: number of patterns (normalize by estimating max patterns)
+    # Use a heuristic: assume max patterns grow with dataset size
+    elif coverage_method == 'TKNP':
+        dataset_size = len(target_loader.dataset)
+        max_coverage = min(dataset_size, 10000)
+    
+    # Surprise coverage methods: normalize by dataset size
+    # CC: normalize by dataset size (each sample could be a new cluster)
+    elif coverage_method in ['LSC', 'DSC', 'MDSC', 'CC']:
+        dataset_size = len(target_loader.dataset)
+        max_coverage = dataset_size
+    
+    # NLC: normalize by initial coverage to show relative increase
+    elif coverage_method == 'NLC':
+        if initial_coverage == 0:
+            max_coverage = 1.0
+        else:
+            max_coverage = initial_coverage * 2
+
+    # Assess coverage on target data
+    cov.assess(target_loader)
+    final_coverage = cov.current
+    
+    # Calculate normalized ratio
+    if coverage_method == 'NLC':
+        # For NLC, show percentage increase from baseline
+        if initial_coverage == 0:
+            ratio = 1.0 if final_coverage > 0 else 0.0
+        else:
+            ratio = min((final_coverage - initial_coverage) / initial_coverage, 1.0)
+    else:
+        # For other methods, normalize by max possible coverage
+        if max_coverage == 0:
+            ratio = 0.0
+        else:
+            ratio = min(final_coverage / max_coverage, 1.0)
+    
+    return max(0.0, ratio)
 
 class Coverage:
-    def __init__(self, model, layer_size_dict, hyper=None, **kwargs):
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    def __init__(self, model, device, layer_size_dict, hyper=None, **kwargs):
+        self.device = device
         self.model = model
         self.model.to(self.device)
         self.layer_size_dict = layer_size_dict

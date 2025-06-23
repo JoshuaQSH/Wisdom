@@ -398,15 +398,13 @@ class IDC:
             all_activations.append(activation_values)
         
         all_activations_tensor = torch.cat(all_activations, dim=1)
-
         total_neurons = all_activations_tensor.shape[1]
         cluster_groups = []
         for i in range(total_neurons):
             if self.use_silhouette:
                 self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1), 2, 10)
-            
-            cluster_ = self.clustering_method(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))
-            # cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1))
+            # cluster_ = self.clustering_method(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1).cpu().numpy())
+            cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
             cluster_groups.append(cluster_)
 
         return cluster_groups
@@ -416,7 +414,7 @@ class IDC:
         n_samples, n_neurons = activations.shape
         cluster_comb = []
         update_total_combination = True
-        
+                
         # Loop over each test sample
         for i in range(n_samples):
             # Get the activations for this sample
