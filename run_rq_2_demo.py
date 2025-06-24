@@ -497,7 +497,7 @@ def main(args):
 
     # Run the coverage suite
     logger.info("=== Running coverage suite ===")
-    # run_coverage_suite(model, build_loader_toy, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
+    run_coverage_suite(model, build_loader_toy, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
     run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, logger, classes)
     
 

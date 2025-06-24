@@ -140,8 +140,8 @@ def get_layer_output(model, data, pad_length=PAD_LENGTH):
         return unrolled_layer_output_dict
 
 class Estimator(object):
-    def __init__(self, feature_num, num_class=1):
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    def __init__(self, feature_num, num_class=1, device='cpu'):
+        self.device = device
         self.num_class = num_class
         self.CoVariance = torch.zeros(num_class, feature_num, feature_num).to(self.device)
         self.Ave = torch.zeros(num_class, feature_num).to(self.device)

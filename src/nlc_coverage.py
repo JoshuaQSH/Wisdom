@@ -323,7 +323,7 @@ class NLC(Coverage):
         self.estimator_dict = {}
         self.current = 1
         for (layer_name, layer_size) in self.layer_size_dict.items():
-            self.estimator_dict[layer_name] = Estimator(feature_num=layer_size[0])
+            self.estimator_dict[layer_name] = Estimator(feature_num=layer_size[0], device=self.device)
     
     def calculate(self, data):
         stat_dict = {}
@@ -496,7 +496,7 @@ class MDSC(SurpriseCoverage):
             self.mask_index_dict[layer_name] = (self.var_dict[layer_name] >= self.min_var).nonzero()
             feature_num += self.mask_index_dict[layer_name].size(0)
         print('feature_num: ', feature_num)
-        self.estimator = Estimator(feature_num=feature_num, num_class=self.num_class)
+        self.estimator = Estimator(feature_num=feature_num, num_class=self.num_class, device=self.device)
 
     def build_SA(self, data_batch, label_batch):
         SA_batch = []

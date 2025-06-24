@@ -346,12 +346,12 @@ class IDC:
         @param min_k: Minimum number of clusters.
         @param max_k: Maximum number of clusters.
         """
-        scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
+        # scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
         silhouette_list = []
         for n_clusters in range(min_k, max_k):
             clusterer = self.clustering_method(n_clusters=n_clusters, random_state=10)
-            cluster_labels = clusterer.fit_predict(scores_np)
-            silhouette_avg = silhouette_score(scores_np, cluster_labels)
+            cluster_labels = clusterer.fit_predict(scores)
+            silhouette_avg = silhouette_score(scores, cluster_labels)
             silhouette_list.append(silhouette_avg)
             print("For n_clusters =", n_clusters, "The average silhouette_score is :", silhouette_avg)
             
@@ -367,7 +367,7 @@ class IDC:
             n_neurons = activation_values_single.shape[1]
             for i in range(n_neurons):
                 if self.use_silhouette:
-                    optimal_k = self.find_optimal_clusters(activation_values_single, 2, 10)
+                    optimal_k = self.find_optimal_clusters(activation_values_single.cpu().numpy().reshape(-1, 1), 2, 10)
                 else:
                     optimal_k = self.n_clusters
                 cluster_groups.append(self.clustering_method(n_clusters=optimal_k).fit(activation_values_single[:, i].cpu().numpy().reshape(-1, 1)))
@@ -377,7 +377,7 @@ class IDC:
             n_neurons = activation_values_single.shape[1]
             for i in range(n_neurons):
                 if self.use_silhouette:
-                    self.n_clusters = self.find_optimal_clusters(activation_values_single, 2, 10)
+                    self.n_clusters = self.find_optimal_clusters(activation_values_single.cpu().numpy().reshape(-1, 1), 2, 10)
 
                 cluster_groups.append(self.clustering_method(n_clusters=self.n_clusters).fit(activation_values_single[:, i].cpu().numpy().reshape(-1, 1)))
         else:

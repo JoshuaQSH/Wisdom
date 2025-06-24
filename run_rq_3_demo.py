@@ -31,6 +31,7 @@ from src.nlc_tool import get_layer_output_sizes
 
 
 # python run_rq_3_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv'
+# python run_rq_3_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv'
 
 """
 sample_sizes = [100, 1000, 3000]
@@ -79,8 +80,6 @@ def _infer_layer_sizes(model: torch.nn.Module, sample_batch, device):
     
     for layer_name in layer_size_dict.keys():
         num_neuron += layer_size_dict[layer_name][0]
-    # print('Total %d layers: ' % len(layer_size_dict.keys()))
-    # print('Total %d neurons: ' % num_neuron)
     
     return layer_size_dict
 
@@ -95,24 +94,24 @@ def initialize_baseline_coverage(
     templates = {}
     
     # NC 
-    # templates["NC"] = NC(model, device, layer_size, hyper=0.5)
+    templates["NC"] = NC(model, device, layer_size, hyper=0.5)
 
     # KMNC & NBC & SNAC & TKNC
-    # templates["KMNC"] = KMNC(model, device, layer_size, hyper=10)
+    templates["KMNC"] = KMNC(model, device, layer_size, hyper=10)
     templates["NBC"] = NBC(model, device, layer_size)
-    # templates["SNAC"] = SNAC(model, device, layer_size)
-    # templates["TKNC"] = TKNC(model, device, layer_size, hyper=10)
-    # templates["TKNP"] = TKNC(model, device, layer_size, hyper=10)
+    templates["SNAC"] = SNAC(model, device, layer_size)
+    templates["TKNC"] = TKNC(model, device, layer_size, hyper=10)
+    templates["TKNP"] = TKNC(model, device, layer_size, hyper=10)
 
-    # # LSC & DSC & MDSC
-    # lsc_kwargs = {"hyper": 0.1, "min_var": 1e-5, "num_class": num_classes}
-    # templates["LSC"] = LSC(model, device, layer_size, **lsc_kwargs)
-    # templates["DSC"] = DSC(model, device, layer_size, **lsc_kwargs)
-    # templates["MDSC"] = MDSC(model, device, layer_size, **lsc_kwargs)
+    # LSC & DSC & MDSC
+    lsc_kwargs = {"hyper": 0.1, "min_var": 1e-5, "num_class": num_classes}
+    templates["LSC"] = LSC(model, device, layer_size, **lsc_kwargs)
+    templates["DSC"] = DSC(model, device, layer_size, **lsc_kwargs)
+    templates["MDSC"] = MDSC(model, device, layer_size, **lsc_kwargs)
     
     # # NLC & CC
     templates["NLC"] = NLC(model, device, layer_size)
-    # templates["CC"] = CC(model, device, layer_size, hyper=0.1)
+    templates["CC"] = CC(model, device, layer_size, hyper=0.1)
 
     # Build where needed
     for name, metric in templates.items():
@@ -152,7 +151,54 @@ def sample_correct_inputs(sample_size, model, test_loader, device):
 # Adversarial example generation
 # ---------------------------------------------------------------------------
 
-def generate_adversarial_examples(attack_method, model, target, data, num_adv):
+def generate_adversarial_examples(attack_method, model, target, data, num_adv, batch_size=64):
+    model.eval()
+
+    attack_method = attack_method.lower()
+    if attack_method == "fgsm":
+        attack = ta.FGSM(model, eps=0.3)
+    elif attack_method == "pgd":
+        attack = ta.PGD(model, eps=0.3, alpha=0.1, steps=20)
+    elif attack_method == "cw":
+        attack = ta.CW(model, c=1, kappa=0, steps=50, lr=0.01)
+    else:
+        raise ValueError(f"Unknown attack method: {attack_method}")
+
+    successful_adv: List[torch.Tensor] = []
+    n_collected = 0
+    total = data.size(0)
+
+    # iterate through the clean pool in batches
+    for start in range(0, total, batch_size):
+        if n_collected >= num_adv:
+            break
+
+        end = min(start + batch_size, total)
+        clean_batch = data[start:end]
+        labels_batch = target[start:end]
+
+        # craft adversarial batch
+        adv_batch = attack(clean_batch, labels_batch)
+
+        # keep only those that fool the model
+        with torch.no_grad():
+            preds = model(adv_batch).argmax(dim=1)
+
+        mask = preds.ne(labels_batch)
+        if mask.any():
+            successful_adv.append(adv_batch[mask].cpu())
+            n_collected += mask.sum().item()
+
+    if n_collected == 0:
+        # nothing fooled the model
+        return torch.empty_like(data[:0]), 0
+
+    adv_data = torch.cat(successful_adv, dim=0)[:num_adv]  # trim excess if any
+    return adv_data, min(n_collected, num_adv)
+
+def generate_adversarial_examples_old(attack_method, model, target, data, num_adv):
+    model.eval()
+    
     """Generate adversarial examples using specified attack method."""
     if attack_method == 'fgsm':
         attack = ta.FGSM(model, eps=0.3)
@@ -541,5 +587,4 @@ def run_experiment(args, num_runs=3):
 if __name__ == "__main__":
     set_seed()
     args = parse_args()
-    # python run_rq_3_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv'
     run_experiment(args, num_runs=3)
