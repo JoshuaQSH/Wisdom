@@ -182,10 +182,10 @@ How to run
 python run_rq_1_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu  --csv-file /path/to/wisdom/weights/csv
 
 # Or simply run the script we prepared
-./run_rq_1.sh
+./run_rq.sh --rq 1
 
 # Train from scratch
-./run_rq_1.sh 1
+./run_rq.sh --rq 1 --pretrain 1
 ```
 
 ### RQ 2: Diversity
@@ -209,10 +209,10 @@ How to run
 python run_rq_2_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu  --csv-file /path/to/wisdom/weights/csv --idc-test-all --attr wisdom --top-m-neurons 10 --device 'cuda:0'
 
 # With WISDOM-based pertubation
-./run_rq_2.sh
+./run_rq.sh --rq 2 --wisdom 1
 
 # With LRP-based pertubation
-./run_rq_2.sh 1
+./run_rq.sh --rq 2 
 ```
 
 ### RQ 3: Effectiveness (or sensitivity)
@@ -233,7 +233,7 @@ How to run
 python run_rq_3_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu --csv-file /path/to/wisdom/weights/csv --idc-test-all --attr lrp --top-m-neurons 10
 
 # With WISDOM-based pertubation
-./run_rq_3.sh
+./run_rq.sh --rq 3
 ```
 
 ### RQ 4: Correlation
@@ -250,6 +250,17 @@ Metrics:
 - Normalize the entropy by dividing by the maximum possible entropy $log(k)$, k is #class
 - Output impartiality: $J = \frac{H}{log(k)}$, $J \in [0, 1]$
 - Record Pearson correlation coefficient: $r = \frac{\sum_i(c_i - \bar{c})(p_i - \bar{p})}{\sqrt{(\sum_i(c_i - \bar{c})^2} \sqrt{\sum_i(p_i - \bar{p})^2}}$
+
+How to run
+```shell
+# MODELNAME: [lenet, vgg16, resnet18]
+# DATASET: [mnist, cifar10, imagenet]
+# Pretrained relevant scores: ./saved_files/pre_csv/<MODELNAME>_<DATASET>.csv
+python run_rq_4_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu --csv-file /path/to/wisdom/weights/csv --idc-test-all --top-m-neurons 10
+
+# With WISDOM-based pertubation
+./run_rq.sh --rq 4
+```
 
 ### RQ 5: Efficiency (overhead)
 
@@ -283,6 +294,8 @@ Implementation repo: [NeuraL-Coverage](https://github.com/Yuanyuan-Yuan/NeuraL-C
 
 - [ ] A template-based optimization for all the attribution methods (acceleration)
 - [ ] Attribution methods in LLMs and transformer-based models
+- [ ] Vectorization for the all the attributions
+- [ ] A better KMeans method (torch-based)
 
 ## Docker [TODO]
 
