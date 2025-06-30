@@ -31,8 +31,6 @@ U_RO (Random-perturbed Dataset + Original Dataset): Original images with noise a
 
 """
 
-# TODO: ResNet18 on CIFAR10 has a bug in the model loading, need to fix it.
-
 # python run_rq_2_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv' --idc-test-all --attr lrp --top-m-neurons 10 --use-silhouette
 # python run_rq_2_demo.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_cifar_b32.csv' --idc-test-all --attr wisdom --top-m-neurons 10
 
@@ -47,7 +45,6 @@ TOPK = 0.02  # Top-k fraction of pixels to perturb (2%)
 start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
 acts = defaultdict(list)
-
 
 def prapare_data_models(args):
     # Logger settings
@@ -97,18 +94,7 @@ Hyperparameters:
 """
 
 def calculate_all_coverage_ratios(build_loader, target_loader, model, device, num_class=10):
-    """
-    Calculate coverage ratios for all implemented methods.
-    
-    Args:
-        build_loader: DataLoader for building coverage baseline
-        target_loader: DataLoader for target test data  
-        model: The neural network model
-        num_class: Number of classes for classification
-    Returns:
-        dict: Coverage ratios for all methods
-    """
-    
+
     results = {}
     
     # Methods with their typical hyperparameters
@@ -213,7 +199,7 @@ class LabelToIntDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.dataset)
 
-def build_mask(attributions: torch.Tensor, k: float = 0.02):
+def build_mask(attributions, k=0.02):
     """
     Return boolean masks (important and random) with the top‐k fraction (e.g. 0.02 = 2 %)
     of attribution magnitudes set to True (per-sample).
@@ -236,7 +222,7 @@ def build_mask(attributions: torch.Tensor, k: float = 0.02):
     
     return mask, mask_rand
 
-def build_mask_wisdom(heat: torch.Tensor, k: float = 0.02) -> torch.Tensor:
+def build_mask_wisdom(heat, k=0.02) -> torch.Tensor:
     """
     heat: (B, 1, H, W) – relevance per pixel
     returns boolean mask where top-k fraction is True.
@@ -262,7 +248,7 @@ def add_gaussian_noise(imgs: torch.Tensor, mask: torch.Tensor,
     noise = torch.randn_like(imgs) * std + mean
     return torch.where(mask, imgs + noise, imgs).clamp(0., 1.)
 
-def build_sets(model, loader, device, k, name):
+def build_sets(model, loader, device, k, std, name):
     """
     Returns tensors (U_I, U_R, y) for a dataset.
     """
@@ -278,9 +264,9 @@ def build_sets(model, loader, device, k, name):
         mask_imp, mask_rand = build_mask(attributions, k=k)
 
         # LRP-based important pixels
-        inputs_I = add_gaussian_noise(inputs, mask_imp)
+        inputs_I = add_gaussian_noise(inputs, mask_imp, std=std)
         # Random-based pixels
-        inputs_R = add_gaussian_noise(inputs, mask_rand) 
+        inputs_R = add_gaussian_noise(inputs, mask_rand, std=std) 
         
         U_I.append(inputs_I.cpu())
         U_R.append(inputs_R.cpu())
@@ -295,7 +281,7 @@ def build_sets(model, loader, device, k, name):
     return U_I_dataset, U_R_dataset
 
 
-def build_sets_wisdom(model, loader, device, csv_path, k, name):
+def build_sets_wisdom(model, loader, device, csv_path, k, std, name):
     """
     Returns tensors (U_I, U_R, y) for a dataset, a WISDOM-based version.
     """
@@ -328,9 +314,9 @@ def build_sets_wisdom(model, loader, device, csv_path, k, name):
         
         mask_imp, mask_rand = build_mask_wisdom(heat, k=k)
         # WISDOM-based important pixels
-        inputs_I = add_gaussian_noise(inputs, mask_imp)
+        inputs_I = add_gaussian_noise(inputs, mask_imp, std=std)
         # Random-based pixels
-        inputs_R = add_gaussian_noise(inputs, mask_rand)
+        inputs_R = add_gaussian_noise(inputs, mask_rand, std=std)
         
         U_I.append(inputs_I.cpu())
         U_R.append(inputs_R.cpu())
@@ -388,7 +374,7 @@ def run_other_coverage_suite(model,
 # IDC coverage testing
 # -----------------------------------------------------------
 def idc_coverage(args, model, train_loader, test_loader, classes, trainable_module_name, device, logger, tag='original'):
-    
+    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_deepimportance_clusters.pkl"
     layer_relevance_scores = get_relevance_scores_dataloader(
             model,
             train_loader,
@@ -404,6 +390,7 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
         args.use_silhouette,
         args.all_class,
         "KMeans",
+        cache_path
     )
     
     final_layer = trainable_module_name[-1]
@@ -429,7 +416,8 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
     for layer_name, group in df_sorted.groupby('LayerName'):
         top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
     
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
+    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_wisdom_clusters.pkl"
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
     # selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
@@ -478,11 +466,11 @@ def main(args):
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     
     if args.attr == 'wisdom':
-        U_I_dataset, U_R_dataset = build_sets_wisdom(model, test_loader, device, args.csv_file, TOPK, args.dataset)
+        U_I_dataset, U_R_dataset = build_sets_wisdom(model, test_loader, device, args.csv_file, TOPK, 0.1, args.dataset)
         U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
         U_RO_dataset = ConcatDataset([test_dataset, U_R_dataset])   # original + random
     else:
-        U_I_dataset, U_R_dataset = build_sets(model, test_loader, device, TOPK, args.dataset)
+        U_I_dataset, U_R_dataset = build_sets(model, test_loader, device, TOPK, 0.1, args.dataset)
         U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
         U_RO_dataset = ConcatDataset([test_dataset, U_R_dataset])   # original + random
     
@@ -497,7 +485,7 @@ def main(args):
 
     # Run the coverage suite
     logger.info("=== Running coverage suite ===")
-    run_coverage_suite(model, build_loader_toy, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
+    run_coverage_suite(model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
     run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, logger, classes)
     
 

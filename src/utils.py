@@ -6,6 +6,7 @@ import json
 import logging
 from logging import handlers
 import time
+import pickle
 
 import torch
 import torchvision
@@ -18,12 +19,21 @@ import torchvision.models as models
 import torch.nn.functional as F
 from torch.utils.data import Subset
 
+import matplotlib.pyplot as plt
+from captum.attr import visualization as viz
+import numpy as np
+
 from sklearn.model_selection import train_test_split
 
 from models_info.models_cv import *
 # from models_info.YOLOv5.yolo import *
 # from models_info.YOLOv5.datasets import *
-    
+
+
+
+#------------
+# Argument parsing
+#------------
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='lenet', help='Model to use for training.')
@@ -62,6 +72,10 @@ def parse_args():
     
     return args
 
+
+#------------
+# Logger configuration
+#------------
 class Logger(object):
     level_relations = {
         'debug':logging.DEBUG,
@@ -123,6 +137,10 @@ def _configure_logging(enable_logging: bool, args, level: str = "info") -> loggi
     )
     return logger
 
+
+#------------
+# Helper functions
+#------------
 # Decide which testing mode is active
 def _select_testing_mode(args) -> dict:
     # Return a dictionary with boolean values for each mode
@@ -175,6 +193,11 @@ def normalize_tensor(featrues):
     featrues -= featrues.min()
     featrues /= featrues.max()
     return featrues
+
+
+#------------
+# Dataloader and dataset functions
+#------------
 
 def train_val_dataset(dataset, val_split=0.25):
     train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split)
@@ -233,6 +256,9 @@ def collate_fn(batch):
     images = torch.stack(images, dim=0)
     return images, targets
 
+#------------
+# Loading datasets
+#------------
 # Load the ImageNet dataset
 def load_ImageNet(batch_size=32, root='./datasets/ImageNet', num_workers=2, use_val=False, label_path='./datasets/imagenet_labels.json'):
     
@@ -335,6 +361,35 @@ def get_data(dataset_name, batch_size, data_path):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+#------------
+# Visualize the attributions
+#------------
+def viz_attr(img, attr, dataset_name, model_name, with_original=False):
+    attr_np = attr.cpu().detach().numpy()
+    img_np  = img.cpu().detach().numpy()
+    
+    if with_original:
+        fig, ax = viz.visualize_image_attr_multiple(np.transpose(attr_np, (1, 2, 0)),
+                                        np.transpose(img_np, (1, 2, 0)),
+                                        ["original_image", "heat_map"],
+                                        ["all", "positive"],
+                                        show_colorbar=True,
+                                        outlier_perc=2,
+                                        use_pyplot=False)
+    else:
+        fig, ax = viz.visualize_image_attr(np.transpose(attr_np, (1, 2, 0)),
+                                        np.transpose(img_np, (1, 2, 0)),
+                                        "heat_map",
+                                        "positive",
+                                        show_colorbar=True,
+                                        outlier_perc=2,
+                                        use_pyplot=False)
+
+    fig.tight_layout()
+    fig.savefig(f"{dataset_name}_{model_name}.png",
+                dpi=300,
+                bbox_inches="tight")
+    plt.close(fig)
 
 # This is for forming a custom dataset
 class SelectorDataset(torch.utils.data.Dataset):
@@ -362,6 +417,9 @@ class SelectorDataset(torch.utils.data.Dataset):
         return image, layer_info, torch.tensor(attribution_label, dtype=torch.long)
 
 
+#------------
+# Patching and saving models
+#------------
 # Quick patch for torchvision resnet models
 # ResNet implmented in torchvision is not suitable for the Captum attribution methods, a little customizations are made in the model definition.
 def patch_resnet_torchvision(src, dst_model):
@@ -415,20 +473,20 @@ def save_model(model, model_name):
     print("Whole model saved as", model_name + '_whole.pth')
 
 
-# Save the k-means model
-def save_kmeans_model(kmeans, filename='kmeans_model.pkl'):
-    # joblib.dump(kmeans, filename)
-    import pickle
-    with open(filename, "wb") as file:
-        pickle.dump(kmeans, file)
+def save_cluster_groups(cluster_groups, filepath):
+    with open(filepath, 'wb') as f:
+        pickle.dump(cluster_groups, f)
 
-# Load the k-means model
-def load_kmeans_model(filename='kmeans_model.pkl'):
-    # return joblib.load(filename)
-    import pickle
-    with open(filename, "rb") as file:
-        kmeans_models_loaded = pickle.load(file)
-    return kmeans_models_loaded
+def load_cluster_groups(filepath):
+    if os.path.exists(filepath):
+        with open(filepath, 'rb') as f:
+            return pickle.load(f)
+    return None
+
+
+#------------
+# Trainable modules and model loading
+#------------
 
 def get_trainable_modules_main(model, prefix=''):
     

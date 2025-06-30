@@ -8,14 +8,14 @@ importance of neurons in neural networks. It provides functionality for clusteri
 @shenghao_qiu
 """
 import json
-
+import os
 
 import torch
 import numpy as np
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, MeanShift, SpectralClustering
 from sklearn.metrics import silhouette_score
 
-from .utils import get_layer_by_name
+from .utils import get_layer_by_name, save_cluster_groups, load_cluster_groups
 
 def get_cluster_function(name):
     """
@@ -35,42 +35,18 @@ def get_cluster_function(name):
     return cluster_algorithms[name]
 
 class IDC:
-    def __init__(self, model, classes, top_m_neurons, n_clusters, use_silhouette, test_all_classes, clustering_method_name):
+    def __init__(self, model, classes, top_m_neurons, n_clusters, use_silhouette, test_all_classes, clustering_method_name, cache_path=None):
         self.model = model
         self.classes = classes
         self.top_m_neurons = top_m_neurons
         self.use_silhouette = use_silhouette
         self.test_all_classes = test_all_classes
         self.total_combination = 1
+        self.cache_path = cache_path
         
         # Initialize clustering method
         self.clustering_method = get_cluster_function(clustering_method_name)
         self.n_clusters = n_clusters
-        self.cluster_centers_ = None
-        
-    
-    def cluster_fit(self, samples):
-        """
-        Fit the clustering model to the samples.
-        Adds an "All Zeros" cluster manually to the samples before fitting.
-        """
-        # Add an "All Zeros" cluster manually
-        all_zeros_cluster = np.zeros((1, samples.shape[1]))
-        sample_with_zeros = np.vstack([samples, all_zeros_cluster])
-
-        # Fit the clustering method
-        self.clustering_method.fit(sample_with_zeros)
-        self.cluster_centers_ = self.clustering_method.cluster_centers_
-
-        # Initialize cluster_groups with the fitted clusters
-        cluster_groups = []
-        for i in range(samples.shape[1]):
-            cluster_groups.append(self.clustering_method)
-
-        # Add a dummy cluster for "All Zeros"
-        cluster_groups.append(self.clustering_method)  # Assuming the last cluster is "All Zeros"
-
-        return cluster_groups
     
     def save_to_json(self, coverage_rate, max_coverage, model_name, testing_layer, file_path='coverage_rate.json'):
         """
@@ -361,6 +337,10 @@ class IDC:
     
     ## Cluster the importance scores [layer-wise]
     def cluster_activation_values(self, activation_values, layer_name):
+        if self.cache_path and os.path.exists(self.cache_path):
+            print(f"[INFO] Loading cached clusters from {self.cache_path}")
+            return load_cluster_groups(self.cache_path)
+        
         cluster_groups = []
         activation_values_single = next(iter(activation_values.values()))
         if isinstance(layer_name, torch.nn.Linear):
@@ -383,21 +363,29 @@ class IDC:
         else:
             raise ValueError(f"Invalid layer name: {layer_name}")
         
-        # save_cluster(cluster_groups, './saved_files/kmeans_acti_{}.pkl'.format(layer_name))
-        # print("Clusters saved! Name: kmeans_acti_{}.pkl".format(layer_name))
+        if self.cache_path:
+            save_cluster_groups(cluster_groups, self.cache_path)
+            print(f"[INFO] Saved clusters to {self.cache_path}")
         
         return cluster_groups
 
     ## Cluster the importance scores [model-wise]
     def cluster_activation_values_all(self, activation_dict):
         
+        if self.cache_path and os.path.exists(self.cache_path):
+            print(f"[INFO] Loading cached clusters from {self.cache_path}")
+            return load_cluster_groups(self.cache_path)
+        
+        
         all_activations = []
         for layer_name, activation_values in activation_dict.items():
             if len(activation_values.shape) > 2:
                 activation_values = torch.mean(activation_values, dim=[2, 3])
+            # print("[INSIDE] Layer: ", layer_name, " Activations: ", activation_values.mean())
             all_activations.append(activation_values)
         
         all_activations_tensor = torch.cat(all_activations, dim=1)
+        # print("All activations MEAN: ", all_activations_tensor.mean())
         total_neurons = all_activations_tensor.shape[1]
         cluster_groups = []
         for i in range(total_neurons):
@@ -406,6 +394,10 @@ class IDC:
             # cluster_ = self.clustering_method(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1).cpu().numpy())
             cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
             cluster_groups.append(cluster_)
+        
+        if self.cache_path:
+            save_cluster_groups(cluster_groups, self.cache_path)
+            print(f"[INFO] Saved clusters to {self.cache_path}")
 
         return cluster_groups
     
