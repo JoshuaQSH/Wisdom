@@ -1,6 +1,5 @@
 import copy
 import random
-import time
 import os
 
 import pandas as pd
@@ -9,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from src.attribution import get_relevance_scores_dataloader
-from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main
+from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, _configure_logging
 
 
 # Example command to run the script:
@@ -19,7 +18,9 @@ attribution_methods = {'lrp': 'LRP', 'ldl': 'DeepLIFT', 'lgs': 'SHAP', 'Wisdom':
 N_list = [6, 8, 10, 15, 20]
 
 def prapare_data_models(args):
-
+    # Logger settings
+    logger = _configure_logging(args.logging, args, 'debug')
+    
     ### Model settings
     model_path = os.getenv("HOME") + args.saved_model
     
@@ -27,7 +28,7 @@ def prapare_data_models(args):
     model, module_name, module = get_model(model_path)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
 
-    return model, module_name, module, trainable_module, trainable_module_name
+    return model, module_name, module, trainable_module, trainable_module_name, logger
 
 def save_results_to_csv(relevance_records, accuracy_records, filename="rq1"):
     
@@ -58,7 +59,7 @@ def convert_top_k_neurons(top_k_neurons):
             converted.append((layer_name, index.item()))
     return converted
 
-def run_wisdom_test(model, test_loader, device, csv_file, original_acc, accuracy_records):
+def run_wisdom_test(model, test_loader, device, csv_file, original_acc, accuracy_records, logger):
     
     for n_prune in N_list:
         pruned_model = copy.deepcopy(model)
@@ -89,7 +90,7 @@ def run_wisdom_test(model, test_loader, device, csv_file, original_acc, accuracy
                 "Accuracy Drop": acc_drop
         })
         
-        print(f"Pruned Model Wisdom - Top {n_prune} Neurons - Accuracy: {acc:.2f}, Drop: {acc_drop*100:.2f}, Loss: {avg_loss:.2f}, F1 Score: {f1:.2f}")
+        logger.info(f"Pruned Model Wisdom - Top {n_prune} Neurons - Accuracy: {acc:.2f}, Drop: {acc_drop*100:.2f}, Loss: {avg_loss:.2f}, F1 Score: {f1:.2f}")
     
     return accuracy_records
 
@@ -101,7 +102,8 @@ def record_acc_drop_random(total_neurons,
                            device, 
                            original_acc, 
                            final_layer, 
-                           accuracy_records):
+                           accuracy_records, 
+                           logger):
     
     for n in N_list:
         n_prune = min(n, total_neurons)
@@ -123,7 +125,7 @@ def record_acc_drop_random(total_neurons,
         acc_random, avg_loss_random, f1_random = eval_model_dataloder(rand_model, test_loader, device)
         acc_drop = original_acc - acc_random
         
-        print(f"Pruned Model Random - Top {n_prune} Neurons - Accuracy: {acc_random:.2f}, Drop: {acc_drop*100:.2f}, Loss: {avg_loss_random:.2f}, F1 Score: {f1_random:.2f}")
+        logger.info(f"Pruned Model Random - Top {n_prune} Neurons - Accuracy: {acc_random:.2f}, Drop: {acc_drop*100:.2f}, Loss: {avg_loss_random:.2f}, F1 Score: {f1_random:.2f}")
         
         accuracy_records.append({
                 "Attribution Method": "Random",
@@ -141,7 +143,8 @@ def record_acc_drop(total_neurons,
                     device, 
                     original_acc, 
                     attr_method, 
-                    accuracy_records):
+                    accuracy_records,
+                    logger):
     
     for n in N_list:
         n_prune = min(n, total_neurons)
@@ -163,7 +166,7 @@ def record_acc_drop(total_neurons,
         
         pruned_acc, avg_loss_pruned, f1_pruned = eval_model_dataloder(pruned_model, test_loader, device)
         acc_drop = original_acc - pruned_acc
-        print(f"Pruned Model {attr_method} - Top {n_prune} Neurons - Accuracy: {pruned_acc:.2f}, Drop: {acc_drop*100:.2f}, Loss: {avg_loss_pruned:.2f}, F1 Score: {f1_pruned:.2f}")
+        logger.info(f"Pruned Model {attr_method} - Top {n_prune} Neurons - Accuracy: {pruned_acc:.2f}, Drop: {acc_drop*100:.2f}, Loss: {avg_loss_pruned:.2f}, F1 Score: {f1_pruned:.2f}")
 
         
         accuracy_records.append({
@@ -176,7 +179,7 @@ def record_acc_drop(total_neurons,
 
 
 ### Main entry point ###
-def run_single_train_attr(train_loader, test_loader, original_acc, model, device, csv_file, final_layer):
+def run_single_train_attr(train_loader, test_loader, original_acc, model, device, csv_file, final_layer, logger):
     # Prepare data structures to collect results
     relevance_records = []
     accuracy_records = []
@@ -184,11 +187,11 @@ def run_single_train_attr(train_loader, test_loader, original_acc, model, device
     # Main loop: for each attribution method, compute relevance and evaluate pruning
     for attr_key, attr_name in attribution_methods.items():
         
-        print(f"Computing relevance scores with: {attr_name}")
+        logger.info(f"Computing relevance scores with: {attr_name}")
         
         ## For the Wisdom method, extract the voting results from the CSV file        
         if attr_key == 'Wisdom':
-            accuracy_records = run_wisdom_test(model, test_loader, device, csv_file, original_acc, accuracy_records)
+            accuracy_records = run_wisdom_test(model, test_loader, device, csv_file, original_acc, accuracy_records, logger)
         
         ## Run with other single attribution methods
         else:
@@ -231,7 +234,8 @@ def run_single_train_attr(train_loader, test_loader, original_acc, model, device
                             device=device, 
                             original_acc=original_acc, 
                             final_layer=final_layer, 
-                            accuracy_records=accuracy_records)
+                            accuracy_records=accuracy_records,
+                            logger=logger)
             
             # Record the accuracy drop for each method [with random pruning]
             accuracy_records = record_acc_drop(total_neurons=total_neurons, 
@@ -241,7 +245,8 @@ def run_single_train_attr(train_loader, test_loader, original_acc, model, device
                             device=device, 
                             original_acc=original_acc, 
                             attr_method=attr_name,
-                            accuracy_records=accuracy_records)
+                            accuracy_records=accuracy_records,
+                            logger=logger)
 
     return relevance_records, accuracy_records
         
@@ -251,20 +256,20 @@ if __name__ == '__main__':
     device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")
 
     ### Model settings
-    model, module_name, module, trainable_module, trainable_module_name = prapare_data_models(args)
+    model, module_name, module, trainable_module, trainable_module_name, logger = prapare_data_models(args)
 
     ### Data settings
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     
     # Get the original accuracy
     original_acc, avg_loss, f1 = eval_model_dataloder(model, test_loader, device)
-    print(f"Original accuracy: {original_acc:.2f}, Loss: {avg_loss:.2f}, F1 Score: {f1:.2f}")
+    logger.info(f"Original accuracy: {original_acc:.2f}, Loss: {avg_loss:.2f}, F1 Score: {f1:.2f}")
     
     # Skip final classifier layer
     final_layer = trainable_module_name[-1]
     
     # RQ 1 run case
-    relevance_records, accuracy_records = run_single_train_attr(train_loader, test_loader, original_acc, model, device, args.csv_file, final_layer)
+    relevance_records, accuracy_records = run_single_train_attr(train_loader, test_loader, original_acc, model, device, args.csv_file, final_layer, logger)
     
     save_results_to_csv(relevance_records, accuracy_records, filename="rq1_"+ args.dataset + "_"+ args.model)
-    print(" ==== Done with RQ1 ====")
+    logger.info(" ==== Done with RQ1 ====")

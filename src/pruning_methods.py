@@ -103,14 +103,6 @@ def prune_neurons(model, layer='fc1', neurons_to_prune=[1, 2, 3, 4, 5, 6, 7, 8, 
             raise ValueError(f"Pruning is only implemented for Linear and Conv2D layers. Given: {type(layer)}")
 
 def prune_layers(model, layers_to_prune):
-    """
-    Args:
-        model (torch.nn.Module): The model to prune.
-        layers_to_prune (list of tuples): A list where each tuple contains:
-            - layer_name (str): The name of the layer to prune.
-            - importance_score (float): The importance score (not used in pruning).
-            - neuron_index (int): The index of the neuron to prune.
-    """
     with torch.no_grad():
         for lname, _, idx in layers_to_prune:
             layer = dict(model.named_modules()).get(lname)

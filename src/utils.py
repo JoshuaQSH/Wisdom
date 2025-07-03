@@ -38,7 +38,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='lenet', help='Model to use for training.')
     parser.add_argument('--saved-model', type=str, default='/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth', help='Saved model name.')
-    parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'cifar10', 'imagenet'], help='The dataset to use for training and testing.')
+    parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'cifar10', 'imagenet', 'synthetic'], help='The dataset to use for training and testing.')
     parser.add_argument('--data-path', type=str, default='./datasets/', help='Path to the data directory.')
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs for training.')
     parser.add_argument('--device', type=str, default='cpu', help='Device to use for training.')

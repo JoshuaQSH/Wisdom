@@ -28,20 +28,19 @@ U_RO (Random-perturbed Dataset + Original Dataset): Original images with noise a
 # Step 1: Get the relevance maps for the test set using Attribution methods (e.g., LRP).
 # Step 2: For each image, find the top 2% most important pixels based on the relevance map (Baseline: random & LRP) and form the new dataset.
 # Step 3: Coverage testing for the perturbed dataset.
+# Optional: Visualize the perturbed images and their relevance maps - this goes to the `./unittest/sanity_check.py` file.
 
+[Optional Check] Run with: 
+$ python ./unittest/sanity_check.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path /path/to/mnist --batch-size 128 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_mnist.csv' --attr lrp --top-m-neurons 10
+$ python ./unittest/sanity_check.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path /path/to/mnist --batch-size 128 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_mnist.csv' --attr wisdom --top-m-neurons 10
 """
-
-# python run_rq_2_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv' --idc-test-all --attr lrp --top-m-neurons 10 --use-silhouette
-# python run_rq_2_demo.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_cifar_b32.csv' --idc-test-all --attr wisdom --top-m-neurons 10
-
-# python run_rq_2_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_mnist_b32.csv' --idc-test-all --attr wisdom --top-m-neurons 10
-# python run_rq_2_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 128 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_cifar_b32.csv' --idc-test-all --attr wisdom --top-m-neurons 10
 
 # -----------------------------------------------------------
 # Helper
 # -----------------------------------------------------------
 
 TOPK = 0.02  # Top-k fraction of pixels to perturb (2%)
+gausian_STD = 0.5
 start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
 acts = defaultdict(list)
@@ -58,14 +57,6 @@ def prapare_data_models(args):
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
 
     return model, module_name, module, trainable_module, trainable_module_name, logger
-
-# A toy train loader for pre-assessing the coverage methods (e.g., CC), use as needed
-def toy_train_loader(train_dataset, batch_size, ratio=0.2):
-    n_build = int(len(train_dataset) * ratio)
-    n_rest  = len(train_dataset) - n_build
-    build_set_A, _ = random_split(train_dataset, [n_build, n_rest])
-    build_loader_A = DataLoader(build_set_A, batch_size=batch_size, shuffle=True)
-    return build_loader_A
 
 def set_seed(seed: int = 42):
     random.seed(seed)
@@ -123,7 +114,6 @@ def calculate_all_coverage_ratios(build_loader, target_loader, model, device, nu
         results[method] = ratio
         print(f"{method}: {ratio:.4f}")
     return results
-
 
 def save_csv_results(updated_column_dict, csv_path='results.csv', tag='original'):
     if os.path.exists(csv_path):
@@ -183,7 +173,6 @@ def register_hooks(model, csv_path):
                 _make_hook(name, scores_for_layer)))
     return handles, activations
 
-
 # -----------------------------------------------------------
 # Data generation
 # -----------------------------------------------------------
@@ -199,7 +188,13 @@ class LabelToIntDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.dataset)
 
-def build_mask(attributions, k=0.02):
+def add_gaussian_noise(imgs: torch.Tensor, mask: torch.Tensor,
+                       mean=0., std=0.01):
+    noise = torch.randn_like(imgs) * std + mean
+    return torch.where(mask, imgs + noise, imgs).clamp(torch.min(imgs), torch.max(imgs))
+    # return torch.where(mask, imgs + noise, imgs)
+
+def build_mask(attributions, k=0.02, exclude_imp=True):
     """
     Return boolean masks (important and random) with the top‐k fraction (e.g. 0.02 = 2 %)
     of attribution magnitudes set to True (per-sample).
@@ -210,43 +205,59 @@ def build_mask(attributions, k=0.02):
     
     idx = flat.topk(kth, dim=1).indices
     
-    # Create a random mask
-    rand_scores = torch.rand_like(flat, dtype=torch.float32) 
-    rand_idx = rand_scores.topk(kth, dim=1).indices   # (B, kth)
-    mask_rand = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, rand_idx, True)
-    mask_rand = mask_rand.view_as(attributions)
-    
     # Important-based mask
-    mask = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, idx, True)
-    mask = mask.view_as(attributions)
+    mask_imp_flat = torch.zeros_like(flat, dtype=torch.bool)
+    mask_imp = mask_imp_flat.scatter_(1, idx, True)
+    mask_imp = mask_imp.view_as(attributions)
     
-    return mask, mask_rand
+    if exclude_imp:
+        # Create a random mask (exclude important pixels)
+        avail_mask = (~mask_imp_flat)
+        rand_scores = torch.rand_like(flat, dtype=torch.float32)
+        rand_scores[~avail_mask] = float('-inf')
+        rand_idx = rand_scores.topk(kth, dim=1).indices
+        mask_rand = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, rand_idx, True)
+        mask_rand = mask_rand.view_as(attributions)
+    
+    else:
+        # Create a random mask
+        rand_scores = torch.rand_like(flat, dtype=torch.float32) 
+        rand_idx = rand_scores.topk(kth, dim=1).indices   # (B, kth)
+        mask_rand = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, rand_idx, True)
+        mask_rand = mask_rand.view_as(attributions)
+    
+    return mask_imp, mask_rand
 
-def build_mask_wisdom(heat, k=0.02) -> torch.Tensor:
+def build_mask_wisdom(attributions, k=0.02, exclude_imp=True):
     """
-    heat: (B, 1, H, W) – relevance per pixel
+    attributions: (B, 1, H, W) – relevance per pixel
     returns boolean mask where top-k fraction is True.
     """
-    B, _, H, W = heat.shape
-    flat = heat.view(B, -1).abs()
+    B, _, H, W = attributions.shape
+    flat = attributions.view(B, -1).abs()
     kth = math.ceil((flat.size(1) * k))
     idx = flat.topk(kth, dim=1).indices
     
-    rand_scores = torch.rand_like(flat, dtype=torch.float32)
-    rand_idx = rand_scores.topk(kth, dim=1).indices
-    mask_rand = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, rand_idx, True)
+    # Important-based mask
+    mask_imp_flat = torch.zeros_like(flat, dtype=torch.bool)
+    mask_imp_flat = mask_imp_flat.scatter_(1, idx, True)
+    mask_imp = mask_imp_flat.view(B, 1, H, W)
     
-    mask = torch.zeros_like(flat, dtype=torch.bool)
-    mask.scatter_(1, idx, True)
-    mask = mask.view(B, 1, H, W)
-    mask_rand = mask_rand.view_as(mask)
-    
-    return mask, mask_rand
-
-def add_gaussian_noise(imgs: torch.Tensor, mask: torch.Tensor,
-                       mean=0., std=0.01):
-    noise = torch.randn_like(imgs) * std + mean
-    return torch.where(mask, imgs + noise, imgs).clamp(0., 1.)
+    # Random-based mask
+    if exclude_imp:
+        avail_mask = (~mask_imp_flat)
+        rand_scores = torch.rand_like(flat, dtype=torch.float32)
+        rand_scores[~avail_mask] = float('-inf')
+        rand_idx = rand_scores.topk(kth, dim=1).indices
+        mask_rand = torch.zeros_like(mask_imp_flat, dtype=torch.bool).scatter_(1, rand_idx, True)
+        mask_rand = mask_rand.view_as(mask_imp)
+    else:
+        rand_scores = torch.rand_like(flat, dtype=torch.float32)
+        rand_idx = rand_scores.topk(kth, dim=1).indices
+        mask_rand = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, rand_idx, True)
+        mask_rand = mask_rand.view_as(mask_imp)
+        
+    return mask_imp, mask_rand
 
 def build_sets(model, loader, device, k, std, name):
     """
@@ -261,7 +272,7 @@ def build_sets(model, loader, device, k, std, name):
         # LRP expects prediction target
         preds = model(inputs).argmax(1)
         attributions = lrp.attribute(inputs, target=preds)  # shape = X
-        mask_imp, mask_rand = build_mask(attributions, k=k)
+        mask_imp, mask_rand = build_mask(attributions, k=k, exclude_imp=True)
 
         # LRP-based important pixels
         inputs_I = add_gaussian_noise(inputs, mask_imp, std=std)
@@ -312,7 +323,7 @@ def build_sets_wisdom(model, loader, device, csv_path, k, std, name):
             layer_heat = acts.sum(1, keepdim=True)
             heat += layer_heat
         
-        mask_imp, mask_rand = build_mask_wisdom(heat, k=k)
+        mask_imp, mask_rand = build_mask_wisdom(heat, k=k, exclude_imp=True)
         # WISDOM-based important pixels
         inputs_I = add_gaussian_noise(inputs, mask_imp, std=std)
         # Random-based pixels
@@ -333,18 +344,7 @@ def build_sets_wisdom(model, loader, device, csv_path, k, std, name):
     U_R_dataset = LabelToIntDataset(U_R_dataset)  # Convert labels to int
         
     return U_I_dataset, U_R_dataset
-
-def eval_model(model, test_loader, U_I_loader, U_R_loader, device, logger):
-    model.eval()
-    original_accuracy, original_avg_loss, original_f1 = eval_model_dataloder(model, test_loader, device)
-    accuracy_I, avg_loss_I, f1_I = eval_model_dataloder(model, U_I_loader, device)
-    accuracy_R, avg_loss_R, f1_R = eval_model_dataloder(model, U_R_loader, device)
     
-    logger.info(f"Original Accuracy: {original_accuracy:.4f}, Average Loss: {original_avg_loss:.4f}, F1 Score: {original_f1:.4f}")
-    logger.info(f"Accuracy on U_I: {accuracy_I:.4f}, Average Loss on U_I: {avg_loss_I:.4f}, F1 Score on U_I: {f1_I:.4f}")
-    logger.info(f"Accuracy on U_R: {accuracy_R:.4f}, Average Loss on U_R: {avg_loss_R:.4f}, F1 Score on U_R: {f1_R:.4f}")
-    
-
 # -----------------------------------------------------------
 # Run full coverage suite on one dataloader with other methods
 # -----------------------------------------------------------
@@ -374,7 +374,11 @@ def run_other_coverage_suite(model,
 # IDC coverage testing
 # -----------------------------------------------------------
 def idc_coverage(args, model, train_loader, test_loader, classes, trainable_module_name, device, logger, tag='original'):
-    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_deepimportance_clusters.pkl"
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
     layer_relevance_scores = get_relevance_scores_dataloader(
             model,
             train_loader,
@@ -397,7 +401,6 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     important_neuron_indices, inorderd_indices = idc.select_top_neurons_all(layer_relevance_scores, final_layer)
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, important_neuron_indices)
     
-    # selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
     selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations)
     coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(test_loader, important_neuron_indices, cluster_groups)
@@ -415,12 +418,14 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
     top_k_neurons = {}
     for layer_name, group in df_sorted.groupby('LayerName'):
         top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
-    
-    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_wisdom_clusters.pkl"
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
     idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
-    # selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
     selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations)
     coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups)
@@ -456,7 +461,11 @@ def run_coverage_suite(model, train_loader, test_loader, U_IO_loader, U_RO_loade
 # -----------------------------------------------------------
 # Main entry point
 # -----------------------------------------------------------
-def main(args):
+def main():
+    
+    set_seed()
+    args = parse_args()
+    
     device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")
     
     # Model settings
@@ -466,33 +475,27 @@ def main(args):
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     
     if args.attr == 'wisdom':
-        U_I_dataset, U_R_dataset = build_sets_wisdom(model, test_loader, device, args.csv_file, TOPK, 0.1, args.dataset)
+        U_I_dataset, U_R_dataset = build_sets_wisdom(model, test_loader, device, args.csv_file, TOPK, gausian_STD, args.dataset)
         U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
         U_RO_dataset = ConcatDataset([test_dataset, U_R_dataset])   # original + random
     else:
-        U_I_dataset, U_R_dataset = build_sets(model, test_loader, device, TOPK, 0.1, args.dataset)
+        U_I_dataset, U_R_dataset = build_sets(model, test_loader, device, TOPK, gausian_STD, args.dataset)
         U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
         U_RO_dataset = ConcatDataset([test_dataset, U_R_dataset])   # original + random
     
-    U_I_loader = DataLoader(U_I_dataset, batch_size=args.batch_size, shuffle=False)
-    U_R_loader = DataLoader(U_R_dataset, batch_size=args.batch_size, shuffle=False)
     U_IO_loader = DataLoader(U_IO_dataset, batch_size=args.batch_size, shuffle=False)
     U_RO_loader = DataLoader(U_RO_dataset, batch_size=args.batch_size, shuffle=False)
     
-
-    # A simple acc test for the perturbed datasets
-    eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger)
+    logger.info(f"[Sanity] Generated datasets: U_I: {len(U_I_dataset)}, U_R: {len(U_R_dataset)}, U_IO: {len(U_IO_dataset)}, U_RO: {len(U_RO_dataset)}")
 
     # Run the coverage suite
     logger.info("=== Running coverage suite ===")
-    run_coverage_suite(model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
+    # run_coverage_suite(model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
     run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, logger, classes)
     
 
 if __name__ == '__main__':
-    set_seed()
-    args = parse_args()
-    main(args)
+    main()
     
     
     

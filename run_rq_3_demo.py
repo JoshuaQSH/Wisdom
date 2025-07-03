@@ -17,7 +17,6 @@ from torch.utils.data import DataLoader, Subset
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 import torchattacks as ta
 
 from src.attribution import get_relevance_scores_dataloader
@@ -36,7 +35,7 @@ from src.nlc_tool import get_layer_output_sizes
 """
 sample_sizes = [100, 1000, 3000]
 adversarial_attacks = ['fgsm', 'pgd', 'cw']
-error_rates = [0.01, 0.05, 0.10]
+error_rates = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
 
 1. Sample the correct inputs based on the sample_sizes
 2. Create clean dataset
@@ -526,7 +525,7 @@ def run_experiment(args, num_runs=3):
     
     suite_sizes = [100, 1000, 3000]
     attack_names = ["fgsm", "pgd", "cw"]
-    error_rates = [0.01, 0.05, 0.10]
+    error_rates = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
     # [method_name: str, sample_size: int, attack_method+'_error_rate': str] -> List[float]
     results = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
