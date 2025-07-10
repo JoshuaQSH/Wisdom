@@ -378,7 +378,7 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
         cluster_info = "silhouette"
     else:
         cluster_info = str(args.n_clusters)
-    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
     layer_relevance_scores = get_relevance_scores_dataloader(
             model,
             train_loader,
@@ -407,8 +407,10 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     
     results = {}
     results['IDC'] = coverage_rate
+    breakpoint()
+
     df = pd.DataFrame(results, index=[tag])
-    save_csv_results(results, "rq2_results_{}_{}_{}.csv".format(args.dataset, args.model, TIMESTAMP), tag=tag)
+    save_csv_results(results, "rq2_results_{}_{}_top_{}_{}.csv".format(args.dataset, args.model, args.top_m_neurons, TIMESTAMP), tag=tag)
     logger.info(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: {args.attr}")
     return coverage_rate
 
@@ -422,7 +424,7 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
         cluster_info = "silhouette"
     else:
         cluster_info = str(args.n_clusters)
-    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
     idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
@@ -433,7 +435,7 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
     results = {}
     results['WISDOM'] = coverage_rate
     df = pd.DataFrame(results, index=[tag])
-    save_csv_results(results, "rq2_results_{}_{}_{}.csv".format(args.dataset, args.model, TIMESTAMP), tag=tag)
+    save_csv_results(results, "rq2_results_{}_{}_top_{}_{}.csv".format(args.dataset, args.model, args.top_m_neurons, TIMESTAMP), tag=tag)
     logger.info(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: WISDOM")
     return coverage_rate
 
@@ -450,7 +452,7 @@ def run_idc_suite(args, model, trainable_module_name, train_loader, test_loader,
     dpi_results_w = wisdom_coverage(args, model, train_loader, U_IO_loader, classes, logger, tag=args.attr+'_U_IO')
     
 
-def run_coverage_suite(model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre='lrp_'):
+def run_coverage_suite(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre='lrp_'):
     """
     Runs the full coverage suite on the given model and data loaders.
     """
@@ -490,13 +492,9 @@ def main():
 
     # Run the coverage suite
     logger.info("=== Running coverage suite ===")
-    # run_coverage_suite(model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
+    # run_coverage_suite(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
     run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, logger, classes)
     
 
 if __name__ == '__main__':
     main()
-    
-    
-    
-    

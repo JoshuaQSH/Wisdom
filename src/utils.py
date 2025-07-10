@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument('--n-clusters', type=int, default=2, help='Number of clusters to use for KMeans.')
     parser.add_argument('--top-m-neurons', type=int, default=5, help='Number of top neurons to select.')
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size for training.')
+    parser.add_argument('--chunk-size', type=int, default=16, help='Chunk size for memory-optimized processing (number of batches to process before clearing GPU cache).')
 
     # Testing Mode arguments
     parser.add_argument('--test-image', type=str, default='1', help='Test image name. For the single image testing. (against with the `all-class`).')
@@ -141,6 +142,12 @@ def _configure_logging(enable_logging: bool, args, level: str = "info") -> loggi
 #------------
 # Helper functions
 #------------
+
+def make_path(path):
+    if not os.path.exists(path):
+        os.mkdir(path)
+        
+        
 # Decide which testing mode is active
 def _select_testing_mode(args) -> dict:
     # Return a dictionary with boolean values for each mode

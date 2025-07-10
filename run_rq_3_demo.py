@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torchattacks as ta
+import time
 
 from src.attribution import get_relevance_scores_dataloader
 from src.utils import get_data, parse_args, get_model, get_trainable_modules_main, _configure_logging
@@ -43,6 +44,9 @@ error_rates = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
 4. Calculate the coverage metrics for each of the adversarial datasets -> mixed_coverage and clean_coverage
 5. normalized_change = abs(mixed_coverage - clean_coverage) / clean_coverage
 """
+
+start_ms = int(time.time() * 1000)
+TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
 
 # -----------------------------------------------------------
 # Helper
@@ -223,6 +227,12 @@ def generate_adversarial_examples_old(attack_method, model, target, data, num_ad
 # ---------------------------------------------------------------------------
 
 def deepimportance_coverage_change(args, model, trainable_module_name, classes, layer_relevance_scores, train_loader, clean_data, mixed_data):
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
+    
     idc = IDC(
         model,
         classes,
@@ -231,6 +241,7 @@ def deepimportance_coverage_change(args, model, trainable_module_name, classes, 
         args.use_silhouette,
         args.all_class,
         "KMeans",
+        cache_path
     )
     final_layer = trainable_module_name[-1]    
     important_neuron_indices, inorderd_indices = idc.select_top_neurons_all(layer_relevance_scores, final_layer)
@@ -246,10 +257,14 @@ def deepimportance_coverage_change(args, model, trainable_module_name, classes, 
     
     normalized_change = abs(mixed_coverage - clean_coverage) / clean_coverage
     return normalized_change    
-    
 
 def wisdom_coverage_change(args, model, classes, wisdom_k_neurons, train_loader, clean_data, mixed_data):
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
     activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, wisdom_k_neurons)
     selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
@@ -581,7 +596,7 @@ def run_experiment(args, num_runs=3):
                         
     # Analyze and Save results to CSV
     results_df = analyze_results(results, args.dataset, args.model, logger)
-    results_df.to_csv(f'rq3demo_results_{args.dataset}_{args.model}.csv', index=False)
+    results_df.to_csv(f'rq3_results_{args.dataset}_{args.model}_{TIMESTAMP}.csv', index=False)
     
 if __name__ == "__main__":
     set_seed()

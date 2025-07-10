@@ -12,4 +12,5 @@ onnx
 pyyaml
 opencv-python
 torchattacks
-pyflann
+pyflann-py3
+torch-fidelity

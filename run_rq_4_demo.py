@@ -18,6 +18,9 @@ from src.nlc_coverage import calculate_coverage_ratio
 import torchattacks
 
 
+start_ms = int(time.time() * 1000)
+TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
+
 # python run_rq_4_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv'
 
 # -----------------------------------------------------------
@@ -213,6 +216,11 @@ def pielou_evenness_torch(preds: torch.Tensor) -> float:
 # -----------------------------------------------------------
 
 def deepimportance_coverage(args, model, trainable_module_name, classes, layer_relevance_scores, train_loader, target_loader):
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
     idc = IDC(
         model,
         classes,
@@ -221,6 +229,7 @@ def deepimportance_coverage(args, model, trainable_module_name, classes, layer_r
         args.use_silhouette,
         args.all_class,
         "KMeans",
+        cache_path
     )
     final_layer = trainable_module_name[-1]    
     important_neuron_indices, inorderd_indices = idc.select_top_neurons_all(layer_relevance_scores, final_layer)
@@ -235,7 +244,12 @@ def deepimportance_coverage(args, model, trainable_module_name, classes, layer_r
     
 
 def wisdom_coverage(args, model, classes, wisdom_k_neurons, train_loader, target_loader):
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
     activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, wisdom_k_neurons)
     selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
@@ -436,8 +450,8 @@ def main(args):
     correlation_df = calculate_correlations(results_df)
     
     # Save results to CSV files
-    results_df.to_csv('rq4_coverage_impartiality_results.csv', index=False)
-    correlation_df.to_csv('rq4_correlation_results.csv', index=False)
+    results_df.to_csv(f"rq4_impartiality_{args.dataset}_{args.model}_{TIMESTAMP}.csv", index=False)
+    correlation_df.to_csv(f"rq4_correlation_{args.dataset}_{args.model}_{TIMESTAMP}.csv", index=False)
     
     logger.info("Experiment completed! Files saved!")
     

@@ -59,7 +59,7 @@ def _make_synthetic_loader(n_samples, batch_size, channels, size, num_class) -> 
     data = torch.rand(n_samples, channels, h, w)
     labels = torch.randint(0, num_class, (n_samples,))
     ds = TensorDataset(data, labels)
-    return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
+    return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=4)
 
 def synth_data(synthetic_build=5000, synthetic_target=1000, batch_size=128, channels=3, input_size=[32, 32], num_class=10):
     train_loader = _make_synthetic_loader(
@@ -80,6 +80,25 @@ def synth_data(synthetic_build=5000, synthetic_target=1000, batch_size=128, chan
     
     return train_loader, test_loader, classes
 
+def viz_scale(df, ts, logger):
+
+    # Sort by batch_size for a sensible line ordering
+    df_sorted = df.sort_values('batch_size')
+
+    # Create the plot
+    plt.figure()
+    plt.scatter(df_sorted['batch_size'], df_sorted['throughput'])
+    plt.plot(df_sorted['batch_size'], df_sorted['throughput'])
+    plt.xlabel('Batch Size')
+    plt.ylabel('Throughput (img/s)')
+    # plt.title('Throughput vs Batch Size')
+    plt.grid(True)
+    plt.tight_layout()
+    # plt.show()
+    out_file = f"scale_{ts}.pdf"
+    plt.savefig(out_file, dpi=1200, format='pdf')
+    logger.info("Saved plot to %s", out_file)
+
 def viz_bench(df, ts, logger):
     for metric, ylabel in (("elapsed_sec", "Overhead (s)"), ("build_time", "Build time (s)"), ("run_time", "Runtime (s)"), ("throughput", "Throughput (img/s)")):
         fig, ax = plt.subplots()
@@ -93,7 +112,7 @@ def viz_bench(df, ts, logger):
                 hatch = '//' if j == len(methods) - 1 else None
                 ax.bar(
                     x[j] + i * width, val, width,
-                    label=dev if j == 0 else "",  # Avoid duplicate legends
+                    label=dev if j == 0 else "", 
                     color=color_14[j],
                     hatch=hatch
                 )
@@ -199,6 +218,113 @@ def run_bench(coverage_methods, method, model, layer_size_dict, build_loader, ta
 
     return build_time, elapsed, imgs / elapsed, coverage
 
+def run_scale_bench(model, build_loader, target_loader, classes, device='cpu', **kwargs):
+    model.to(device)
+    top_m_neurons = kwargs.get('top_m_neurons', 10)
+    n_clusters = kwargs.get('n_clusters', 2)
+    use_silhouette = kwargs.get('use_silhouette', False)
+    all_class = kwargs.get('all_class', False)
+    cache_path = kwargs.get('cache_path', None)
+    cov = IDC(
+            model,
+            classes,
+            top_m_neurons,
+            n_clusters,
+            use_silhouette,
+            all_class,
+            "KMeans",
+            cache_path
+    )
+
+
+    start = time.perf_counter()
+    csv_file = kwargs.get('csv_file', None)
+    df = pd.read_csv(csv_file)
+    df_sorted = df.sort_values(by='Score', ascending=False).head(top_m_neurons)
+    important_neuron_indices = {}
+    for layer_name, group in df_sorted.groupby('LayerName'):
+        important_neuron_indices[layer_name] = torch.tensor(group['NeuronIndex'].values)
+        
+    activation_values, selected_activations = cov.get_activations_model_dataloader(build_loader, important_neuron_indices)
+    selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
+    cluster_groups = cov.cluster_activation_values_all(selected_activations)
+    
+    build_time = time.perf_counter() - start
+    coverage, total_combination, max_coverage = cov.compute_idc_test_whole_dataloader(target_loader, 
+            important_neuron_indices, 
+            cluster_groups)
+
+    elapsed = time.perf_counter() - start
+    imgs = len(target_loader.dataset)
+
+    return build_time, elapsed, imgs / elapsed, coverage
+
+def scaliblity_run_main():
+    set_seed()
+    args = parse_args()
+    device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")
+    # Model settings
+    model, module_name, module, trainable_module, trainable_module_name, logger = prapare_data_models(args)
+
+    methods_config = {
+        'Wisdom': {'top_m_neurons': args.top_m_neurons, 
+                   'n_clusters': args.n_clusters, 
+                   'use_silhouette': args.use_silhouette,
+                   'all_class': args.all_class,
+                   'cache_path': "./cluster_pkl/" + args.model + "_" + args.dataset + "_" + "_wisdom_clusters.pkl",
+                   'csv_file': args.csv_file, 
+                },
+    }
+    records = []
+    for batch_size in [16, 32, 64, 128, 256, 512, 1024]:
+        synthetic_build = 10000
+        synthetic_target = 5000
+        logger.warning("Using synthetic dataset: build=%d, target=%d", synthetic_build, synthetic_target)
+        train_loader, test_loader, classes = synth_data(synthetic_build=synthetic_build, 
+                   synthetic_target=synthetic_target, 
+                   batch_size=batch_size, 
+                   channels=3, 
+                   input_size=[32, 32], 
+                   num_class=10)
+        per_train_loader = DataLoader(train_loader.dataset, batch_size=1, shuffle=True)
+        per_test_loader = DataLoader(test_loader.dataset, batch_size=1, shuffle=False)
+        
+        num_class = len(classes)
+
+        build_time, elapsed, thrpt, coverage = run_scale_bench(model, 
+                        train_loader, 
+                        test_loader, 
+                        classes, 
+                        device=device,
+                        top_m_neurons=args.top_m_neurons,
+                        n_clusters=args.n_clusters,
+                        use_silhouette=args.use_silhouette,
+                        all_class=args.all_class,
+                        cache_path="./cluster_pkl/" + args.model + "_" + args.dataset + "_" + "_wisdom_clusters.pkl",
+                        csv_file=args.csv_file
+        )
+
+        records.append(
+                {
+                    "model": args.model,
+                    "device": str(device),
+                    "batch_size": batch_size,
+                    "build_time": build_time,
+                    "elapsed_sec": elapsed,
+                    "run_time": (elapsed - build_time),
+                    "throughput": thrpt,
+                    "coverage": coverage,
+                }
+            )
+              
+    df = pd.DataFrame(records)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    csv_path = f"benchmark_wisdomscale_{ts}.csv"
+    df.to_csv(csv_path, index=False)
+    logger.info("Saved CSV to: %s", csv_path)
+
+    viz_scale(df, ts, logger)
+
 def main():
     set_seed()
     args = parse_args()
@@ -259,7 +385,7 @@ def main():
                            'n_clusters': args.n_clusters, 
                            'use_silhouette': args.use_silhouette,
                            'all_class': args.all_class,
-                           'cache_path': "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + "_deepimportance_old_clusters.pkl",
+                           'cache_path': "./cluster_pkl/" + args.model + "_" + args.dataset + "_" + "_deepimportance_old_clusters.pkl",
                            'final_layer': trainable_module_name[-1],
                            'per_train_loader': per_train_loader,
                            'per_test_loader': per_test_loader,
@@ -268,14 +394,14 @@ def main():
                            'n_clusters': args.n_clusters, 
                            'use_silhouette': args.use_silhouette,
                            'all_class': args.all_class,
-                           'cache_path': "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + "_deepimportance_clusters.pkl",
+                           'cache_path': "./cluster_pkl/" + args.model + "_" + args.dataset + "_" + "_deepimportance_clusters.pkl",
                            'final_layer': trainable_module_name[-1], 
                         },
         'Wisdom': {'top_m_neurons': args.top_m_neurons, 
                    'n_clusters': args.n_clusters, 
                    'use_silhouette': args.use_silhouette,
                    'all_class': args.all_class,
-                   'cache_path': "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + "_wisdom_clusters.pkl",
+                   'cache_path': "./cluster_pkl/" + args.model + "_" + args.dataset + "_" + "_wisdom_clusters.pkl",
                    'csv_file': args.csv_file, 
                 },
     }
@@ -341,8 +467,9 @@ def main():
     # Visualization
     viz_bench(df, ts, logger)
 
-# python rq5.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '../datasets/' --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv' --attr lrp --top-m-neurons 10
-# python rq5.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset synthetic --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv' --attr lrp --top-m-neurons 10 
-# python rq5.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset synthetic --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/vgg16_cifar_b32.csv' --attr lrp --top-m-neurons 10 
+# python run_rq_5_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '../datasets/' --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar10.csv' --attr lrp --top-m-neurons 10
+# python run_rq_5_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset synthetic --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar10.csv' --attr lrp --top-m-neurons 10 
+# python run_rq_5_demo.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset synthetic --batch-size 128 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/vgg16_cifar10.csv' --attr lrp --top-m-neurons 10 
 if __name__ == "__main__":
-    main()
+    # main()
+    scaliblity_run_main()

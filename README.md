@@ -283,6 +283,51 @@ atk.save(data_loader, save_path="./AE.pt", verbose=True)
 adv_loader = atk.load(load_path="./AE.pt")
 ```
 
+### Fuzzing Test
+
+How to run
+
+```shell
+Usage:
+# Random baseline fuzzing for CIFAR10 dataset using VGG16 model.
+python ./fuzz_guide/run_fuzz.py \
+      --dataset CIFAR10 \
+      --model vgg16 \
+      --saved-model /torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth \
+      --output-dir ./fuzz_guide/fuzz_outputs/ \
+      --log-dir ./logs \
+      --seed 42 \
+      --device 'cuda:0'
+
+# Coverage method guided fuzzing is not used in this script, but can be enabled by setting the --guided flag.
+$ python ./fuzz_guide/run_fuzz.py \
+      --dataset CIFAR10 \
+      --model vgg16 \
+      --saved-model /torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth \
+      --criterion NC \
+      --output-dir ./fuzz_guide/fuzz_outputs/ \
+      --log-dir ./logs \
+      --seed 42 \
+      --device 'cuda:0' \
+      --guided
+```
+
+During fuzzing both scripts dump images every `save_every` (=100) epochs:
+
+```shell
+<output_dir>/<exp_name>/image/
+    ├─ 000_new.jpg   #  freshly accepted mutations
+    ├─ 000_old.jpg   #  their parents
+    ├─ 000_ae.jpg    #  adversarial subset (if any)
+    ├─ 100_new.jpg
+    └─ ...
+```
+
+- Triggered Faults (Not Valid Count): Valid if 1) the #changed-pixels is less than $\alpha$ * #pixels or 2) the maximum of changed pixel value is less than $\beta$ * 255.
+- Naturalness of images: Inception Score (IS) and Frechet Inception Distance (FID)
+
+
+
 ## Metrics reference
 
 Other implmentation for the baseline should include:

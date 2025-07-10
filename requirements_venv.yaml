@@ -19,3 +19,6 @@ dependencies:
     - onnx
     - pyyaml
     - opencv-python
+    - pyflann-py3
+    - torchattacks
+    - torch-fidelity

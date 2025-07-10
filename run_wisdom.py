@@ -65,8 +65,13 @@ def process_neurons(csv_file, top_k=10, visualize=False):
     return top_k_neurons
     
 def idc_count(args, logger, model, classes, test_images, csv_file):
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
     # IDC pipeline
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
     top_k_neurons = process_neurons(csv_file, args.top_m_neurons, True)
     activation_values, selected_activations = idc.get_activations_model_sample(test_images, top_k_neurons)
     kmeans_comb = idc.cluster_activation_values_all(selected_activations)
@@ -82,8 +87,13 @@ def idc_count(args, logger, model, classes, test_images, csv_file):
 
 
 def idc_count_dataloader(args, logger, model, classes, testloader, csv_file):
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
     # IDC pipeline
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans")
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
     top_k_neurons = process_neurons(csv_file, args.top_m_neurons, True)
     activation_values, selected_activations = idc.get_activations_model_dataloader(testloader, top_k_neurons)
     kmeans_comb = idc.cluster_activation_values_all(selected_activations)

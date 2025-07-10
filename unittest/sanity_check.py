@@ -8,6 +8,7 @@ import numpy as np
 
 import torch
 import torch.nn.functional as F
+from torch import nn
 from collections import defaultdict
 from captum.attr import LRP
 
@@ -28,6 +29,45 @@ cmap = ['PuBuGn', 'Greens', 'Purples', 'Reds', 'Blues', 'YlGn', 'summer', 'cool'
 start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
 acts = defaultdict(list)
+
+def analyze_model(model, input_size=(1, 3, 224, 224)):
+    total_params = sum(p.numel() for p in model.parameters())
+    learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    layer_count = sum(1 for _ in model.modules())
+
+    # Forward hook to capture activations for neuron count
+    activations = []
+
+    def hook_fn(module, input, output):
+        if isinstance(output, torch.Tensor):
+            activations.append(output)
+        elif isinstance(output, (tuple, list)):
+            activations.extend(o for o in output if isinstance(o, torch.Tensor))
+
+    hooks = []
+    for layer in model.modules():
+        if isinstance(layer, (nn.ReLU, nn.Conv2d, nn.Linear, nn.BatchNorm2d)):
+            hooks.append(layer.register_forward_hook(hook_fn))
+
+    # Run dummy input through the model
+    model.eval()
+    with torch.no_grad():
+        dummy_input = torch.randn(input_size)
+        model(dummy_input)
+
+    # Estimate number of neurons from activation maps
+    neuron_count = sum(a.numel() for a in activations)
+
+    # Cleanup hooks
+    for h in hooks:
+        h.remove()
+
+    return {
+        'Total Parameters': total_params,
+        'Learnable Parameters': learnable_params,
+        'Total Layers (nn.Module)': layer_count,
+        'Estimated Neurons (from activations)': neuron_count
+    }
 
 def prapare_data_models(args):
     # Logger settings
@@ -136,18 +176,18 @@ def viz_attr_diff(args, logger, orig_loader, pert_loader, cmap="bwr", alpha=0.8,
 
     fig, ax = plt.subplots(1, 3, figsize=(9,3))
     ax[0].imshow(o.squeeze() if o.shape[2]==1 else o)
-    ax[0].set_title("original")
+    ax[0].set_title("Original")
     ax[1].imshow(p.squeeze() if p.shape[2]==1 else p)
-    ax[1].set_title("perturbed")
+    ax[1].set_title(f"Perturbed ({tag})")
     ax[2].imshow(o.squeeze() if o.shape[2]==1 else o, alpha=1-alpha)
     ax[2].imshow(d.squeeze() if d.shape[2]==1 else d,
                  cmap=cmap, alpha=alpha)
-    ax[2].set_title("Overlay")
+    ax[2].set_title(f"Overlay ({tag})")
     for a in ax: a.axis("off")
 
     fig.tight_layout()
-    out = f"{args.dataset}_{args.model}_TOP_{TOPK}_{args.attr}_{tag}_diff.png"
-    fig.savefig(out, dpi=300, bbox_inches="tight")
+    out = f"{args.dataset}_{args.model}_TOP_{TOPK}_{args.attr}_{tag}_diff.pdf"
+    fig.savefig(out, dpi=1200, format='pdf', bbox_inches="tight")
     plt.close(fig)
     logger.info(f"[viz] saved to {out}")
 
@@ -391,7 +431,7 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
         cluster_info = "silhouette"
     else:
         cluster_info = str(args.n_clusters)
-    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
     
     layer_relevance_scores = get_relevance_scores_dataloader(
             model,
@@ -437,7 +477,7 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
         cluster_info = "silhouette"
     else:
         cluster_info = str(args.n_clusters)
-    cache_path = "./models_info/saved_models/" + args.model + "_" + args.dataset + "_" + args.attr + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
     idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
@@ -612,6 +652,9 @@ def main(args):
     # Model settings
     model, module_name, module, trainable_module, trainable_module_name, logger = prapare_data_models(args)
 
+    num_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"Total parameters: {num_params}")
+
     # Data settings
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     
@@ -629,8 +672,13 @@ def main(args):
     viz_attr_diff(args, logger, U_I_loader, U_R_loader, cmap=cmap[1], alpha=0.8, tag='mix')
     
     # ---  Sanity checks -------------------------------------------------
-    sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, classes, logger)
+    # sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, classes, logger)
 
+
+# python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth' --dataset imagenet --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_imagenet.csv' --attr lrp --top-m-neurons 10
+# python ./unittest/sanity_check.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/vgg16_cifar10.csv' --attr lrp --top-m-neurons 10
+# python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_cifar10.csv' --attr lrp --top-m-neurons 10
+# python ./unittest/sanity_check.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_cifar10.csv' --attr lrp --top-m-neurons 10
 if __name__ == '__main__':
     set_seed()
     args = parse_args()
