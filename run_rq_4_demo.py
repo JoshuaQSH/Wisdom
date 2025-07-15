@@ -17,7 +17,6 @@ from src.utils import get_data, parse_args, get_model, get_trainable_modules_mai
 from src.nlc_coverage import calculate_coverage_ratio
 import torchattacks
 
-
 start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
 
@@ -221,6 +220,11 @@ def deepimportance_coverage(args, model, trainable_module_name, classes, layer_r
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
+    extra = dict(
+        n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
     idc = IDC(
         model,
         args.top_m_neurons,
@@ -228,7 +232,7 @@ def deepimportance_coverage(args, model, trainable_module_name, classes, layer_r
         args.use_silhouette,
         args.all_class,
         "KMeans",
-        None,
+        extra,
         cache_path
     )
     final_layer = trainable_module_name[-1]    
@@ -240,6 +244,11 @@ def deepimportance_coverage(args, model, trainable_module_name, classes, layer_r
     # Testing coverage
     coverage_score, _, _ = idc.compute_idc_test_whole_dataloader(target_loader, important_neuron_indices, cluster_groups)
 
+    del idc
+    del activation_values
+    del selected_activations_train
+    torch.cuda.empty_cache()
+
     return coverage_score    
     
 
@@ -249,13 +258,23 @@ def wisdom_coverage(args, model, classes, wisdom_k_neurons, train_loader, target
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", None, cache_path)
+    extra = dict(
+        n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
     activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, wisdom_k_neurons)
     selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
     
     # Testing coverage
     coverage_score, _, _ = idc.compute_idc_test_whole_dataloader(target_loader, wisdom_k_neurons, cluster_groups)
+    
+    del idc
+    del activation_values
+    del selected_activations_train
+    torch.cuda.empty_cache()
 
     return coverage_score
 

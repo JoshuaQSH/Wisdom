@@ -17,26 +17,35 @@ from sklearn.metrics import silhouette_score
 
 from .utils import get_layer_by_name, save_cluster_groups, load_cluster_groups
 
+def get_cluster_function(name):
+    """
+    Returns the clustering class from sklearn based on the provided name.
+    """
+    cluster_algorithms = {
+        "KMeans": KMeans,
+        "DBSCAN": DBSCAN,
+        "AgglomerativeClustering": AgglomerativeClustering,
+        "MeanShift": MeanShift,
+        "SpectralClustering": SpectralClustering
+    }
+
+    if name not in cluster_algorithms:
+        raise ValueError(f"Clustering method '{name}' is not supported. Choose from {list(cluster_algorithms.keys())}")
+
+    return cluster_algorithms[name]
+
 class IDC:
-    def __init__(self, model, 
-                 top_m_neurons, 
-                 n_clusters,
-                 use_silhouette, 
-                 test_all_classes, 
-                 clustering_method_name, 
-                 clustering_params = None, 
-                 cache_path=None):
+    def __init__(self, model, top_m_neurons, n_clusters, use_silhouette, test_all_classes, clustering_method_name, cache_path=None):
         self.model = model
         self.top_m_neurons = top_m_neurons
         self.use_silhouette = use_silhouette
         self.test_all_classes = test_all_classes
         self.total_combination = 1
         self.cache_path = cache_path
-        self.n_clusters = n_clusters
         
         # Initialize clustering method
-        self.clustering_method_name = clustering_method_name
-        self.clustering_params = clustering_params or {}
+        self.clustering_method = get_cluster_function(clustering_method_name)
+        self.n_clusters = n_clusters
     
     def save_to_json(self, coverage_rate, max_coverage, model_name, testing_layer, file_path='coverage_rate.json'):
         """
@@ -275,9 +284,7 @@ class IDC:
         def hook_fn(module, input, output, layer_name):
             if layer_name not in activation_dict:
                 activation_dict[layer_name] = []
-            # activation_dict[layer_name].append(output.detach())
-            act_cpu = output.detach().to('cpu', torch.float16)
-            activation_dict.setdefault(layer_name, []).append(act_cpu)
+            activation_dict[layer_name].append(output.detach())
         
         handles = []
         for name, module in self.model.named_modules():
@@ -289,7 +296,6 @@ class IDC:
             for inputs, _ in dataloader:
                 inputs = inputs.to(next(self.model.parameters()).device)
                 self.model(inputs)
-                torch.cuda.empty_cache() 
         
         for handle in handles:
             handle.remove()
@@ -363,16 +369,14 @@ class IDC:
         return cluster_groups
 
     ## Cluster the importance scores [model-wise]
-    def cluster_activation_values_all(self, activation_dict): 
-        from src.clustering import make
-
+    def cluster_activation_values_all(self, activation_dict):
+        
         # if self.cache_path and os.path.exists(self.cache_path):
         #     print(f"[INFO] Loading cached clusters from {self.cache_path}")
         #     return load_cluster_groups(self.cache_path)
         
         all_activations = []
         for layer_name, activation_values in activation_dict.items():
-            
             if len(activation_values.shape) > 2:
                 activation_values = torch.mean(activation_values, dim=[2, 3])
             # print("[INSIDE] Layer: ", layer_name, " Activations: ", activation_values.mean())
@@ -386,8 +390,7 @@ class IDC:
             if self.use_silhouette:
                 self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1), 2, 10)
             # cluster_ = self.clustering_method(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1).cpu().numpy())
-            # cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
-            cluster_ = make(self.clustering_method_name, **self.clustering_params).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
+            cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
             cluster_groups.append(cluster_)
         
         if self.cache_path:
@@ -421,10 +424,7 @@ class IDC:
                 
                 sample_clusters.append(cluster[0])  # Append the cluster ID
                 if update_total_combination:
-                    if hasattr(cluster_groups[neuron_idx], "n_clusters"):
-                        self.total_combination *= cluster_groups[neuron_idx].n_clusters
-                    else:
-                        self.total_combination *= len(cluster_groups[neuron_idx].cluster_centers_)
+                    self.total_combination *= cluster_groups[neuron_idx].n_clusters
             
             # Convert to tuple for uniqueness
             cluster_comb.append(tuple(sample_clusters))
@@ -455,8 +455,8 @@ class IDC:
             max_coverage = all_activations_tensor.shape[0] / total_combination
         
         coverage_rate = len(unique_clusters) / total_combination
-        # model_name = self.model.__class__.__name__
-        # self.save_to_json(coverage_rate, max_coverage, model_name, "Whole model")
+        model_name = self.model.__class__.__name__
+        self.save_to_json(coverage_rate, max_coverage, model_name, "Whole model")
         
         return coverage_rate, total_combination, max_coverage
     

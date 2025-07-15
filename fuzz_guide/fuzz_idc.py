@@ -9,8 +9,13 @@ class BaseDI:
         self.top_m_neurons = top_m_neurons
         self.n_clusters = n_clusters
         self.coverage_method = coverage_method
+        extra = dict(
+                n_clusters = n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+                random_state = 42,   # fixes RNG
+                n_init = 10    # keep best of 10 centroid seeds
+            )
         self.model = model
-        self.idc = IDC(self.model, top_m_neurons, n_clusters, False, True, coverage_method, None, None)
+        self.idc = IDC(self.model, top_m_neurons, n_clusters, False, True, coverage_method, extra, None)
         self.current = 0.0
 
         # to be filled by subclasses
@@ -42,7 +47,6 @@ class BaseDI:
             )
         else:
             raise TypeError(f"Unsupported input type: {type(input_data)}. Expected DataLoader or Tensor.")
-        
         return {"ratio": coverage_rate}
 
     def gain(self, cov_dict):

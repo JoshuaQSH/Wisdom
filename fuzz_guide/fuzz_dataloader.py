@@ -115,8 +115,8 @@ class DataLoader(object):
 def get_loader(args):
     assert args.dataset in ['CIFAR10', 'ImageNet']
     if args.dataset == 'CIFAR10':
-        train_data = CIFAR10Dataset(args, split='train')
-        test_data = CIFAR10Dataset(args, split='test')
+        train_data = CIFAR10Dataset(args, image_dir=args.data_path, split='train')
+        test_data = CIFAR10Dataset(args, image_dir=args.data_path, split='test')
         loader = DataLoader(args)
         train_loader = loader.get_loader(train_data, False)
         test_loader = loader.get_loader(test_data, False)

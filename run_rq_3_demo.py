@@ -232,7 +232,11 @@ def deepimportance_coverage_change(args, model, trainable_module_name, classes, 
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
-    
+    extra = dict(
+        n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
     idc = IDC(
         model,
         args.top_m_neurons,
@@ -240,7 +244,7 @@ def deepimportance_coverage_change(args, model, trainable_module_name, classes, 
         args.use_silhouette,
         args.all_class,
         "KMeans",
-        None,
+        extra,
         cache_path
     )
     final_layer = trainable_module_name[-1]    
@@ -255,6 +259,11 @@ def deepimportance_coverage_change(args, model, trainable_module_name, classes, 
     mixed_loader = DataLoader(mixed_data, batch_size=args.batch_size, shuffle=False)
     mixed_coverage, _, _ = idc.compute_idc_test_whole_dataloader(mixed_loader, important_neuron_indices, cluster_groups)
     
+    del idc
+    del activation_values
+    del selected_activations_train
+    torch.cuda.empty_cache()
+
     normalized_change = abs(mixed_coverage - clean_coverage) / clean_coverage
     return normalized_change    
 
@@ -264,7 +273,12 @@ def wisdom_coverage_change(args, model, classes, wisdom_k_neurons, train_loader,
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", None, cache_path)
+    extra = dict(
+        n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
     activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, wisdom_k_neurons)
     selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
@@ -275,6 +289,11 @@ def wisdom_coverage_change(args, model, classes, wisdom_k_neurons, train_loader,
     mixed_loader = DataLoader(mixed_data, batch_size=args.batch_size, shuffle=False)
     mixed_coverage, _, _ = idc.compute_idc_test_whole_dataloader(mixed_loader, wisdom_k_neurons, cluster_groups)
     
+    del idc
+    del activation_values
+    del selected_activations_train
+    torch.cuda.empty_cache()
+
     normalized_change = abs(mixed_coverage - clean_coverage) / clean_coverage
     return normalized_change
 

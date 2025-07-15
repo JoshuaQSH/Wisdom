@@ -17,7 +17,9 @@ import torchvision.transforms as transforms
 from torchvision.utils import save_image
 
 from style_operator import Stylized
+from genai import GenerativeAugmentor, GenerativeAugmentorStub
 import image_transforms
+
 
 # -----------------------------------------------------------
 # Fuzzer Logger
@@ -79,6 +81,7 @@ class Parameters(object):
         self.guided = base_args.guided if hasattr(base_args, 'guided') else False
         self.saved_model = base_args.saved_model
         self.wisdom_csv = base_args.wisdom_csv if hasattr(base_args, 'wisdom_csv') else None
+        self.genai_only = base_args.genai_only if hasattr(base_args, 'genai_only') else False
         
         self.batch_size = 50
         self.mutate_batch_size = 1
@@ -115,6 +118,21 @@ class Parameters(object):
         self.G = translation + scale + rotation #+ shear
         self.P = contrast + brightness + blur
         self.S = list(itertools.product([self.stylized.transform], [0.4, 0.6, 0.8]))
+        
+        self.genai = GenerativeAugmentorStub("./onnx/unet.onnx",
+                                            device=self.device)
+        self.D = list(itertools.product(
+            [self.genai],
+            [{"prompt":p, "strength":s}
+             for p in ["oil painting of a {label}",
+                        "low-poly {label} sculpture",
+                        "macro photo of {label}"]
+             for s in (0.4, 0.6, 0.8)]))
+        
+        # GenAI only
+        if self.genai_only:
+            self.G = self.P = self.S = []
+
         self.save_batch = False
 
 class INFO(dict):
@@ -297,13 +315,21 @@ class Fuzzer:
 
     # ---------- mutation & acceptance --------------------------------------
     def _mutate(self, I):
-        G, P, S = self.params.G, self.params.P, self.params.S
+        # G, P, S = self.params.G, self.params.P, self.params.S
+        G, P, S, D = self.params.G, self.params.P, self.params.S, self.params.D
         I0, state = self.info[I]
 
         for _ in range(self.hyper_params["TRY_NUM"]):
-            t, p = random.choice(G + P + S) if state == 0 else random.choice(P + S)
+            if self.params.genai_only:
+                t, p = random.choice(D)
+            elif state == 0 and not self.params.genai_only:
+                t, p = random.choice(G + P + S)
+            else:
+                t, p = random.choice(P + S)
+
+            # t, p = random.choice(G + P + S) if state == 0 else random.choice(P + S)
             
-            # TODO: a quick patch for stylized transform
+            # A quick patch for stylized transform
             I_float32 = I.astype("float32", copy=False)
             I_new = t(I_float32, p).reshape(self.params.input_shape[1:])
             I_new = np.clip(I_new, 0, 255)

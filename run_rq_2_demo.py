@@ -385,6 +385,11 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
             device,
             attribution_method='lrp',
         )
+    extra = dict(
+        n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
     
     idc = IDC(
         model,
@@ -393,7 +398,7 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
         args.use_silhouette,
         args.all_class,
         "KMeans",
-        None,
+        extra,
         cache_path
     )
     
@@ -411,6 +416,12 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     df = pd.DataFrame(results, index=[tag])
     save_csv_results(results, "rq2_results_{}_{}_top_{}_{}.csv".format(args.dataset, args.model, args.top_m_neurons, TIMESTAMP), tag=tag)
     logger.info(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: {args.attr}")
+    
+    del idc
+    del activation_values
+    del selected_activations
+    torch.cuda.empty_cache()  # Clear GPU memory
+
     return coverage_rate
 
 def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag='original'):
@@ -424,7 +435,12 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", None,  cache_path)
+    extra = dict(
+        n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
     selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
@@ -436,6 +452,12 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
     df = pd.DataFrame(results, index=[tag])
     save_csv_results(results, "rq2_results_{}_{}_top_{}_{}.csv".format(args.dataset, args.model, args.top_m_neurons, TIMESTAMP), tag=tag)
     logger.info(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: WISDOM")
+
+    del idc
+    del activation_values
+    del selected_activations
+    torch.cuda.empty_cache()  # Clear GPU memory
+
     return coverage_rate
 
 def run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, logger, classes):
@@ -491,7 +513,7 @@ def main():
 
     # Run the coverage suite
     logger.info("=== Running coverage suite ===")
-    run_coverage_suite(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
+    # run_coverage_suite(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
     run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, logger, classes)
     
 

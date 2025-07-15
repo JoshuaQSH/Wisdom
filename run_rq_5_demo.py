@@ -142,6 +142,11 @@ def run_bench(coverage_methods, method, model, layer_size_dict, build_loader, ta
         use_silhouette = kwargs.get('use_silhouette', False)
         all_class = kwargs.get('all_class', False)
         cache_path = kwargs.get('cache_path', None)
+        extra = dict(
+            n_clusters = n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+            random_state = 42,   # fixes RNG
+            n_init = 10    # keep best of 10 centroid seeds
+        )
         cov = IDC(
             model,
             top_m_neurons,
@@ -149,7 +154,7 @@ def run_bench(coverage_methods, method, model, layer_size_dict, build_loader, ta
             use_silhouette,
             all_class,
             "KMeans",
-            None,
+            extra,
             cache_path
         )
 
@@ -225,6 +230,11 @@ def run_scale_bench(model, build_loader, target_loader, classes, device='cpu', *
     use_silhouette = kwargs.get('use_silhouette', False)
     all_class = kwargs.get('all_class', False)
     cache_path = kwargs.get('cache_path', None)
+    extra = dict(
+            n_clusters = n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+            random_state = 42,   # fixes RNG
+            n_init = 10    # keep best of 10 centroid seeds
+    )
     cov = IDC(
             model,
             top_m_neurons,
@@ -232,7 +242,7 @@ def run_scale_bench(model, build_loader, target_loader, classes, device='cpu', *
             use_silhouette,
             all_class,
             "KMeans",
-            None,
+            extra,
             cache_path
     )
 

@@ -426,7 +426,7 @@ def eval_model(model, test_loader, U_I_loader, U_R_loader, device, logger):
 # -----------------------------------------------------------
 # IDC coverage testing
 # -----------------------------------------------------------
-def idc_coverage(args, model, train_loader, test_loader, classes, trainable_module_name, device, logger, tag='original'):
+def idc_coverage(args, model, train_loader, test_loader, trainable_module_name, device, logger, tag='original'):
     if args.use_silhouette:
         cluster_info = "silhouette"
     else:
@@ -451,8 +451,8 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
         args.use_silhouette,
         args.all_class,
         "KMeans",
-        # extra,
-        False
+        extra,
+        cache_path
     )
     
     final_layer = trainable_module_name[-1]
@@ -471,7 +471,7 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     logger.info(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: {args.attr}")
     return coverage_rate
 
-def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag='original'):
+def wisdom_coverage(args, model, train_loader, test_loader, logger, tag='original'):
     df = pd.read_csv(args.csv_file)
     df_sorted = df.sort_values(by='Score', ascending=False).head(args.top_m_neurons)
     top_k_neurons = {}
@@ -488,7 +488,7 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
     )
 
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
     # selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
@@ -506,13 +506,13 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
 # thin wrapper for running IDC and WISDOM on dataloader
 def _run_idc_for_loader(tag, loader, args, model,
                         train_loader, trainable_module_name,
-                        device, classes, logger):
+                        device, logger):
     """Compute both IDC and WISDOM on the given loader."""
     idc_val = idc_coverage(args, model, train_loader,
-                           loader, classes,
+                           loader,
                            trainable_module_name, device, logger, tag=tag)
     wisdom_val = wisdom_coverage(args, model, train_loader,
-                                 loader, classes, logger, tag=tag)
+                                 loader, logger, tag=tag)
     return dict(IDC=idc_val, WISDOM=wisdom_val)
 
 # -----------------------------------------------------------
@@ -520,7 +520,7 @@ def _run_idc_for_loader(tag, loader, args, model,
 # -----------------------------------------------------------
 def duplicated_testset_coverage(test_dataset, args, model,
                                 train_loader, trainable_module_name,
-                                device, classes, logger):
+                                device, logger):
     """U_O + U_O  (concatenated)"""
     dup_dataset = ConcatDataset([test_dataset, test_dataset])
     dup_loader = DataLoader(dup_dataset, batch_size=args.batch_size, shuffle=False)
@@ -529,14 +529,14 @@ def duplicated_testset_coverage(test_dataset, args, model,
     return _run_idc_for_loader("UO_DUP",
                                dup_loader, args, model,
                                train_loader, trainable_module_name,
-                               device, classes, logger)
+                               device, logger)
 
 # -----------------------------------------------------------
 # 2.  PARTIAL-IMPORTANCE DATASETS:  U_O + U_I[:N]
 # -----------------------------------------------------------
 def partial_importance_coverage(test_dataset, U_I_dataset, args, model,
                                 train_loader, trainable_module_name,
-                                device, classes, logger,
+                                device, logger,
                                 sizes=(100, 500, 1000, 2000)):
     """
     Build several datasets of the form  U_O + U_I[:N]
@@ -553,7 +553,7 @@ def partial_importance_coverage(test_dataset, U_I_dataset, args, model,
                                 batch_size=args.batch_size, shuffle=False)
         res = _run_idc_for_loader(tag, concat_ld, args, model, 
                                   train_loader, trainable_module_name,
-                                  device, classes, logger)
+                                  device, logger)
         results[tag] = res
     return results
 
@@ -563,7 +563,7 @@ def partial_importance_coverage(test_dataset, U_I_dataset, args, model,
 def high_param_importance_coverage(test_dataset, args, model,
                                    test_loader,
                                    train_loader, trainable_module_name,
-                                   device, classes, logger,
+                                   device, logger,
                                    new_topk=[0.05, 0.1, 0.2, 0.25, 0.3, 0.5], new_std=[0.1, 0.2, 0.3, 0.4, 0.5]):
     """
     Re‑generate U_I with a *higher* top‑k fraction or noise std,
@@ -590,46 +590,18 @@ def high_param_importance_coverage(test_dataset, args, model,
             tag = f"UO_UI_highT_Top_{k_}_std_{std_}"
             res = _run_idc_for_loader(tag, U_IO_loader, args, model,
                                train_loader, trainable_module_name,
-                               device, classes, logger)
+                               device, logger)
             res_list.append(res)
             logger.info(f"[Sanity] Results for {tag}: {res}")
 
-def sanity_check_idc(args, model, train_loader, test_loader, classes, logger):
-    model.eval()
-    
-    logger.info("=== SANITY-IDC Original ===")
-    df = pd.read_csv(args.csv_file)
-    df_sorted = df.sort_values(by='Score', ascending=False).head(args.top_m_neurons)
-    top_k_neurons = {}
-    for layer_name, group in df_sorted.groupby('LayerName'):
-        top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
-    if args.use_silhouette:
-        cluster_info = "silhouette"
-    else:
-        cluster_info = str(args.n_clusters)
-    extra = dict(
-        n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
-        random_state = 42,   # fixes RNG
-        n_init = 10    # keep best of 10 centroid seeds
-    )
-
-    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    
-    idc_new = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
-    idc_old = src.idc_old.IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
-
-    _, s1 = idc_new.get_activations_model_dataloader(train_loader, top_k_neurons)
-    _, s2 = idc_old.get_activations_model_dataloader(train_loader, top_k_neurons)
-
-    s1 = {k: v.half().cpu() for k, v in s1.items()}
-    s2 = {k: v.half().cpu() for k, v in s2.items()}
-
+def keys_diff(s1, s2, logger):
     # Check if s1 and s2 are equal
     logger.info("=== Comparing activations between new and old IDC ===")
-    
+
     # Check if they have the same keys
     s1_keys = set(s1.keys())
     s2_keys = set(s2.keys())
+
     keys_equal = s1_keys == s2_keys
     logger.info(f"Keys equal: {keys_equal}")
     if not keys_equal:
@@ -668,47 +640,79 @@ def sanity_check_idc(args, model, train_loader, test_loader, classes, logger):
     
     logger.info(f"Overall: All activations equal = {keys_equal and all_tensors_equal}")
 
+def sanity_check_idc(args, model, train_loader, test_loader, logger):
+    model.eval()
+    
+    logger.info("=== SANITY-IDC Original ===")
+    df = pd.read_csv(args.csv_file)
+    df_sorted = df.sort_values(by='Score', ascending=False).head(args.top_m_neurons)
+    top_k_neurons = {}
+    for layer_name, group in df_sorted.groupby('LayerName'):
+        top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    extra = dict(
+        n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
+    
+    idc_new = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
+    # idc_old = src.idc_old.IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
+
+    _, s1 = idc_new.get_activations_model_dataloader(train_loader, top_k_neurons)
+    # _, s2 = idc_old.get_activations_model_dataloader(train_loader, top_k_neurons)
+
+    s1 = {k: v.half().cpu() for k, v in s1.items()}
+    # s2 = {k: v.half().cpu() for k, v in s2.items()}
+    
+    # keys_diff(s1, s2, logger)
+
     # Commented out the cache_path so far for testing purposes
     cluster_groups_1 = idc_new.cluster_activation_values_all(s1)
-    cluster_groups_2 = idc_old.cluster_activation_values_all(s2)
+    # cluster_groups_2 = idc_old.cluster_activation_values_all(s2)
     coverage_rate_1, t1, max_coverage_1 = idc_new.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups_1)
-    coverage_rate_2, t2, max_coverage_2 = idc_old.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups_2)
+    # coverage_rate_2, t2, max_coverage_2 = idc_old.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups_2)
 
     logger.info(f"Total Combination: {t1}, Max Coverage: {max_coverage_1:.4f}, IDC Coverage: {coverage_rate_1:.4f}, Attribution: WISDOM_New")
-    logger.info(f"Total Combination: {t2}, Max Coverage: {max_coverage_2:.4f}, IDC Coverage: {coverage_rate_2:.4f}, Attribution: WISDOM_Old")
+    # logger.info(f"Total Combination: {t2}, Max Coverage: {max_coverage_2:.4f}, IDC Coverage: {coverage_rate_2:.4f}, Attribution: WISDOM_Old")
 
 
-def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, classes, logger):
+def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, logger):
     model.eval()
     
     logger.info("=== SANITY‑CHECK COVERAGE ===")
     origin_res = _run_idc_for_loader("U_O", test_loader, args, model,
                         train_loader, trainable_module_name,
-                        device, classes, logger)
+                        device, logger)
     logger.info(origin_res)
     
     dup_res = duplicated_testset_coverage(test_dataset,
                                         args, model,
                                         train_loader, trainable_module_name,
-                                        device, classes, logger)
+                                        device, logger)
 
     logger.info(dup_res)
     
     random_res = _run_idc_for_loader(f"{args.attr}_U_O_UR", U_RO_loader, args, model,
                         train_loader, trainable_module_name,
-                        device, classes, logger)
+                        device, logger)
     logger.info(random_res)
     
     new_res = _run_idc_for_loader(f"{args.attr}_U_O_UI", U_IO_loader, args, model,
                         train_loader, trainable_module_name,
-                        device, classes, logger)
+                        device, logger)
     logger.info(new_res)
     
     
     partial_res = partial_importance_coverage(test_dataset, U_I_dataset,
                                             args, model,
                                             train_loader, trainable_module_name,
-                                            device, classes, logger,
+                                            device, logger,
                                             sizes=(100, 500, 1000, 2000))
     logger.info(partial_res)
     
@@ -716,7 +720,7 @@ def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loade
     high_param_importance_coverage(test_dataset,
                                     args, model, test_loader,
                                     train_loader, trainable_module_name,
-                                    device, classes, logger,
+                                    device, logger,
                                     new_topk=[0.05, 0.1, 0.2, 0.25, 0.3, 0.5],
                                     new_std=[0.1, 0.2, 0.3, 0.4, 0.5])
 
@@ -766,12 +770,12 @@ def main(args):
     # viz_attr_diff(args, logger, U_I_loader, U_R_loader, cmap=cmap[1], alpha=0.8, tag='mix')
     
     # ---  Sanity checks -------------------------------------------------
-    # sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, classes, logger)
+    # sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, logger)
 
     # ---  IDC new and old test ------------------------------------------
-    sanity_check_idc(args, model, train_loader, test_loader, classes, logger)
+    # sanity_check_idc(args, model, train_loader, test_loader, logger)
 
-# python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth' --dataset imagenet --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_imagenet.csv' --attr lrp --top-m-neurons 10
+# python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth' --dataset imagenet --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_imagenet.csv' --attr lrp --top-m-neurons 10
 # python ./unittest/sanity_check.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/vgg16_cifar10.csv' --attr lrp --top-m-neurons 10
 # python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_cifar10.csv' --attr lrp --top-m-neurons 10
 # python ./unittest/sanity_check.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_cifar10.csv' --attr lrp --top-m-neurons 10

@@ -59,6 +59,7 @@ def parse_args():
     
     # mode
     parser.add_argument('--guided', action='store_true', help='Use guided fuzzing.')
+    parser.add_argument('--genai-only', action='store_true', help='Generative AI for generation [StableDiffusion or BigGAN].')
 
     # I/O paths
     parser.add_argument('--output-dir', type=str, default='./fuzz_guide/fuzz_outputs/')
@@ -154,13 +155,17 @@ def compute_metrics(params, seed_imgs, model):
     prob = hist / hist.sum()
     ENT = -(prob * torch.log(prob + 1e-12)).sum().item()
 
-    # 5) --- Print summary ----------------------------------------------
+    # 5) --- #Classes -------------------------------------------------
+    num_classes_hit = int((hist > 0).sum().item())
+
+    # 6) --- Print summary ----------------------------------------------
     print(f"\n=== Quality metrics ===")
     print(f"Inception Score (IS): {IS:6.3f}")
     print(f"Fréchet Inception Distance: {FID:6.3f}")
     print(f"Prediction-Entropy (nats): {ENT:6.3f}\n")
+    print(f"#Classes hit (top-1): {num_classes_hit:6d}\n")
 
-    return IS, FID, ENT
+    return IS, FID, ENT, num_classes_hit
 
 def main():
     args = parse_args()
@@ -207,6 +212,7 @@ def main():
             criterion = DeepImportance(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, final_layer, device)
         elif args.criterion == 'Wisdom':
             criterion = Wisdom(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, args.wisdom_csv)
+            breakpoint()
         else:
             criterion = getattr(coverage, args.criterion)(model, device, layer_size_dict, hyper=hyper_map[args.criterion])
     
@@ -220,12 +226,14 @@ def main():
     engine = Fuzzer(args, criterion, guided=args.guided)
     engine.run(image_numpy_list, label_numpy_list)
     engine.exit()
-    IS, FID, ENT = compute_metrics(engine.params, image_numpy_list, model)
+    IS, FID, ENT, NCLASS = compute_metrics(engine.params, image_numpy_list, model)
 
-    csv_path = os.path.join(args.output_dir, f"fuzz_results_{args.dataset}_{args.model}.csv")
+    mutated_mode = "GenAI" if args.genai_only else "Normal"
+    csv_path = os.path.join(args.output_dir, f"fuzz_results_{args.dataset}_{args.model}_{mutated_mode}.csv")
     header   = ["dataset", "model", "criterion",
                 "coverage_gain", "faults", "outputs", "faults/outputs",
-                "IS", "FID", "Entropy"]
+                "IS", "FID", "Entropy", "Classes"]
+    
     num_faults  = engine.num_ae
     num_outputs = engine.delta_batch if engine.delta_batch else 1
     faults_per_output = num_faults / num_outputs
@@ -235,7 +243,8 @@ def main():
            f"{faults_per_output:.6f}",
            f"{IS:.3f}" if IS is not None else "",
            f"{FID:.3f}" if FID is not None else "",
-           f"{ENT:.3f}" if ENT is not None else ""]
+           f"{ENT:.3f}" if ENT is not None else "",
+           f"{NCLASS:d}"  if NCLASS is not None else "",]
     write_header = not os.path.exists(csv_path)
     with open(csv_path, "a", newline="") as f:
         w = csv.writer(f)
