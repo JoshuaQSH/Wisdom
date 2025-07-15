@@ -388,12 +388,12 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     
     idc = IDC(
         model,
-        classes,
         args.top_m_neurons,
         args.n_clusters,
         args.use_silhouette,
         args.all_class,
         "KMeans",
+        None,
         cache_path
     )
     
@@ -407,7 +407,6 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     
     results = {}
     results['IDC'] = coverage_rate
-    breakpoint()
 
     df = pd.DataFrame(results, index=[tag])
     save_csv_results(results, "rq2_results_{}_{}_top_{}_{}.csv".format(args.dataset, args.model, args.top_m_neurons, TIMESTAMP), tag=tag)
@@ -425,7 +424,7 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", None,  cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
     selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
@@ -492,7 +491,7 @@ def main():
 
     # Run the coverage suite
     logger.info("=== Running coverage suite ===")
-    # run_coverage_suite(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
+    run_coverage_suite(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, device, classes, logger, tag_pre=args.attr + '_')
     run_idc_suite(args, model, trainable_module_name, train_loader, test_loader, U_IO_loader, U_RO_loader, device, logger, classes)
     
 

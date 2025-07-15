@@ -23,7 +23,7 @@ It includes the following steps:
 5. IDC counting for the selected model and dataset.
 
 Example usage:
-python run_wisdom.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --device cpu --n-cluster 2 --top-m-neurons 6 --test-image plane --end2end --num-samples 0 --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv' --idc-test-all 
+python run_wisdom.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --device cpu --n-cluster 2 --top-m-neurons 6 --test-image plane --end2end --num-samples 0 --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar10.csv' --idc-test-all 
 
 @ Author: Shenghao Qiu
 @ Date: 2025-04-01
@@ -64,20 +64,28 @@ def process_neurons(csv_file, top_k=10, visualize=False):
     
     return top_k_neurons
     
-def idc_count(args, logger, model, classes, test_images, csv_file):
+def idc_count(args, logger, model, classes, train_loader, test_images, csv_file):
     if args.use_silhouette:
         cluster_info = "silhouette"
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    # IDC pipeline
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
+    
+    extra = dict(
+        n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
     top_k_neurons = process_neurons(csv_file, args.top_m_neurons, True)
-    activation_values, selected_activations = idc.get_activations_model_sample(test_images, top_k_neurons)
-    kmeans_comb = idc.cluster_activation_values_all(selected_activations)
+    activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
+    selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
+    cluster_groups = idc.cluster_activation_values_all(selected_activations)
+    
     coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole(test_images, 
                         top_k_neurons,
-                        kmeans_comb)
+                        cluster_groups)
     
     logger.info("#Testing Samples: %d", len(test_images))
     logger.info("Attribution Method: %s", "WISDOM")
@@ -86,18 +94,25 @@ def idc_count(args, logger, model, classes, test_images, csv_file):
     logger.info("Coverage Rate: %.6f%%", coverage_rate * 100)
 
 
-def idc_count_dataloader(args, logger, model, classes, testloader, csv_file):
+def idc_count_dataloader(args, logger, model, classes, trainloader, testloader, csv_file):
     if args.use_silhouette:
         cluster_info = "silhouette"
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
+    
+    extra = dict(
+        n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+
     # IDC pipeline
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
+    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
     top_k_neurons = process_neurons(csv_file, args.top_m_neurons, True)
-    activation_values, selected_activations = idc.get_activations_model_dataloader(testloader, top_k_neurons)
-    kmeans_comb = idc.cluster_activation_values_all(selected_activations)
-    coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, top_k_neurons, kmeans_comb)
+    activation_values, selected_activations = idc.get_activations_model_dataloader(trainloader, top_k_neurons)
+    cluster_groups = idc.cluster_activation_values_all(selected_activations)
+    coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, top_k_neurons, cluster_groups)
     
     logger.info("Attribution Method: %s", "WISDOM")
     logger.info("Total importance combinations: %d", total_combination)
@@ -129,10 +144,10 @@ def run_wisdom(args):
         test_images, test_labels = get_class_data(testloader, classes, args.test_image)
         testloader = extract_class_to_dataloder(test_dataset, classes, args.batch_size, args.test_image)
     
-    idc_count(args, logger, model, classes, test_images, args.csv_file)
+    idc_count(args, logger, model, classes, trainloader, test_images, args.csv_file)
     
     # A dataloader version of the IDC counting
-    # idc_count_dataloader(args, logger, model, classes, testloader, args.csv_file)
+    idc_count_dataloader(args, logger, model, classes, trainloader, testloader, args.csv_file)
     
 if __name__ == '__main__':
     args = parse_args()

@@ -346,7 +346,6 @@ def identify_optimal_method(model, device, original_state, classes, inputs, labe
     
     logger.info(f"Label: {classes[labels[0]]}, Optimal method: {optimal_method}, Accuracy drop: {accuracy_drops[optimal_method]:.4f}, Loss gain: {loss_gains[optimal_method]:.4f}")
 
-    
     return optimal_method, accuracy_drops, sorted_neurons, sorted_neurons_opti
 
 def save_intersection(important_neurons_dict, logger):

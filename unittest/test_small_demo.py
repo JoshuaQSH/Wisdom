@@ -145,12 +145,13 @@ def test_dynamic_clustering_idc_end2end():
         # Instantiate IDC
         idc = IDC(
             model=model,
-            classes=classes,
             top_m_neurons=10,
             n_clusters=2,
             use_silhouette=True,
             test_all_classes=True,
-            clustering_method_name='KMeans'
+            clustering_method_name='KMeans',
+            clustering_params=None,
+            cache_path=None
         )
 
         important_neuron_indices, inorderd_neuron_indices = idc.select_top_neurons_all(attribution, 'fc3')
@@ -227,12 +228,13 @@ def test_dynamic_clustering_idc_end2end_mnist(data_path, saved_model_path, test_
     # Instantiate IDC
     idc = IDC(
         model=model,
-        classes=classes,
         top_m_neurons=10,
         n_clusters=2,
         use_silhouette=True,
         test_all_classes=True,
-        clustering_method_name='KMeans'
+        clustering_method_name='KMeans',
+        clustering_params=None,
+        cache_path=None
     )
     important_neuron_indices, inorderd_neuron_indices = idc.select_top_neurons_all(attribution, 'fc3')
     assert important_neuron_indices is not None

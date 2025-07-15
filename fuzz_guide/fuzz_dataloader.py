@@ -123,8 +123,8 @@ def get_loader(args):
         seed_loader = loader.get_loader(test_data, True)
         TOTAL_CLASS_NUM = 10
     elif args.dataset == 'ImageNet':
-        train_data = CIFAR10Dataset(args, split='train')
-        test_data = CIFAR10Dataset(args, split='val')
+        train_data = ImageNetFuzzDataset(args, image_dir=args.data_path, label2index_file='./datasets/imagenet_labels.json', split='train')
+        test_data = ImageNetFuzzDataset(args, image_dir=args.data_path, label2index_file='./datasets/imagenet_labels.json', split='val')
         loader = DataLoader(args)
         train_loader = loader.get_loader(train_data, False)
         test_loader = loader.get_loader(test_data, False)
@@ -218,6 +218,88 @@ class TorchvisionCIFAR10FuzzDataset(FuzzDataset):
         labels = torch.LongTensor([labels]).squeeze()
         return images, labels
 
+class TorchImageNetFuzzDataset(FuzzDataset):
+    def __init__(self, args, root="./data", split="val"):
+        self.args = args
+        self.root = root
+        self.split = split
+        
+        # Build the path to the split directory
+        self.image_dir = os.path.join(root, split)
+        
+        # Verify the directory exists
+        if not os.path.exists(self.image_dir):
+            raise RuntimeError(f"Dataset directory not found: {self.image_dir}")
+            
+        # Use ImageFolder which automatically handles class directories
+        self.dataset = torchvision.datasets.ImageFolder(
+            root=self.image_dir,
+            transform=transforms.Compose([
+                transforms.Resize(args.image_size),
+                transforms.CenterCrop(args.image_size),
+                transforms.ToTensor(),
+            ])
+        )
+        
+        self.transform = self.dataset.transform
+        self.norm = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+        
+        # Get class names from ImageFolder
+        self.class_list = self.dataset.classes
+        
+        # Apply class and sample limits if specified
+        if hasattr(args, 'num_class') and args.num_class > 0:
+            self.class_list = self.class_list[:args.num_class]
+            # Filter dataset indices to only include selected classes
+            self.valid_indices = self._get_filtered_indices(args.num_class, 
+                                                           getattr(args, 'num_per_class', None))
+        else:
+            self.valid_indices = list(range(len(self.dataset)))
+            
+        self.image_list = self.valid_indices  # indices only
+        print(f'Total {len(self.image_list)} ImageNet Data from {len(self.class_list)} classes.')
+
+    def _get_filtered_indices(self, num_classes, num_per_class=None):
+        """Get indices for a subset of classes and optionally limit samples per class."""
+        class_counts = {}
+        valid_indices = []
+        
+        for idx in range(len(self.dataset)):
+            _, label = self.dataset[idx]
+            
+            # Only include first num_classes
+            if label >= num_classes:
+                continue
+                
+            # Count samples per class
+            if label not in class_counts:
+                class_counts[label] = 0
+                
+            # Limit samples per class if specified
+            if num_per_class is None or class_counts[label] < num_per_class:
+                valid_indices.append(idx)
+                class_counts[label] += 1
+                
+        return valid_indices
+
+    # ---------- hooks required by FuzzDataset ----------
+    def label2index(self, label_name_or_int):
+        """Convert class name to index using ImageFolder's class_to_idx mapping."""
+        if isinstance(label_name_or_int, str):
+            return self.dataset.class_to_idx[label_name_or_int]
+        else:
+            return int(label_name_or_int)  # already an index
+
+    def get_len(self):
+        return len(self.image_list)
+
+    def get_item(self, idx):
+        # Get the actual dataset index from our filtered list
+        actual_idx = self.image_list[idx]
+        images, labels = self.dataset[actual_idx]  # PIL, int (ImageFolder handles loading)
+        labels = torch.LongTensor([labels]).squeeze()
+        return images, labels
+
 class CIFAR10FuzzDataset(FuzzDataset):
     def __init__(self,
                  args,
@@ -270,6 +352,7 @@ class ImageNetFuzzDataset(FuzzDataset):
         print('Total %d Data.' % len(self.image_list))
 
     def label2index(self, label_name):
+        breakpoint()
         return self.label2index_dict[label_name]
 
 if __name__ == '__main__':

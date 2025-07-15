@@ -19,7 +19,6 @@ from torchvision.utils import save_image
 from style_operator import Stylized
 import image_transforms
 
-
 # -----------------------------------------------------------
 # Fuzzer Logger
 # Refers to the NLC: https://github.com/Yuanyuan-Yuan/NeuraL-Coverage/blob/main/utility.py
@@ -71,6 +70,7 @@ class Parameters(object):
     def __init__(self, base_args):
         self.model = base_args.model
         self.dataset = base_args.dataset
+        self.data_path = base_args.data_path
         self.criterion = base_args.criterion
         self.use_sc = self.criterion in ['LSC', 'DSC', 'MDSC']
         self.num_workers = 4
@@ -78,6 +78,7 @@ class Parameters(object):
         self.seed = base_args.seed
         self.guided = base_args.guided if hasattr(base_args, 'guided') else False
         self.saved_model = base_args.saved_model
+        self.wisdom_csv = base_args.wisdom_csv if hasattr(base_args, 'wisdom_csv') else None
         
         self.batch_size = 50
         self.mutate_batch_size = 1
@@ -200,9 +201,12 @@ class Fuzzer:
                     torch_img = self._to_tensor(np.stack([I_new]), norm=True)
                     torch_lbl = torch.tensor([L], device=self.params.device)
 
-                    cov_dict = (self.criterion.calculate(torch_img, torch_lbl)
-                                if self.params.criterion in ['LSC','DSC','MDSC']
-                                else self.criterion.calculate(torch_img))
+                    if self.params.criterion in ['LSC','DSC','MDSC']:
+                        cov_dict = self.criterion.calculate(torch_img, torch_lbl)
+                    elif self.params.criterion in ['Deepimportance', 'Wisdom']:
+                        cov_dict = self.criterion.calculate(torch_img)
+                    else:
+                        cov_dict = self.criterion.calculate(torch_img)
 
                     gain = self.criterion.gain(cov_dict)
                     if self._coverage_gain(gain):

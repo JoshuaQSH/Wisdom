@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader, TensorDataset, ConcatDataset
 from src.attribution import get_relevance_scores_dataloader
 from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, _configure_logging, viz_attr
 from src.idc import IDC
+import src.idc_old
 
 import matplotlib.pyplot as plt
 
@@ -88,7 +89,6 @@ def set_seed(seed: int = 42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
 
 def save_csv_results(updated_column_dict, csv_path='results.csv', tag='original'):
     if os.path.exists(csv_path):
@@ -432,7 +432,11 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
-    
+    extra = dict(
+        n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
     layer_relevance_scores = get_relevance_scores_dataloader(
             model,
             train_loader,
@@ -442,13 +446,13 @@ def idc_coverage(args, model, train_loader, test_loader, classes, trainable_modu
     
     idc = IDC(
         model,
-        classes,
         args.top_m_neurons,
         args.n_clusters,
         args.use_silhouette,
         args.all_class,
         "KMeans",
-        cache_path
+        # extra,
+        False
     )
     
     final_layer = trainable_module_name[-1]
@@ -477,8 +481,14 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
         cluster_info = "silhouette"
     else:
         cluster_info = str(args.n_clusters)
+    extra = dict(
+        n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
     # selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
@@ -584,6 +594,90 @@ def high_param_importance_coverage(test_dataset, args, model,
             res_list.append(res)
             logger.info(f"[Sanity] Results for {tag}: {res}")
 
+def sanity_check_idc(args, model, train_loader, test_loader, classes, logger):
+    model.eval()
+    
+    logger.info("=== SANITY-IDC Original ===")
+    df = pd.read_csv(args.csv_file)
+    df_sorted = df.sort_values(by='Score', ascending=False).head(args.top_m_neurons)
+    top_k_neurons = {}
+    for layer_name, group in df_sorted.groupby('LayerName'):
+        top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    extra = dict(
+        n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
+    
+    idc_new = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
+    idc_old = src.idc_old.IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
+
+    _, s1 = idc_new.get_activations_model_dataloader(train_loader, top_k_neurons)
+    _, s2 = idc_old.get_activations_model_dataloader(train_loader, top_k_neurons)
+
+    s1 = {k: v.half().cpu() for k, v in s1.items()}
+    s2 = {k: v.half().cpu() for k, v in s2.items()}
+
+    # Check if s1 and s2 are equal
+    logger.info("=== Comparing activations between new and old IDC ===")
+    
+    # Check if they have the same keys
+    s1_keys = set(s1.keys())
+    s2_keys = set(s2.keys())
+    keys_equal = s1_keys == s2_keys
+    logger.info(f"Keys equal: {keys_equal}")
+    if not keys_equal:
+        logger.info(f"s1 keys: {s1_keys}")
+        logger.info(f"s2 keys: {s2_keys}")
+        logger.info(f"Keys only in s1: {s1_keys - s2_keys}")
+        logger.info(f"Keys only in s2: {s2_keys - s1_keys}")
+    
+    # Check tensor equality for common keys
+    all_tensors_equal = True
+    common_keys = s1_keys & s2_keys
+    
+    for key in common_keys:
+        tensors_equal = torch.equal(s1[key], s2[key])
+        logger.info(f"Layer '{key}': tensors equal = {tensors_equal}")
+        
+        if not tensors_equal:
+            all_tensors_equal = False
+            # Additional details about the differences
+            s1_shape = s1[key].shape
+            s2_shape = s2[key].shape
+            logger.info(f"  s1[{key}] shape: {s1_shape}")
+            logger.info(f"  s2[{key}] shape: {s2_shape}")
+            
+            if s1_shape == s2_shape:
+                # Calculate some difference metrics
+                diff = (s1[key] - s2[key]).abs()
+                max_diff = diff.max().item()
+                mean_diff = diff.mean().item()
+                logger.info(f"  Max absolute difference: {max_diff}")
+                logger.info(f"  Mean absolute difference: {mean_diff}")
+                
+                # Check if differences are just due to floating point precision
+                close_equal = torch.allclose(s1[key], s2[key], rtol=1e-5, atol=1e-8)
+                logger.info(f"  Close (within tolerance): {close_equal}")
+    
+    logger.info(f"Overall: All activations equal = {keys_equal and all_tensors_equal}")
+
+    # Commented out the cache_path so far for testing purposes
+    cluster_groups_1 = idc_new.cluster_activation_values_all(s1)
+    cluster_groups_2 = idc_old.cluster_activation_values_all(s2)
+    coverage_rate_1, t1, max_coverage_1 = idc_new.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups_1)
+    coverage_rate_2, t2, max_coverage_2 = idc_old.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups_2)
+
+    logger.info(f"Total Combination: {t1}, Max Coverage: {max_coverage_1:.4f}, IDC Coverage: {coverage_rate_1:.4f}, Attribution: WISDOM_New")
+    logger.info(f"Total Combination: {t2}, Max Coverage: {max_coverage_2:.4f}, IDC Coverage: {coverage_rate_2:.4f}, Attribution: WISDOM_Old")
+
+
 def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, classes, logger):
     model.eval()
     
@@ -663,17 +757,19 @@ def main(args):
     logger.info(f"[Sanity] Generated datasets: U_I: {len(U_I_dataset)}, U_R: {len(U_R_dataset)}, U_IO: {len(U_IO_dataset)}, U_RO: {len(U_RO_dataset)}")
 
     # --- A simple acc test for the perturbed datasets -------------------
-    eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger)
+    # eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger)
     
     # ---  Visualization Checks ------------------------------------------
     # viz_attr_check(args, model, test_loader)
-    viz_attr_diff(args, logger, test_loader, U_I_loader, cmap=cmap[0], alpha=0.8, tag='importance')
-    viz_attr_diff(args, logger, test_loader, U_R_loader, cmap=cmap[0], alpha=0.8, tag='random')
-    viz_attr_diff(args, logger, U_I_loader, U_R_loader, cmap=cmap[1], alpha=0.8, tag='mix')
+    # viz_attr_diff(args, logger, test_loader, U_I_loader, cmap=cmap[0], alpha=0.8, tag='importance')
+    # viz_attr_diff(args, logger, test_loader, U_R_loader, cmap=cmap[0], alpha=0.8, tag='random')
+    # viz_attr_diff(args, logger, U_I_loader, U_R_loader, cmap=cmap[1], alpha=0.8, tag='mix')
     
     # ---  Sanity checks -------------------------------------------------
     # sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, classes, logger)
 
+    # ---  IDC new and old test ------------------------------------------
+    sanity_check_idc(args, model, train_loader, test_loader, classes, logger)
 
 # python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth' --dataset imagenet --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_imagenet.csv' --attr lrp --top-m-neurons 10
 # python ./unittest/sanity_check.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/vgg16_cifar10.csv' --attr lrp --top-m-neurons 10

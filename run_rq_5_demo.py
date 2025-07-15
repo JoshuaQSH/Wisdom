@@ -144,12 +144,12 @@ def run_bench(coverage_methods, method, model, layer_size_dict, build_loader, ta
         cache_path = kwargs.get('cache_path', None)
         cov = IDC(
             model,
-            classes,
             top_m_neurons,
             n_clusters,
             use_silhouette,
             all_class,
             "KMeans",
+            None,
             cache_path
         )
 
@@ -227,12 +227,12 @@ def run_scale_bench(model, build_loader, target_loader, classes, device='cpu', *
     cache_path = kwargs.get('cache_path', None)
     cov = IDC(
             model,
-            classes,
             top_m_neurons,
             n_clusters,
             use_silhouette,
             all_class,
             "KMeans",
+            None,
             cache_path
     )
 

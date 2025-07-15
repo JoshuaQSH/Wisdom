@@ -13,12 +13,14 @@ from PIL import Image
 import torchvision.transforms as T
 import numpy as np
 
-from src.utils import make_path, get_model
+from src.utils import make_path, get_model, get_trainable_modules_main, load_ImageNet
 import src.nlc_coverage as coverage
 import src.nlc_tool as tool
 
 from fuzzer_core import Fuzzer, Parameters
-import fuzz_dataloader    
+import fuzz_dataloader
+
+from fuzz_idc import DeepImportance, Wisdom 
 
 """
 Usage:
@@ -42,14 +44,19 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Fuzz - Random baseline driver")
     parser.add_argument('--dataset', type=str, default='CIFAR10',
                             choices=['CIFAR10', 'ImageNet'])
+    parser.add_argument('--data-path', type=str, default='./datasets/', help='Path to the data directory.')
     parser.add_argument('--model', type=str, default='vgg16', help='Model name.')
     parser.add_argument('--device', type=str, default='cpu', help='Device to use for training.')
     parser.add_argument('--saved-model', type=str, default='/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth', 
                         help='Saved model name.')
+    
     # coverage method (ignored in random mode)
     parser.add_argument('--criterion', type=str, default='NC', 
                             choices=['Random', 'NLC', 'NC', 'KMNC', 'SNAC', 'NBC', 'TKNC', 'TKNP', 'CC',
                     'LSC', 'DSC', 'MDSC', 'DeepImportance', 'Wisdom'])
+    parser.add_argument('--wisdom-csv', type=str, default='./saved_files/pre_csv/vgg16_cifar10.csv',
+                        help='CSV file for Wisdom heuristic (if applicable).')
+    
     # mode
     parser.add_argument('--guided', action='store_true', help='Use guided fuzzing.')
 
@@ -81,12 +88,15 @@ def prepare_data_model(args):
     
     if args.dataset == 'CIFAR10':
         # data_set = fuzz_dataloader.CIFAR10FuzzDataset(args, split='test')
-        data_set  = fuzz_dataloader.TorchvisionCIFAR10FuzzDataset(args, root='./datasets', split="test")
+        data_set  = fuzz_dataloader.TorchvisionCIFAR10FuzzDataset(args, root=args.data_path, split="test")
+        TOTAL_CLASS_NUM, train_loader, test_loader, seed_loader = fuzz_dataloader.get_loader(args)
     elif args.dataset == 'ImageNet':
-        data_set = fuzz_dataloader.ImageNetFuzzDataset(args, split='val')
+        # data_set = fuzz_dataloader.ImageNetFuzzDataset(args, image_dir=args.data_path, label2index_file='./datasets/imagenet_labels.json', split='val')
+        data_set = fuzz_dataloader.TorchImageNetFuzzDataset(args, root=args.data_path, split="val")
+        train_loader, test_loader, train_dataset, val_dataset, classes = load_ImageNet(batch_size=args.batch_size, root=args.data_path, num_workers=2, use_val=False, label_path='./datasets/imagenet_labels.json')
+        TOTAL_CLASS_NUM = len(classes)
     
-    TOTAL_CLASS_NUM, train_loader, test_loader, seed_loader = fuzz_dataloader.get_loader(args)
-    
+    # TOTAL_CLASS_NUM, train_loader, test_loader, seed_loader = fuzz_dataloader.get_loader(args)
     image_list, label_list = data_set.build()
     image_numpy_list = data_set.to_numpy(image_list)
     label_numpy_list = data_set.to_numpy(label_list, False)
@@ -95,8 +105,7 @@ def prepare_data_model(args):
     del label_list
     gc.collect()
     
-    return model, layer_size_dict, TOTAL_CLASS_NUM, train_loader, image_numpy_list, label_numpy_list
-
+    return model, layer_size_dict, TOTAL_CLASS_NUM, train_loader, test_loader, test_loader, image_numpy_list, label_numpy_list
 
 def to_uint8(batch_float):
     return (batch_float.mul(255).clamp(0, 255).to(torch.uint8))
@@ -149,11 +158,9 @@ def compute_metrics(params, seed_imgs, model):
     print(f"\n=== Quality metrics ===")
     print(f"Inception Score (IS): {IS:6.3f}")
     print(f"Fréchet Inception Distance: {FID:6.3f}")
-    print(f"Prediction‑Entropy (nats): {ENT:6.3f}\n")
+    print(f"Prediction-Entropy (nats): {ENT:6.3f}\n")
 
     return IS, FID, ENT
-
-
 
 def main():
     args = parse_args()
@@ -170,7 +177,9 @@ def main():
         'CC': 10 if args.dataset == 'CIFAR10' else 1000,
         'LSA': 10,
         'DSA': 0.1,
-        'MDSA': 10
+        'MDSA': 10,
+        'DeepImportance': [10, 2], # top_m_neurons, n_clusters
+        'Wisdom': [10, 2] # top_m_neurons, n_clusters
     }
     args.exp_name = ('%s-%s-%s' % (args.dataset, args.model, args.criterion))
     print(args.exp_name)
@@ -183,18 +192,27 @@ def main():
     make_path(args.coverage_dir)
     make_path(args.log_dir)
     
-    model, layer_size_dict, num_class, train_loader, image_numpy_list, label_numpy_list = prepare_data_model(args)
+    model, layer_size_dict, num_class, train_loader, test_loader, seed_loader, image_numpy_list, label_numpy_list = prepare_data_model(args)
+    trainable_module, trainable_module_name = get_trainable_modules_main(model)
+    final_layer = trainable_module_name[-1]
+
+    # Coverage method
     if args.use_sc:
         criterion = getattr(coverage, args.criterion)(model, device, layer_size_dict, hyper=hyper_map[args.criterion], min_var=1e-5, num_class=num_class)
     else:
         if args.criterion == 'Random':
-            # TODO: Random will inherit the NC criterion
+            # Random will inherit the NC criterion
             criterion = getattr(coverage, 'NC')(model, device, layer_size_dict, hyper=hyper_map['NC'])
+        elif args.criterion == 'DeepImportance':
+            criterion = DeepImportance(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, final_layer, device)
+        elif args.criterion == 'Wisdom':
+            criterion = Wisdom(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, args.wisdom_csv)
         else:
             criterion = getattr(coverage, args.criterion)(model, device, layer_size_dict, hyper=hyper_map[args.criterion])
     
-    criterion.build(train_loader)
-    if args.criterion not in ['CC', 'TKNP', 'LSC', 'DSC', 'MDSC']:
+    if args.criterion not in ['DeepImportance', 'Wisdom']:
+        criterion.build(train_loader)
+    if args.criterion not in ['CC', 'TKNP', 'LSC', 'DSC', 'MDSC', 'DeepImportance', 'Wisdom']:
         criterion.assess(train_loader)
     
     initial_coverage = copy.deepcopy(criterion.current)
@@ -225,7 +243,11 @@ def main():
             w.writerow(header)
         w.writerow(row)
     print(f"Results saved to {csv_path}")
-    
+
+# [vgg16-cifar10, resnet18-cifar10, resnet18-imagenet]
+# python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --data-path ./datasets/CIFAR10/ --model vgg16 --saved-model /torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth --criterion Wisdom --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
+# python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --data-path ./datasets/CIFAR10/ --model resnet18 --saved-model /torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth --criterion Wisdom --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
+# python ./fuzz_guide/run_fuzz.py --dataset ImageNet --data-path /data/shenghao/dataset/ImageNet/ --model resnet18 --saved-model /torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth --criterion Random --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
 if __name__ == '__main__':
     main()
     print("Fuzzing completed.")

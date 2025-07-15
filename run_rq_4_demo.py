@@ -223,12 +223,12 @@ def deepimportance_coverage(args, model, trainable_module_name, classes, layer_r
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
     idc = IDC(
         model,
-        classes,
         args.top_m_neurons,
         args.n_clusters,
         args.use_silhouette,
         args.all_class,
         "KMeans",
+        None,
         cache_path
     )
     final_layer = trainable_module_name[-1]    
@@ -249,7 +249,7 @@ def wisdom_coverage(args, model, classes, wisdom_k_neurons, train_loader, target
     else:
         cluster_info = str(args.n_clusters)
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", cache_path)
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", None, cache_path)
     activation_values, selected_activations_train = idc.get_activations_model_dataloader(train_loader, wisdom_k_neurons)
     selected_activations_train = {k: v.half().cpu() for k, v in selected_activations_train.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations_train)
