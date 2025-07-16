@@ -12,7 +12,7 @@ import os
 
 import torch
 import numpy as np
-from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, MeanShift, SpectralClustering
+from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
 from .utils import get_layer_by_name, save_cluster_groups, load_cluster_groups
@@ -318,7 +318,7 @@ class IDC:
         # scores_np = scores.cpu().detach().numpy().reshape(-1, 1)
         silhouette_list = []
         for n_clusters in range(min_k, max_k):
-            clusterer = self.clustering_method(n_clusters=n_clusters, random_state=10)
+            clusterer = KMeans(n_clusters=n_clusters, random_state=10)
             cluster_labels = clusterer.fit_predict(scores)
             silhouette_avg = silhouette_score(scores, cluster_labels)
             silhouette_list.append(silhouette_avg)
@@ -343,7 +343,7 @@ class IDC:
                     optimal_k = self.find_optimal_clusters(activation_values_single.cpu().numpy().reshape(-1, 1), 2, 10)
                 else:
                     optimal_k = self.n_clusters
-                cluster_groups.append(self.clustering_method(n_clusters=optimal_k).fit(activation_values_single[:, i].cpu().numpy().reshape(-1, 1)))
+                cluster_groups.append(KMeans(n_clusters=optimal_k).fit(activation_values_single[:, i].cpu().numpy().reshape(-1, 1)))
 
         elif isinstance(layer_name, torch.nn.Conv2d):
             activation_values_single = torch.mean(activation_values_single, dim=[2, 3])
@@ -352,7 +352,7 @@ class IDC:
                 if self.use_silhouette:
                     self.n_clusters = self.find_optimal_clusters(activation_values_single.cpu().numpy().reshape(-1, 1), 2, 10)
 
-                cluster_groups.append(self.clustering_method(n_clusters=self.n_clusters).fit(activation_values_single[:, i].cpu().numpy().reshape(-1, 1)))
+                cluster_groups.append(KMeans(n_clusters=self.n_clusters).fit(activation_values_single[:, i].cpu().numpy().reshape(-1, 1)))
         else:
             raise ValueError(f"Invalid layer name: {layer_name}")
         
@@ -366,9 +366,9 @@ class IDC:
     def cluster_activation_values_all(self, activation_dict): 
         from src.clustering import make
 
-        # if self.cache_path and os.path.exists(self.cache_path):
-        #     print(f"[INFO] Loading cached clusters from {self.cache_path}")
-        #     return load_cluster_groups(self.cache_path)
+        if self.cache_path and os.path.exists(self.cache_path):
+            print(f"[INFO] Loading cached clusters from {self.cache_path}")
+            return load_cluster_groups(self.cache_path)
         
         all_activations = []
         for layer_name, activation_values in activation_dict.items():
@@ -385,7 +385,6 @@ class IDC:
         for i in range(total_neurons):
             if self.use_silhouette:
                 self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1), 2, 10)
-            # cluster_ = self.clustering_method(n_clusters=self.n_clusters, random_state=42).fit(all_activations_tensor[:, i].reshape(-1, 1).cpu().numpy())
             # cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
             cluster_ = make(self.clustering_method_name, **self.clustering_params).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
             cluster_groups.append(cluster_)
