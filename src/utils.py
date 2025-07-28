@@ -736,7 +736,6 @@ def is_neuron_activated(activation_value, threshold=0):
 def is_conv2d_neuron_activated(activation_map, threshold=0):
     return (activation_map > threshold).any().item()
 
-
 if __name__ == '__main__':
     # unit test - model
     args = parse_args()

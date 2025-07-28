@@ -188,7 +188,6 @@ class Fuzzer:
         B, B_label, B_id = self._select_next(T)   # current batch
         self.epoch = 0
         start = time.time()
-
         while not self._should_stop():
             if self.epoch % 500 == 0:
                 self.logger.update(self)
@@ -206,7 +205,7 @@ class Fuzzer:
 
                 for _ in range(n_trials):
                     I_new, _op = self._mutate(I)
-
+                    
                     # random mode keeps any *changed* mutation
                     if not self.guided:
                         if self._is_changed(I, I_new):

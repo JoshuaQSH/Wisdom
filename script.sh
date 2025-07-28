@@ -65,9 +65,9 @@ case "$MODE" in
         echo "Running Use Case 2: Prepare the data..."
         python3 prepare_data.py \
             --model $MODEL_NAME \
-            --saved_model $SAVED_MODEL \
+            --saved-model $saved-model \
             --dataset $DATASET_NAME \
-            --data_path $DATASET_DIR \
+            --data-path $DATASET_DIR \
             --batch-size 2 \
             --device $DEVICE \
             --top-m-neurons $TOP_M \
@@ -80,9 +80,9 @@ case "$MODE" in
         echo "Running Use Case 3..."
         python3 run_wisdom.py \
             --model $MODEL_NAME \
-            --saved_model $SAVED_MODEL \
+            --saved-model $saved-model \
             --dataset $DATASET_NAME \
-            --data_path $DATASET_DIR \
+            --data-path $DATASET_DIR \
             --device $DEVICE \
             --top-m-neurons $TOP_M \
             --use-silhouette \

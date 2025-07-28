@@ -47,6 +47,7 @@ class BaseDI:
             )
         else:
             raise TypeError(f"Unsupported input type: {type(input_data)}. Expected DataLoader or Tensor.")
+        
         return {"ratio": coverage_rate}
 
     def gain(self, cov_dict):

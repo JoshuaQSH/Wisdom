@@ -31,6 +31,23 @@ start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
 acts = defaultdict(list)
 
+cluster_name_all = ["KMeans", "MiniBatchKMeans", "BisectingKMeans", 
+                    "AgglomerativeClustering", "SpectralClustering", "DBSCAN", 
+                    "OPTICS", "HDBSCAN", "MeanShift", "AffinityPropagation", "Birch"]
+clustering_params_all = {
+    "KMeans": {"n_clusters": 2, "random_state": 42, "n_init": 10},
+    "MiniBatchKMeans": {"n_clusters": 2, "batch_size": 32, "max_iter": 100, "random_state": 42},
+    "BisectingKMeans": {"n_clusters": 2, "random_state": 42, "n_init": 10},
+    "AgglomerativeClustering": {"n_clusters": 2, "linkage": "ward", "metric": "euclidean"},
+    "SpectralClustering": {"n_clusters": 2, "affinity": "rbf", "assign_labels": "kmeans"},
+    "DBSCAN": {"eps": 0.1, "min_samples": 10, "metric": "euclidean"},
+    "OPTICS": {"min_samples": 2, "xi": 0.05, "min_cluster_size": 2},
+    "HDBSCAN": {"min_cluster_size": 2, "min_samples": 2, "cluster_selection_epsilon": 0.01, "cluster_selection_method": "eom"},
+    "MeanShift": {"bandwidth": 1.7, "bin_seeding": True, "cluster_all": False, "max_iter": 300, "min_bin_freq": 1},
+    "AffinityPropagation": {"damping": 0.9, "preference": -50},
+    "Birch": {"threshold": 0.5, "n_clusters": 2},
+}
+
 def analyze_model(model, input_size=(1, 3, 224, 224)):
     total_params = sum(p.numel() for p in model.parameters())
     learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -426,17 +443,22 @@ def eval_model(model, test_loader, U_I_loader, U_R_loader, device, logger):
 # -----------------------------------------------------------
 # IDC coverage testing
 # -----------------------------------------------------------
-def idc_coverage(args, model, train_loader, test_loader, trainable_module_name, device, logger, tag='original'):
+def idc_coverage(args, model, train_loader, test_loader, trainable_module_name, device, logger, cluster_method_name, tag='original'):
+    
     if args.use_silhouette:
-        cluster_info = "silhouette"
+        cluster_info = f"_{cluster_method_name}_silhouette_"
     else:
-        cluster_info = str(args.n_clusters)
-    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
-    extra = dict(
-        n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
-        random_state = 42,   # fixes RNG
-        n_init = 10    # keep best of 10 centroid seeds
-    )
+        cluster_info = f"_{cluster_method_name}_"
+
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + cluster_info + "deepimportance_clusters.pkl"
+    extra = clustering_params_all[cluster_method_name]
+
+    # extra = dict(
+    #     n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+    #     random_state = 42,   # fixes RNG
+    #     n_init = 10    # keep best of 10 centroid seeds
+    # )
+
     layer_relevance_scores = get_relevance_scores_dataloader(
             model,
             train_loader,
@@ -450,7 +472,7 @@ def idc_coverage(args, model, train_loader, test_loader, trainable_module_name, 
         args.n_clusters,
         args.use_silhouette,
         args.all_class,
-        "KMeans",
+        cluster_method_name,
         extra,
         cache_path
     )
@@ -471,24 +493,27 @@ def idc_coverage(args, model, train_loader, test_loader, trainable_module_name, 
     logger.info(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: {args.attr}")
     return coverage_rate
 
-def wisdom_coverage(args, model, train_loader, test_loader, logger, tag='original'):
+def wisdom_coverage(args, model, train_loader, test_loader, logger, cluster_method_name, tag='original'):
     df = pd.read_csv(args.csv_file)
     df_sorted = df.sort_values(by='Score', ascending=False).head(args.top_m_neurons)
     top_k_neurons = {}
     for layer_name, group in df_sorted.groupby('LayerName'):
         top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
+    
     if args.use_silhouette:
-        cluster_info = "silhouette"
+        cluster_info = f"_{cluster_method_name}_silhouette_"
     else:
-        cluster_info = str(args.n_clusters)
-    extra = dict(
-        n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
-        random_state = 42,   # fixes RNG
-        n_init = 10    # keep best of 10 centroid seeds
-    )
+        cluster_info = f"_{cluster_method_name}_"
 
-    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_wisdom_clusters.pkl"
-    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
+    extra = clustering_params_all[cluster_method_name]
+    # extra = dict(
+    #     n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+    #     random_state = 42,   # fixes RNG
+    #     n_init = 10    # keep best of 10 centroid seeds
+    # )
+
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + cluster_info + "wisdom_clusters.pkl"
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, cluster_method_name, extra, cache_path)
 
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
     # selected_activations = {k: v.cpu() for k, v in selected_activations.items()}
@@ -505,14 +530,14 @@ def wisdom_coverage(args, model, train_loader, test_loader, logger, tag='origina
 
 # thin wrapper for running IDC and WISDOM on dataloader
 def _run_idc_for_loader(tag, loader, args, model,
-                        train_loader, trainable_module_name,
-                        device, logger):
+                        train_loader, trainable_module_name, 
+                        cluster_method_name, device, logger):
     """Compute both IDC and WISDOM on the given loader."""
     idc_val = idc_coverage(args, model, train_loader,
-                           loader,
-                           trainable_module_name, device, logger, tag=tag)
+                           loader, trainable_module_name, device, 
+                           logger, cluster_method_name, tag=tag)
     wisdom_val = wisdom_coverage(args, model, train_loader,
-                                 loader, logger, tag=tag)
+                                 loader, logger, cluster_method_name, tag=tag)
     return dict(IDC=idc_val, WISDOM=wisdom_val)
 
 # -----------------------------------------------------------
@@ -520,7 +545,7 @@ def _run_idc_for_loader(tag, loader, args, model,
 # -----------------------------------------------------------
 def duplicated_testset_coverage(test_dataset, args, model,
                                 train_loader, trainable_module_name,
-                                device, logger):
+                                cluster_method_name, device, logger):
     """U_O + U_O  (concatenated)"""
     dup_dataset = ConcatDataset([test_dataset, test_dataset])
     dup_loader = DataLoader(dup_dataset, batch_size=args.batch_size, shuffle=False)
@@ -529,14 +554,14 @@ def duplicated_testset_coverage(test_dataset, args, model,
     return _run_idc_for_loader("UO_DUP",
                                dup_loader, args, model,
                                train_loader, trainable_module_name,
-                               device, logger)
+                               cluster_method_name, device, logger)
 
 # -----------------------------------------------------------
 # 2.  PARTIAL-IMPORTANCE DATASETS:  U_O + U_I[:N]
 # -----------------------------------------------------------
 def partial_importance_coverage(test_dataset, U_I_dataset, args, model,
                                 train_loader, trainable_module_name,
-                                device, logger,
+                                device, logger, cluster_method_name,
                                 sizes=(100, 500, 1000, 2000)):
     """
     Build several datasets of the form  U_O + U_I[:N]
@@ -553,7 +578,7 @@ def partial_importance_coverage(test_dataset, U_I_dataset, args, model,
                                 batch_size=args.batch_size, shuffle=False)
         res = _run_idc_for_loader(tag, concat_ld, args, model, 
                                   train_loader, trainable_module_name,
-                                  device, logger)
+                                  cluster_method_name, device, logger)
         results[tag] = res
     return results
 
@@ -562,8 +587,8 @@ def partial_importance_coverage(test_dataset, U_I_dataset, args, model,
 # -----------------------------------------------------------
 def high_param_importance_coverage(test_dataset, args, model,
                                    test_loader,
-                                   train_loader, trainable_module_name,
-                                   device, logger,
+                                   train_loader, trainable_module_name, 
+                                   cluster_method_name, device, logger,
                                    new_topk=[0.05, 0.1, 0.2, 0.25, 0.3, 0.5], new_std=[0.1, 0.2, 0.3, 0.4, 0.5]):
     """
     Re‑generate U_I with a *higher* top‑k fraction or noise std,
@@ -590,7 +615,7 @@ def high_param_importance_coverage(test_dataset, args, model,
             tag = f"UO_UI_highT_Top_{k_}_std_{std_}"
             res = _run_idc_for_loader(tag, U_IO_loader, args, model,
                                train_loader, trainable_module_name,
-                               device, logger)
+                               cluster_method_name, device, logger)
             res_list.append(res)
             logger.info(f"[Sanity] Results for {tag}: {res}")
 
@@ -640,6 +665,25 @@ def keys_diff(s1, s2, logger):
     
     logger.info(f"Overall: All activations equal = {keys_equal and all_tensors_equal}")
 
+def normal_pipeline(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, trainable_module_name, cluster_method_name, device, logger):
+    model.eval()
+    
+    logger.info("=== NORMAL RUN COVERAGE ===")
+    origin_res = _run_idc_for_loader("U_O", test_loader, args, model,
+                        train_loader, trainable_module_name, cluster_method_name,
+                        device, logger)
+    logger.info(origin_res)
+    
+    random_res = _run_idc_for_loader(f"{args.attr}_U_O_UR", U_RO_loader, args, model,
+                        train_loader, trainable_module_name, cluster_method_name,
+                        device, logger)
+    logger.info(random_res)
+    
+    new_res = _run_idc_for_loader(f"{args.attr}_U_O_UI", U_IO_loader, args, model,
+                        train_loader, trainable_module_name, cluster_method_name,
+                        device, logger)
+    logger.info(new_res)
+
 def sanity_check_idc(args, model, train_loader, test_loader, logger):
     model.eval()
     
@@ -682,37 +726,37 @@ def sanity_check_idc(args, model, train_loader, test_loader, logger):
     # logger.info(f"Total Combination: {t2}, Max Coverage: {max_coverage_2:.4f}, IDC Coverage: {coverage_rate_2:.4f}, Attribution: WISDOM_Old")
 
 
-def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, logger):
+def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, cluster_method_name, device, logger):
     model.eval()
     
     logger.info("=== SANITY‑CHECK COVERAGE ===")
     origin_res = _run_idc_for_loader("U_O", test_loader, args, model,
                         train_loader, trainable_module_name,
-                        device, logger)
+                        cluster_method_name, device, logger)
     logger.info(origin_res)
     
     dup_res = duplicated_testset_coverage(test_dataset,
                                         args, model,
                                         train_loader, trainable_module_name,
-                                        device, logger)
+                                        cluster_method_name, device, logger)
 
     logger.info(dup_res)
     
     random_res = _run_idc_for_loader(f"{args.attr}_U_O_UR", U_RO_loader, args, model,
                         train_loader, trainable_module_name,
-                        device, logger)
+                        cluster_method_name, device, logger)
     logger.info(random_res)
     
     new_res = _run_idc_for_loader(f"{args.attr}_U_O_UI", U_IO_loader, args, model,
                         train_loader, trainable_module_name,
-                        device, logger)
+                        cluster_method_name, device, logger)
     logger.info(new_res)
     
     
     partial_res = partial_importance_coverage(test_dataset, U_I_dataset,
                                             args, model,
                                             train_loader, trainable_module_name,
-                                            device, logger,
+                                            cluster_method_name, device, logger,
                                             sizes=(100, 500, 1000, 2000))
     logger.info(partial_res)
     
@@ -720,7 +764,7 @@ def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loade
     high_param_importance_coverage(test_dataset,
                                     args, model, test_loader,
                                     train_loader, trainable_module_name,
-                                    device, logger,
+                                    cluster_method_name, device, logger,
                                     new_topk=[0.05, 0.1, 0.2, 0.25, 0.3, 0.5],
                                     new_std=[0.1, 0.2, 0.3, 0.4, 0.5])
 
@@ -760,6 +804,8 @@ def main(args):
     U_I_loader, U_R_loader, U_IO_loader, U_RO_loader, U_I_dataset, U_R_dataset, U_IO_dataset, U_RO_dataset = get_generated_datasets(args, model, test_loader, test_dataset, device)
     logger.info(f"[Sanity] Generated datasets: U_I: {len(U_I_dataset)}, U_R: {len(U_R_dataset)}, U_IO: {len(U_IO_dataset)}, U_RO: {len(U_RO_dataset)}")
 
+    cluster_method_name = cluster_name_all[8]
+
     # --- A simple acc test for the perturbed datasets -------------------
     # eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger)
     
@@ -770,11 +816,15 @@ def main(args):
     # viz_attr_diff(args, logger, U_I_loader, U_R_loader, cmap=cmap[1], alpha=0.8, tag='mix')
     
     # ---  Sanity checks -------------------------------------------------
-    # sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, device, logger)
+    # sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, cluster_method_name, device, logger)
 
     # ---  IDC new and old test ------------------------------------------
-    sanity_check_idc(args, model, train_loader, test_loader, logger)
+    # sanity_check_idc(args, model, train_loader, test_loader, logger)
 
+    # ---  Normal pipeline for IDC and WISDOM ---------------------------
+    normal_pipeline(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, trainable_module_name, cluster_method_name, device, logger)
+
+# python ./unittest/sanity_check.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_mnist.csv' --attr lrp --top-m-neurons 10
 # python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth' --dataset imagenet --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_imagenet.csv' --attr lrp --top-m-neurons 10
 # python ./unittest/sanity_check.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/vgg16_cifar10.csv' --attr lrp --top-m-neurons 10
 # python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_cifar10.csv' --attr lrp --top-m-neurons 10

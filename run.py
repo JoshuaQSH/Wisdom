@@ -131,15 +131,26 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Task 2-2: Select & cluster activations & Testing IDC coverage
     # ------------------------------------------------------------------
+    extra = dict(
+        n_clusters = args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
+        random_state = 42,   # fixes RNG
+        n_init = 10    # keep best of 10 centroid seeds
+    )
+    if args.use_silhouette:
+        cluster_info = "silhouette"
+    else:
+        cluster_info = str(args.n_clusters)
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + "_cluster_" + cluster_info + "_deepimportance_clusters.pkl"
     
     idc = IDC(
         model,
-        classes,
         args.top_m_neurons,
         args.n_clusters,
         args.use_silhouette,
         args.all_class,
         "KMeans",
+        extra,
+        cache_path
     )
     
     if testing_mode['end2end']:
@@ -156,7 +167,8 @@ def main() -> None:
                 
         if not testing_mode['all_class'] and not testing_mode['class_iters']:
             logger.info("Testing Samples: %s", args.test_image)
-            coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, important_neuron_indices, cluster_groups)
+           #  coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, important_neuron_indices, cluster_groups)
+            coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole(args.test_image, important_neuron_indices, cluster_groups)
             logger.info("Attribution Method: %s", args.attr)
             logger.info("Total INCC combinations: %d", total_combination)
             logger.info("Max Coverage (the best we can achieve): %.6f%%", max_coverage * 100)
@@ -261,13 +273,14 @@ def main() -> None:
         else:
             logger.info("Testing all classes.")
             # IDC coverage computation for a specific layer - dataloader
-            coverage_rate, total_combination, max_coverage = idc.compute_idc_test_dataloader(
-                dataloader=testloader,
-                indices=important_neuron_indices,
-                cluster_groups=cluster_groups,
-                net_layer=trainable_module[args.layer_index],
-                layer_name=trainable_module_name[args.layer_index],
-            )
+            coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, important_neuron_indices, cluster_groups)
+            # coverage_rate, total_combination, max_coverage = idc.compute_idc_test_dataloader(
+            #     dataloader=testloader,
+            #     indices=important_neuron_indices,
+            #     cluster_groups=cluster_groups,
+            #     net_layer=trainable_module[args.layer_index],
+            #     layer_name=trainable_module_name[args.layer_index],
+            # )
             logger.info("Attribution Method: %s", args.attr)
             logger.info("Total INCC combinations: %d", total_combination)
             logger.info("Max Coverage (the best we can achieve): %.6f%%", max_coverage * 100)

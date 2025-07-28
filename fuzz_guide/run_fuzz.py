@@ -11,6 +11,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 
 from PIL import Image
 import torchvision.transforms as T
+from torchvision import models, transforms
 import numpy as np
 
 from src.utils import make_path, get_model, get_trainable_modules_main, load_ImageNet
@@ -20,12 +21,13 @@ import src.nlc_tool as tool
 from fuzzer_core import Fuzzer, Parameters
 import fuzz_dataloader
 
-from fuzz_idc import DeepImportance, Wisdom 
+from fuzz_idc import DeepImportance, Wisdom
+
 
 """
 Usage:
 - Random baseline fuzzing for CIFAR10 dataset using VGG16 model.
-$ python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --model vgg16 --saved-model /torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth --criterion NC --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0'
+$ python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --model vgg16 --saved-model /torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth --criterion Wisdom --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0'
 - Coverage method guided fuzzing is not used in this script, but can be enabled by setting the --guided flag.
 $ python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --model vgg16 --saved-model /torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth --criterion NC --output-dir ./fuzz_guide/fuzz_outputs/ --guided --log-dir ./logs --seed 42 --device 'cuda:0'
 
@@ -44,7 +46,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Fuzz - Random baseline driver")
     parser.add_argument('--dataset', type=str, default='CIFAR10',
                             choices=['CIFAR10', 'ImageNet'])
-    parser.add_argument('--data-path', type=str, default='./datasets/', help='Path to the data directory.')
+    parser.add_argument('--data-path', type=str, default='./datasets/CIFAR10/', help='Path to the data directory.')
     parser.add_argument('--model', type=str, default='vgg16', help='Model name.')
     parser.add_argument('--device', type=str, default='cpu', help='Device to use for training.')
     parser.add_argument('--saved-model', type=str, default='/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth', 
@@ -111,7 +113,46 @@ def prepare_data_model(args):
 def to_uint8(batch_float):
     return (batch_float.mul(255).clamp(0, 255).to(torch.uint8))
 
-def compute_metrics(params, seed_imgs, model):
+def preprocess_image(image, size=(299,299)):
+    transform = transforms.Compose([transforms.Resize(size), transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                         std=[0.229, 0.224, 0.225])
+                                    ])
+    return transform(image).unsqueeze(0)
+
+def calculate_fid_score(image1path, image2path):
+    # load images
+    image1 = Image.open(image1path).convert("RGB")
+    image2 = Image.open(image2path).convert("RGB")
+
+    # using Inception model to get high-level feature representation
+    model = models.inception_v3(weights='IMAGENET1K_V1', transform_input=False)
+    model.fc = torch.nn.Identity()
+    model.eval()
+
+    image1 = preprocess_image(image1)
+    image2 = preprocess_image(image2)
+
+    with torch.no_grad():
+        feature1 = model(image1).numpy().squeeze()
+        feature2 = model(image2).numpy().squeeze()
+
+    # compute mean and covariance for the two images
+    mean1 = np.mean(feature1, axis=0)
+    mean2 = np.mean(feature2, axis=0)
+    cov1 = np.cov(feature1, rowvar=False)
+    cov2 = np.cov(feature2, rowvar=False)
+
+    # compute FID score
+    mean_diff = np.sum(mean1-mean2) ** 2
+    cov_mean = np.sqrt(cov1.dot(cov2))
+    if np.iscomplexobj(cov_mean):
+        cov_mean = cov_mean.real
+    fid_score = mean_diff + (cov1 + cov2 - 2 * cov_mean)
+
+    return fid_score
+
+def compute_metrics(params, seed_imgs, model, is_torchmetrics=False):
     device = next(model.parameters()).device
     
     # 1) Collect ALL newly accepted mutations (*.jpg dumped by Fuzzer)
@@ -132,18 +173,20 @@ def compute_metrics(params, seed_imgs, model):
     IS = iscore.compute()[0].item() 
 
     # 3) --- FID  (against the 1 000 seeds) ------------------------------
-    fid = FrechetInceptionDistance(feature=2048).to(device)
-    
-    # real = seeds (already in tensor form, [0,1])
-    seeds_np = np.array(seed_imgs)
-    seed_stack = torch.tensor(seeds_np, dtype=torch.uint8).permute(0, 3, 1, 2)  # (1000,3,H,W)
-    # seed_stack = torch.stack(seed_imgs)            # (1000,3,H,W)
-    for i in range(0, len(seed_stack), 64):
-        fid.update(seed_stack[i:i+64].to(device), real=True)
-    # fake = mutations
-    for i in range(0, len(mutated), 64):
-        fid.update(to_uint8(mutated[i:i+64]).to(device), real=False)
-    FID = fid.compute().item()
+
+    # Using the torchmetrics implementation of FID
+    if is_torchmetrics:
+        fid = FrechetInceptionDistance(feature=2048).to(device)
+        seeds_np = np.array(seed_imgs)
+        seed_stack = torch.tensor(seeds_np, dtype=torch.uint8).permute(0, 3, 1, 2)  # (1000,3,H,W)
+        for i in range(0, len(seed_stack), 64):
+            fid.update(seed_stack[i:i+64].to(device), real=True)
+        for i in range(0, len(mutated), 64):
+            fid.update(to_uint8(mutated[i:i+64]).to(device), real=False)
+        FID = fid.compute().item()
+    else:
+        # TODO: Using the custom FID implementation
+        FID = calculate_fid_score(seed_imgs[0], mutated[0])
 
     # 4) --- Entropy (model’s top‑1 predictions) -------------------------
     ent_loader = torch.utils.data.DataLoader(mutated, batch_size=64, shuffle=False)
@@ -212,7 +255,6 @@ def main():
             criterion = DeepImportance(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, final_layer, device)
         elif args.criterion == 'Wisdom':
             criterion = Wisdom(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, args.wisdom_csv)
-            breakpoint()
         else:
             criterion = getattr(coverage, args.criterion)(model, device, layer_size_dict, hyper=hyper_map[args.criterion])
     

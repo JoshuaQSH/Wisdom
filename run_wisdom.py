@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 from src.utils import load_CIFAR, load_MNIST, load_ImageNet, get_class_data, parse_args, get_model, get_trainable_modules_main, eval_model_dataloder, extract_random_class, extract_class_to_dataloder, _configure_logging
 from src.idc import IDC
 
+from torch.utils.data import DataLoader, random_split
+
+
 '''
 This script is for IDC pipeline with the selected model and dataset given the important neurons that being chosen from either:
  - Selector
@@ -24,6 +27,7 @@ It includes the following steps:
 
 Example usage:
 python run_wisdom.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --device cpu --n-cluster 2 --top-m-neurons 6 --test-image plane --end2end --num-samples 0 --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar10.csv' --idc-test-all 
+python run_wisdom.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path '/data/shenghao/dataset/' --device cpu --n-cluster 2 --top-m-neurons 10 --all-class --end2end --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_mnist.csv' --idc-test-all 
 
 @ Author: Shenghao Qiu
 @ Date: 2025-04-01
@@ -64,7 +68,7 @@ def process_neurons(csv_file, top_k=10, visualize=False):
     
     return top_k_neurons
     
-def idc_count(args, logger, model, classes, train_loader, test_images, csv_file):
+def idc_count(args, logger, model, train_loader, test_images, csv_file, device):
     if args.use_silhouette:
         cluster_info = "silhouette"
     else:
@@ -77,12 +81,12 @@ def idc_count(args, logger, model, classes, train_loader, test_images, csv_file)
         n_init = 10    # keep best of 10 centroid seeds
     )
 
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
     top_k_neurons = process_neurons(csv_file, args.top_m_neurons, True)
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
     selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations)
-    
+    test_images = test_images.to(device)
     coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole(test_images, 
                         top_k_neurons,
                         cluster_groups)
@@ -94,7 +98,7 @@ def idc_count(args, logger, model, classes, train_loader, test_images, csv_file)
     logger.info("Coverage Rate: %.6f%%", coverage_rate * 100)
 
 
-def idc_count_dataloader(args, logger, model, classes, trainloader, testloader, csv_file):
+def idc_count_dataloader(args, logger, model, trainloader, testloader, csv_file):
     if args.use_silhouette:
         cluster_info = "silhouette"
     else:
@@ -108,9 +112,10 @@ def idc_count_dataloader(args, logger, model, classes, trainloader, testloader, 
     )
 
     # IDC pipeline
-    idc = IDC(model, classes, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
+    idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, "KMeans", extra, cache_path)
     top_k_neurons = process_neurons(csv_file, args.top_m_neurons, True)
     activation_values, selected_activations = idc.get_activations_model_dataloader(trainloader, top_k_neurons)
+    selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations)
     coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(testloader, top_k_neurons, cluster_groups)
     
@@ -136,19 +141,36 @@ def run_wisdom(args):
     accuracy, avg_loss, f1 = eval_model_dataloder(model, testloader, device)
     logger.info("Model test Acc: {}, Loss: {}, F1 Score: {}".format(accuracy, avg_loss, f1))
 
-    # IDC pipeline
-    if args.num_samples != 0:
-        # Sample the testset data for the IDC coverage
-        subset_loader, test_images, test_labels = extract_random_class(test_dataset, test_all=args.idc_test_all, num_samples=args.num_samples)
-    else:
-        test_images, test_labels = get_class_data(testloader, classes, args.test_image)
-        testloader = extract_class_to_dataloder(test_dataset, classes, args.batch_size, args.test_image)
+    # # IDC pipeline
+    # if args.num_samples != 0:
+    #     # Sample the testset data for the IDC coverage
+    #     subset_loader, test_images, test_labels = extract_random_class(test_dataset, test_all=args.idc_test_all, num_samples=args.num_samples)
+    # else:
+    #     logger.info("Testing with classes: %s", args.test_image)
+    #     test_images, test_labels = get_class_data(testloader, classes, args.test_image)
+    #     testloader = extract_class_to_dataloder(test_dataset, classes, args.batch_size, args.test_image)
     
-    idc_count(args, logger, model, classes, trainloader, test_images, args.csv_file)
-    
+
+    # full_ds = trainloader.dataset
+    # n_total = len(full_ds)
+    # n_sample  = n_total // 200
+    # g = torch.Generator().manual_seed(42)  # make the split reproducible
+    # new_ds, _ = random_split(full_ds, [n_sample, n_total - n_sample], generator=g)
+    # sample_train_loader = DataLoader(
+    #     new_ds,
+    #     batch_size=trainloader.batch_size,
+    #     num_workers=trainloader.num_workers,
+    #     pin_memory=trainloader.pin_memory,
+    #     drop_last=trainloader.drop_last,
+    # )
+    # del trainloader
+
+    # idc_count(args, logger, model, trainloader, test_images, args.csv_file, device)
+
     # A dataloader version of the IDC counting
-    idc_count_dataloader(args, logger, model, classes, trainloader, testloader, args.csv_file)
-    
+    idc_count_dataloader(args, logger, model, trainloader, testloader, args.csv_file)
+
+# python run_wisdom.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth' --dataset imagenet --data-path '/data/shenghao/dataset/' --device 'cuda:0' --n-cluster 2 --top-m-neurons 6 --test-image plane --end2end --num-samples 100 --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/resnet18_imagenet.csv' --idc-test-all 
 if __name__ == '__main__':
     args = parse_args()
     run_wisdom(args)

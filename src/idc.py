@@ -14,6 +14,8 @@ import torch
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+from sklearn.cluster import estimate_bandwidth
+
 
 from .utils import get_layer_by_name, save_cluster_groups, load_cluster_groups
 
@@ -366,9 +368,9 @@ class IDC:
     def cluster_activation_values_all(self, activation_dict): 
         from src.clustering import make
 
-        if self.cache_path and os.path.exists(self.cache_path):
-            print(f"[INFO] Loading cached clusters from {self.cache_path}")
-            return load_cluster_groups(self.cache_path)
+        # if self.cache_path and os.path.exists(self.cache_path):
+        #     print(f"[INFO] Loading cached clusters from {self.cache_path}")
+        #     return load_cluster_groups(self.cache_path)
         
         all_activations = []
         for layer_name, activation_values in activation_dict.items():
@@ -386,6 +388,10 @@ class IDC:
             if self.use_silhouette:
                 self.n_clusters = self.find_optimal_clusters(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1), 2, 10)
             # cluster_ = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
+            
+            if self.clustering_method_name == "MeanShift":
+                bandwidth = estimate_bandwidth(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1), quantile=0.2)
+                self.clustering_params["bandwidth"] = bandwidth
             cluster_ = make(self.clustering_method_name, **self.clustering_params).fit(all_activations_tensor[:, i].cpu().numpy().reshape(-1, 1))
             cluster_groups.append(cluster_)
         
@@ -457,7 +463,7 @@ class IDC:
         # model_name = self.model.__class__.__name__
         # self.save_to_json(coverage_rate, max_coverage, model_name, "Whole model")
         
-        return coverage_rate, total_combination, max_coverage
+        return len(unique_clusters), total_combination, max_coverage
     
 
     ## Compute the IDC test [layer-wise]
