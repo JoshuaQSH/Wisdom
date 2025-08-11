@@ -223,7 +223,7 @@ def build_sets_wisdom(model, loader, device, csv_path, k, std, name):
         
     return U_I_dataset, U_R_dataset
 
-def get_adv_dataloader(model, test_loader, device='cpu', batch_size=32, csv_file=None, attr='wisdom', k=TOPK, std=gausian_STD, name="test"):
+def get_adv_dataloader(model, test_loader, device='cpu', batch_size=32, csv_file=None, attr='wisdom', k=TOPK, std=gausian_STD, name="bo_test"):
     if attr == 'wisdom':
         U_I_dataset, U_R_dataset = build_sets_wisdom(model, test_loader, device, csv_file, TOPK, gausian_STD, name)
         U_IO_dataset = ConcatDataset([test_loader.dataset, U_I_dataset])   # original + important

@@ -12,6 +12,7 @@ import os
 
 import torch
 import pandas as pd
+import matplotlib.pyplot as plt
 from src.clustering import make
 from src.search import BOSearch
 from src.utils import get_data, parse_args, get_model, get_trainable_modules_main, _configure_logging
@@ -21,21 +22,21 @@ from src.utils import get_data, parse_args, get_model, get_trainable_modules_mai
 from torch.utils.data import DataLoader, Subset
 import random
 import numpy as np
-from src.utils import get_data, parse_args, get_model, get_trainable_modules_main, _configure_logging
+from src.utils import get_data, parse_args, get_model, get_trainable_modules_main, _configure_logging, eval_model_dataloder
 from src.idc import IDC
 
 from helper import get_adv_dataloader
 
 
-N_TRIALS = 30
-MINI_TEST = False  # Set to True for quick testing with a small subset
+N_TRIALS = 5
+MINI_TEST = True  # Set to True for quick testing with a small subset
 
 PREDICTLESS = {
     "AgglomerativeClustering",
     "SpectralClustering",
-    "DBSCAN",
-    "OPTICS",
-    "HDBSCAN",
+    # "DBSCAN",
+    # "OPTICS",
+    # "HDBSCAN",
 }
 clustering_params_all = {
     "KMeans": {"n_clusters": 2, "random_state": 42, "n_init": 10},
@@ -43,11 +44,11 @@ clustering_params_all = {
     "BisectingKMeans": {"n_clusters": 2, "random_state": 42, "n_init": 10},
     "AgglomerativeClustering": {"n_clusters": 2, "linkage": "ward", "metric": "euclidean"},
     "SpectralClustering": {"n_clusters": 2, "affinity": "rbf", "assign_labels": "kmeans"},
-    "DBSCAN": {"eps": 0.1, "min_samples": 10, "metric": "euclidean"},
-    "OPTICS": {"min_samples": 2, "xi": 0.05, "min_cluster_size": 2},
-    "HDBSCAN": {"min_cluster_size": 2, "min_samples": 2, "cluster_selection_epsilon": 0.01, "cluster_selection_method": "eom"},
+    # "DBSCAN": {"eps": 0.1, "min_samples": 10, "metric": "euclidean"},
+    # "OPTICS": {"min_samples": 2, "xi": 0.05, "min_cluster_size": 2},
+    # "HDBSCAN": {"min_cluster_size": 2, "min_samples": 2, "cluster_selection_epsilon": 0.01, "cluster_selection_method": "eom"},
     "MeanShift": {"bandwidth": None, "quantile": 0.2, "n_samples": None, "random_state": 0, "bin_seeding": True, "cluster_all": True, "max_iter": 300, "min_bin_freq": 1},
-    "AffinityPropagation": {"damping": 0.9, "preference": -50},
+    # "AffinityPropagation": {"damping": 0.9, "preference": -50},
     "Birch": {"threshold": 0.5, "n_clusters": 2},
 }
 
@@ -110,7 +111,66 @@ def mini_test(train_dataset, test_dataset, logger, sample_size=500, test_size=10
     train_loader = DataLoader(small_subset_train, batch_size=32, shuffle=True)
     test_loader = DataLoader(small_subset_test, batch_size=32, shuffle=False)
     logger.info(f"Using subset with {len(small_subset_train)} samples")
+    
     return train_loader, test_loader
+
+def save_and_plot_results(
+    csv_path,
+    pdf_path_prefix,
+    coverage_rate_origin,
+    norm_coverage_origin,
+    coverage_rate_io_baseline,
+    norm_coverage_io_baseline,
+    origin_improvement,
+    coverage_rate_io_bo_baseline,
+    norm_coverage_io_bo_baseline,
+    coverage_rate_io,
+    norm_coverage_io,
+    bo_improvement
+):
+    
+    df = pd.DataFrame([{
+        "coverage_rate_origin": coverage_rate_origin,
+        "norm_coverage_origin": norm_coverage_origin,
+        "coverage_rate_io_baseline": coverage_rate_io_baseline,
+        "norm_coverage_io_baseline": norm_coverage_io_baseline,
+        "origin_improvement": origin_improvement,
+        "coverage_rate_io_bo_baseline": coverage_rate_io_bo_baseline,
+        "norm_coverage_io_bo_baseline": norm_coverage_io_bo_baseline,
+        "coverage_rate_io": coverage_rate_io,
+        "norm_coverage_io": norm_coverage_io,
+        "bo_improvement": bo_improvement
+    }])
+    df.to_csv(csv_path, index=False)
+
+    # Bar plot 1: normalized coverage rate with U_IO
+    labels = ['Origin', 'BO-base', 'BO-Opti']
+    norm_covs = [
+        norm_coverage_io_baseline,
+        norm_coverage_io_bo_baseline,
+        norm_coverage_io
+    ]
+    plt.figure(figsize=(6,4))
+    plt.bar(labels, norm_covs, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
+    plt.ylabel('Normalized Coverage Rate (U_IO)')
+    plt.title('Normalized Coverage Rate (U_IO)')
+    plt.tight_layout()
+    plt.savefig(f"{pdf_path_prefix}_coverage.pdf")
+    plt.close()
+
+    # Bar plot 2: improvements
+    improvements = [
+        origin_improvement,
+        bo_improvement,
+        None  # No improvement for BO-Opti itself
+    ]
+    plt.figure(figsize=(6,4))
+    plt.bar(labels[:2], improvements[:2], color=['#1f77b4', '#ff7f0e'])
+    plt.ylabel('Improvement')
+    plt.title('Coverage Rate Improvement')
+    plt.tight_layout()
+    plt.savefig(f"{pdf_path_prefix}_improvement.pdf")
+    plt.close()
 
 def main() -> None:
     set_seed()
@@ -120,7 +180,10 @@ def main() -> None:
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
 
     if MINI_TEST:
-        train_loader, test_loader = mini_test(train_dataset, test_dataset, logger, sample_size=1000, test_size=500)
+        train_loader, test_loader = mini_test(train_dataset, test_dataset, logger, sample_size=1000, test_size=200)
+
+    accuracy, avg_loss, f1 = eval_model_dataloder(model, test_loader, device)
+    print(f"Model accuracy: {accuracy:.4f}, Avg loss: {avg_loss:.4f}, F1 score: {f1:.4f}")
 
     # Sanity-check the clustering factory
     km = make("KMeans", n_clusters=2, random_state=42, n_init=10)
@@ -193,6 +256,22 @@ def main() -> None:
     logger.info(f"[U_IO-BO-Base] Coverage rate: {coverage_rate_io_bo_baseline}, Total combinations: {total_combination_io_bo_baseline}, Max coverage: {max_coverage_io_bo_baseline}, Actual Coverage Rate: {coverage_rate_io_bo_baseline / max_coverage_io_bo_baseline}")
     logger.info(f"[U_IO-BO-Opti] Coverage rate: {coverage_rate_io}, Total combinations: {total_combination_io}, Max coverage: {max_coverage_io}, Actual Coverage Rate: {coverage_rate_io / max_coverage_io}")
     logger.info(f"[BO Results] Improvement: {(coverage_rate_io / max_coverage_io) / (coverage_rate_io_bo_baseline / max_coverage_io_bo_baseline)}x")
+
+    # Save and plot results
+    save_and_plot_results(
+        csv_path=f"bo_{args.model}_{args.dataset}.csv",
+        pdf_path_prefix=f"bo_{args.model}_{args.dataset}",
+        coverage_rate_origin=coverage_rate_origin,
+        norm_coverage_origin=coverage_rate_origin / max_coverage,
+        coverage_rate_io_baseline=coverage_rate_io_baseline,
+        norm_coverage_io_baseline=coverage_rate_io_baseline / max_coverage_io_baseline,
+        origin_improvement=(coverage_rate_io_baseline / max_coverage_io_baseline) / (coverage_rate_origin / max_coverage),
+        coverage_rate_io_bo_baseline=coverage_rate_io_bo_baseline,
+        norm_coverage_io_bo_baseline=coverage_rate_io_bo_baseline / max_coverage_io_bo_baseline,
+        coverage_rate_io=coverage_rate_io,
+        norm_coverage_io=coverage_rate_io / max_coverage_io,
+        bo_improvement=(coverage_rate_io / max_coverage_io) / (coverage_rate_io_bo_baseline / max_coverage_io_bo_baseline)
+    )
 
 # python ./optimization_dev/bo_test_demo.py --model lenet --saved-model "/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth" --dataset mnist --data-path /data/shenghao/dataset --batch-size 128 --device 'cuda:0' --csv-file "./saved_files/pre_csv/lenet_mnist.csv" --attr lrp --top-m-neurons 10
 # python ./optimization_dev/bo_test_demo.py --model lenet --saved-model "/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth" --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file "./saved_files/pre_csv/lenet_cifar10.csv" --attr lrp --top-m-neurons 10

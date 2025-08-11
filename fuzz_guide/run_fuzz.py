@@ -73,7 +73,7 @@ def parse_args():
     return  args
 
 def prepare_data_model(args):
-    model_path = os.getenv("HOME") + args.saved_model
+    model_path = args.saved_model
     model, module_name, module = get_model(model_path)
     
     if args.dataset == 'ImageNet':
@@ -110,106 +110,6 @@ def prepare_data_model(args):
     
     return model, layer_size_dict, TOTAL_CLASS_NUM, train_loader, test_loader, test_loader, image_numpy_list, label_numpy_list
 
-def to_uint8(batch_float):
-    return (batch_float.mul(255).clamp(0, 255).to(torch.uint8))
-
-def preprocess_image(image, size=(299,299)):
-    transform = transforms.Compose([transforms.Resize(size), transforms.ToTensor(),
-                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                         std=[0.229, 0.224, 0.225])
-                                    ])
-    return transform(image).unsqueeze(0)
-
-def calculate_fid_score(image1path, image2path):
-    # load images
-    image1 = Image.open(image1path).convert("RGB")
-    image2 = Image.open(image2path).convert("RGB")
-
-    # using Inception model to get high-level feature representation
-    model = models.inception_v3(weights='IMAGENET1K_V1', transform_input=False)
-    model.fc = torch.nn.Identity()
-    model.eval()
-
-    image1 = preprocess_image(image1)
-    image2 = preprocess_image(image2)
-
-    with torch.no_grad():
-        feature1 = model(image1).numpy().squeeze()
-        feature2 = model(image2).numpy().squeeze()
-
-    # compute mean and covariance for the two images
-    mean1 = np.mean(feature1, axis=0)
-    mean2 = np.mean(feature2, axis=0)
-    cov1 = np.cov(feature1, rowvar=False)
-    cov2 = np.cov(feature2, rowvar=False)
-
-    # compute FID score
-    mean_diff = np.sum(mean1-mean2) ** 2
-    cov_mean = np.sqrt(cov1.dot(cov2))
-    if np.iscomplexobj(cov_mean):
-        cov_mean = cov_mean.real
-    fid_score = mean_diff + (cov1 + cov2 - 2 * cov_mean)
-
-    return fid_score
-
-def compute_metrics(params, seed_imgs, model, is_torchmetrics=False):
-    device = next(model.parameters()).device
-    
-    # 1) Collect ALL newly accepted mutations (*.jpg dumped by Fuzzer)
-    import glob
-
-    file_glob = os.path.join(params.image_dir, "*_new.jpg")
-    paths = sorted(glob.glob(file_glob))
-    if not paths:
-        print("No mutated images were dumped – cannot compute IS/FID.")
-        return
-    to_tensor = T.Compose([T.ToTensor()])
-    mutated = torch.stack([to_tensor(Image.open(p)) for p in paths])
-
-    # 2) --- Inception Score --------------------------------------------
-    iscore = InceptionScore(feature=2048).to(device)
-    for i in range(0, len(mutated), 64):
-        iscore.update(to_uint8(mutated[i:i+64]).to(device))
-    IS = iscore.compute()[0].item() 
-
-    # 3) --- FID  (against the 1 000 seeds) ------------------------------
-
-    # Using the torchmetrics implementation of FID
-    if is_torchmetrics:
-        fid = FrechetInceptionDistance(feature=2048).to(device)
-        seeds_np = np.array(seed_imgs)
-        seed_stack = torch.tensor(seeds_np, dtype=torch.uint8).permute(0, 3, 1, 2)  # (1000,3,H,W)
-        for i in range(0, len(seed_stack), 64):
-            fid.update(seed_stack[i:i+64].to(device), real=True)
-        for i in range(0, len(mutated), 64):
-            fid.update(to_uint8(mutated[i:i+64]).to(device), real=False)
-        FID = fid.compute().item()
-    else:
-        # TODO: Using the custom FID implementation
-        FID = calculate_fid_score(seed_imgs[0], mutated[0])
-
-    # 4) --- Entropy (model’s top‑1 predictions) -------------------------
-    ent_loader = torch.utils.data.DataLoader(mutated, batch_size=64, shuffle=False)
-    hist = torch.zeros(params.num_class, dtype=torch.float64)
-    with torch.no_grad():
-        for x in ent_loader:
-            y = model(x.to(device)).argmax(1)
-            hist += torch.bincount(y.cpu(), minlength=params.num_class)
-    prob = hist / hist.sum()
-    ENT = -(prob * torch.log(prob + 1e-12)).sum().item()
-
-    # 5) --- #Classes -------------------------------------------------
-    num_classes_hit = int((hist > 0).sum().item())
-
-    # 6) --- Print summary ----------------------------------------------
-    print(f"\n=== Quality metrics ===")
-    print(f"Inception Score (IS): {IS:6.3f}")
-    print(f"Fréchet Inception Distance: {FID:6.3f}")
-    print(f"Prediction-Entropy (nats): {ENT:6.3f}\n")
-    print(f"#Classes hit (top-1): {num_classes_hit:6d}\n")
-
-    return IS, FID, ENT, num_classes_hit
-
 def main():
     args = parse_args()
     device = torch.device(args.device if torch.cuda.is_available() and args.device != 'cpu' else "cpu")
@@ -223,9 +123,9 @@ def main():
         'TKNC': 10,
         'TKNP': 50,
         'CC': 10 if args.dataset == 'CIFAR10' else 1000,
-        'LSA': 10,
-        'DSA': 0.1,
-        'MDSA': 10,
+        'LSC': 10,
+        'DSC': 0.1,
+        'MDSC': 10,
         'DeepImportance': [10, 2], # top_m_neurons, n_clusters
         'Wisdom': [10, 2] # top_m_neurons, n_clusters
     }
@@ -265,10 +165,19 @@ def main():
     
     initial_coverage = copy.deepcopy(criterion.current)
     print('Initial Coverage: %f' % initial_coverage)
+    
+    # Fuzzer engine
     engine = Fuzzer(args, criterion, guided=args.guided)
-    engine.run(image_numpy_list, label_numpy_list)
+    metrics = engine.run(image_numpy_list, label_numpy_list)
+    
+    print(f"\n=== Quality metrics ===")
+    print(f"Inception Score (IS): {metrics['IS']:6.3f}")
+    print(f"Fréchet Inception Distance: {metrics['FID']:6.3f}")
+    print(f"Prediction-Entropy (nats): {metrics['entropy']:6.3f}")
+    print(f"#Classes: {metrics['num_classes']}")
+
+    # Fuzzer ends
     engine.exit()
-    IS, FID, ENT, NCLASS = compute_metrics(engine.params, image_numpy_list, model)
 
     mutated_mode = "GenAI" if args.genai_only else "Normal"
     csv_path = os.path.join(args.output_dir, f"fuzz_results_{args.dataset}_{args.model}_{mutated_mode}.csv")
@@ -283,10 +192,10 @@ def main():
     row = [args.dataset, args.model, args.criterion,
            f"{coverage_inc:.6f}", num_faults, num_outputs,
            f"{faults_per_output:.6f}",
-           f"{IS:.3f}" if IS is not None else "",
-           f"{FID:.3f}" if FID is not None else "",
-           f"{ENT:.3f}" if ENT is not None else "",
-           f"{NCLASS:d}"  if NCLASS is not None else "",]
+           f"{metrics['IS']:.3f}" if metrics['IS'] is not None else "",
+           f"{metrics['FID']:.3f}" if metrics['FID'] is not None else "",
+           f"{metrics['entropy']:.3f}" if metrics['entropy'] is not None else "",
+           f"{metrics['num_classes']}" if metrics['num_classes'] is not None else "",]
     write_header = not os.path.exists(csv_path)
     with open(csv_path, "a", newline="") as f:
         w = csv.writer(f)
@@ -296,9 +205,9 @@ def main():
     print(f"Results saved to {csv_path}")
 
 # [vgg16-cifar10, resnet18-cifar10, resnet18-imagenet]
-# python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --data-path ./datasets/CIFAR10/ --model vgg16 --saved-model /torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth --criterion Wisdom --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
-# python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --data-path ./datasets/CIFAR10/ --model resnet18 --saved-model /torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth --criterion Wisdom --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
-# python ./fuzz_guide/run_fuzz.py --dataset ImageNet --data-path /data/shenghao/dataset/ImageNet/ --model resnet18 --saved-model /torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth --criterion Random --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
+# python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --data-path ./datasets/CIFAR10/ --model vgg16 --saved-model /scratch/staff/lrr550/wisdom/Wisdom/models_info/saved_models/vgg16_CIFAR10_whole.pth --criterion NLC --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
+# python ./fuzz_guide/run_fuzz.py --dataset CIFAR10 --data-path ./datasets/CIFAR10/ --model resnet18 --saved-model /scratch/staff/lrr550/wisdom/Wisdom/models_info/saved_models/resnet18_CIFAR10_whole.pth --criterion Wisdom --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
+# python ./fuzz_guide/run_fuzz.py --dataset ImageNet --data-path /data/shenghao/dataset/ImageNet/ --model resnet18 --saved-model /scratch/staff/lrr550/wisdom/Wisdom/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth --criterion Random --output-dir ./fuzz_guide/fuzz_outputs/ --log-dir ./logs --seed 42 --device 'cuda:0' --guided
 if __name__ == '__main__':
     main()
     print("Fuzzing completed.")

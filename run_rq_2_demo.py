@@ -8,10 +8,11 @@ import numpy as np
 
 import torch
 import torch.nn.functional as F
+
 from collections import defaultdict
 from captum.attr import LRP
 
-from torch.utils.data import DataLoader, TensorDataset, random_split, ConcatDataset
+from torch.utils.data import DataLoader, TensorDataset, random_split, ConcatDataset, Dataset
 from src.attribution import get_relevance_scores_dataloader
 from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, _configure_logging
 from src.idc import IDC
@@ -65,6 +66,122 @@ def set_seed(seed: int = 42):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+
+
+# -----------------------------------------------------------
+# Dataset Wrapper
+# -----------------------------------------------------------
+class PerturbedDataset(Dataset):
+    """
+    A dataset that returns perturbed images on demand.  
+    It supports both LRP and WISDOM based perturbations and produces either importance or random masked versions of each sample.
+    """
+    def __init__(self, 
+                 base_dataset, 
+                 model, 
+                 attr_method: str, 
+                 k: float,
+                 std: float, 
+                 mode: str = "important", 
+                 csv_file: str = None,
+                 device: str = "cuda:0"):
+        self.base_dataset = base_dataset
+        self.model = model.eval()
+        self.attr_method = attr_method.lower()
+        self.k = k  # fraction of pixels to mask
+        self.std = std
+        assert mode in ("important", "random")
+        self.mode = mode
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        
+        if self.attr_method == "lrp":
+            self.attributor = LRP(self.model)
+        elif self.attr_method == "wisdom":
+            if csv_file is None:
+                raise ValueError("WISDOM perturbations require a csv_file")
+            
+            # load neuron scores from CSV; expects columns: layer, channel, score
+            df = pd.read_csv(csv_file)
+            self.layer_scores = {}
+            for _, row in df.iterrows():
+                layer = row["layer"]
+                chan = int(row["channel"])
+                score = float(row["score"])
+                self.layer_scores.setdefault(layer, {})[chan] = score
+            # determine which layers to hook
+            self.target_layers = list(self.layer_scores.keys())
+        
+        else:
+            raise ValueError(f"Unknown attr_method: {attr_method}")
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    @torch.no_grad()
+    def _compute_heatmap(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute a per‑pixel heat map using LRP or WISDOM."""
+        x = x.to(self.device)
+        if self.attr_method == "lrp":
+            pred = self.model(x.unsqueeze(0)).argmax(dim=1)
+            attr = self.attributor.attribute(x.unsqueeze(0), target=pred)[0]
+            heat = attr.abs().sum(dim=0)  # (H, W)
+            return heat
+        
+        elif self.attr_method == "wisdom":
+            # register hooks to capture activations for target layers
+            activations = {}
+            def make_hook(name):
+                def fn(module, inp, out):
+                    activations[name] = out.detach()
+                return fn
+            handles = []
+            for name, module in self.model.named_modules():
+                if name in self.target_layers:
+                    handles.append(module.register_forward_hook(make_hook(name)))
+            # forward pass
+            _ = self.model(x.unsqueeze(0))
+            # remove hooks
+            for h in handles:
+                h.remove()
+            # aggregate weighted activations
+            heat = torch.zeros_like(x[0], dtype=torch.float32)
+            for layer, act in activations.items():
+                # act shape (1, C, h, w); weight each channel by its score
+                layer_weights = self.layer_scores[layer]
+                weight_tensor = torch.zeros(act.shape[1], device=act.device)
+                for ch, val in layer_weights.items():
+                    if ch < len(weight_tensor):
+                        weight_tensor[ch] = val
+                # weighted sum over channels
+                weighted = (act[0] * weight_tensor.view(-1, 1, 1)).sum(dim=0)
+                # upsample to input resolution
+                up = F.interpolate(weighted.unsqueeze(0).unsqueeze(0),
+                                   size=x.shape[1:], mode="bilinear", align_corners=False)[0,0]
+                heat += up.cpu()
+            return heat
+
+    def __getitem__(self, idx):
+        img, label = self.base_dataset[idx]
+        heat = self._compute_heatmap(img)
+        # flatten heatmap to select top k% pixels
+        h, w = heat.shape
+        num_pix = h * w
+        k_pixels = max(1, int(self.k * num_pix))
+        flat = heat.view(-1)
+        # importance mask
+        imp_indices = flat.topk(k_pixels).indices
+        mask = torch.zeros(num_pix, dtype=torch.bool)
+        mask[imp_indices] = True
+        if self.mode == "random":
+            # select k_pixels uniformly at random
+            rand_idx = torch.randperm(num_pix)[:k_pixels]
+            mask = torch.zeros(num_pix, dtype=torch.bool)
+            mask[rand_idx] = True
+        mask = mask.view(1, h, w)  # broadcast over channels
+        noise = torch.randn_like(img) * self.std
+        perturbed = img + noise * mask
+        perturbed = torch.clamp(perturbed, 0, 1)
+        return perturbed, label
 
 # Other coverage methods with hyperparameters
 """
@@ -445,10 +562,11 @@ def wisdom_coverage(args, model, train_loader, test_loader, classes, logger, tag
     activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
     selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
     cluster_groups = idc.cluster_activation_values_all(selected_activations)
+    # compute_idc_test_whole
     coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups)
 
     results = {}
-    results['WISDOM'] = coverage_rate
+    results['WISDOM'] = coverage_rate  
     df = pd.DataFrame(results, index=[tag])
     save_csv_results(results, "rq2_results_{}_{}_top_{}_{}.csv".format(args.dataset, args.model, args.top_m_neurons, TIMESTAMP), tag=tag)
     logger.info(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: WISDOM")

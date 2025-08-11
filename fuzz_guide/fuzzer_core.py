@@ -1,17 +1,11 @@
-
-import sys
 import os
 import copy
 import random
 import numpy as np
 import time
-from tqdm import tqdm
 import itertools
-import gc
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
@@ -20,6 +14,8 @@ from style_operator import Stylized
 from genai import GenerativeAugmentor, GenerativeAugmentorStub
 import image_transforms
 
+from torchmetrics.image.inception import InceptionScore
+from torchmetrics.image.fid import FrechetInceptionDistance
 
 # -----------------------------------------------------------
 # Fuzzer Logger
@@ -182,7 +178,7 @@ class Fuzzer:
         I_input : list/ndarray raw images in range [0,1]
         L_input : list/ndarray  ground truth labels
         """
-        # F = np.array([]).reshape(0, *(self.params.input_shape[1:])).astype('float32')
+        F = np.array([]).reshape(0, *(self.params.input_shape[1:])).astype('float32')
         T = self._preprocess(I_input, L_input)
         
         B, B_label, B_id = self._select_next(T)   # current batch
@@ -201,40 +197,37 @@ class Fuzzer:
             # ---------------- mutation phase -------------------------------
             for s_i, (I, L) in enumerate(zip(S, S_label)):
                 n_trials = Ps(s_i) if self.guided else 1
-                accepted = False
 
                 for _ in range(n_trials):
                     I_new, _op = self._mutate(I)
-                    
+
                     # random mode keeps any *changed* mutation
                     if not self.guided:
-                        if self._is_changed(I, I_new):
-                            accepted = True
-                            break
-                        else:
-                            continue
-
-                    # guided ‑‑ evaluate coverage gain
-                    torch_img = self._to_tensor(np.stack([I_new]), norm=True)
-                    torch_lbl = torch.tensor([L], device=self.params.device)
-
-                    if self.params.criterion in ['LSC','DSC','MDSC']:
-                        cov_dict = self.criterion.calculate(torch_img, torch_lbl)
-                    elif self.params.criterion in ['Deepimportance', 'Wisdom']:
-                        cov_dict = self.criterion.calculate(torch_img)
+                        B_new.append(I_new);   B_old.append(I);   B_label_new.append(L)
+                    
                     else:
-                        cov_dict = self.criterion.calculate(torch_img)
+                        if self._detect_failedTest(I_new):
+                            # Failed Test Eval is disabled in the NLC, we follow the same logic
+                            F += np.concatenate((F, [I_new]))
+                        elif self._is_changed(I, I_new):
+                            torch_img = self._to_tensor(np.stack([I_new]), norm=True)
+                            torch_lbl = torch.tensor([L], device=self.params.device)
 
-                    gain = self.criterion.gain(cov_dict)
-                    if self._coverage_gain(gain):
-                        self.criterion.update(cov_dict, gain)
-                        accepted = True
-                        break   # stop further trials for this seed
+                            if self.params.criterion in ['LSC','DSC','MDSC']:
+                                cov_dict = self.criterion.calculate(torch_img, torch_lbl)
+                            elif self.params.criterion in ['Deepimportance', 'Wisdom']:
+                                cov_dict = self.criterion.calculate(torch_img)
+                            else:
+                                cov_dict = self.criterion.calculate(torch_img)
+                            gain = self.criterion.gain(cov_dict)
+                            
+                            if self._coverage_gain(gain):
+                                self.criterion.update(cov_dict, gain)
+                                B_new.append(I_new)
+                                B_old.append(I)
+                                B_label_new.append(L)
 
-                if accepted:
-                    B_new.append(I_new);   B_old.append(I);   B_label_new.append(L)
-
-            # ------------- post‑processing & bookkeeping -------------------
+            # ------------- post‑processing -------------------
             if B_new:                                   # at least one new seed
                 self._append_new_seeds(T, B_new, B_label_new)
                 self.delta_batch += 1
@@ -249,7 +242,7 @@ class Fuzzer:
                 if self.epoch % self.params.save_every == 0:
                     self._save_image(np.stack(B_new) / self.params.input_scale,
                                      f"{self.params.image_dir}{self.epoch:03d}_new.jpg")
-                    self._save_image(np.stack(B_old)/self.params.input_scale,
+                    self._save_image(np.stack(B_old) / self.params.input_scale,
                                      f"{self.params.image_dir}{self.epoch:03d}_old.jpg")
                     if wrong:
                         save_image(tensor_img[wrong_idx],
@@ -259,6 +252,122 @@ class Fuzzer:
             B, B_label, B_id = self._select_next(T)
             self.epoch += 1
             self.delta_time = time.time() - start
+        
+        all_generated = []
+        for batch in T[1]:
+            all_generated.extend(batch)
+        
+        real_imgs_tensor = [torch.from_numpy(img).permute(2,0,1).float() for img in I_input]  # HWC->CHW
+        fake_imgs_tensor = [torch.from_numpy(img).permute(2,0,1).float() for img in all_generated]
+        metrics = self.compute_fid_is(real_imgs_tensor, fake_imgs_tensor)
+        
+        # Compute #Classes and Entropy
+        if all_generated:
+            norm = (transforms.Normalize((0.4914,0.4822,0.4465), (0.2471,0.2435,0.2616))
+                    if self.params.dataset=="CIFAR10"
+                    else transforms.Normalize((0.485,0.456,0.406), (0.229,0.224,0.225)))
+            hist = torch.zeros(self.params.num_class, device=self.params.device)
+            with torch.no_grad():
+                for i in range(0, len(all_generated), 64):
+                    batch = [torch.from_numpy(img).permute(2,0,1).float() for img in all_generated[i:i+64]]
+                    batch_tensor = torch.stack(batch).to(self.params.device)
+                    preds = self.criterion.model(norm(batch_tensor)).argmax(1)
+                    hist += torch.bincount(preds, minlength=len(hist))
+            prob = hist / hist.sum()
+            entropy = float(-(prob * torch.log(prob + 1e-12)).sum())
+            num_classes = int((hist > 0).sum())
+        else:
+            entropy = float('nan')
+            num_classes = 0
+        
+        metrics['num_classes'] = num_classes
+        metrics['entropy'] = entropy
+
+        return metrics
+    
+    def compute_fid_is(self, real_imgs, fake_imgs):
+        # Ensure input images are 4D tensors of floats in [0,1]
+        if torch.is_tensor(real_imgs):
+            real_tensor = real_imgs.clone().float()
+            if real_tensor.dim() == 3:
+                real_tensor = real_tensor.unsqueeze(0)
+        else:
+            # Convert list of images to tensor
+            real_list = []
+            for img in real_imgs:
+                if isinstance(img, np.ndarray):
+                    img_t = torch.from_numpy(img)
+                else:
+                    img_t = img  # assume already a Tensor
+                if img_t.dim() == 3 and img_t.shape[0] != 3 and img_t.shape[-1] == 3:
+                    # If image is HWC (from numpy/PIL), convert to CHW
+                    img_t = img_t.permute(2, 0, 1)
+                real_list.append(img_t.float())
+            real_tensor = torch.stack(real_list, dim=0)
+        
+        if torch.is_tensor(fake_imgs):
+            fake_tensor = fake_imgs.clone().float()
+            if fake_tensor.dim() == 3:
+                fake_tensor = fake_tensor.unsqueeze(0)
+        else:
+            fake_list = []
+            for img in fake_imgs:
+                if isinstance(img, np.ndarray):
+                    img_t = torch.from_numpy(img)
+                else:
+                    img_t = img
+                if img_t.dim() == 3 and img_t.shape[0] != 3 and img_t.shape[-1] == 3:
+                    img_t = img_t.permute(2, 0, 1)
+                fake_list.append(img_t.float())
+            fake_tensor = torch.stack(fake_list, dim=0)
+        
+        # If images were normalized (e.g., CIFAR-10 or ImageNet stats), unnormalize them to [0,1]
+        if self.params.dataset in ['CIFAR10', 'ImageNet']:
+            if self.params.dataset == 'CIFAR10':
+                mean = (0.4914, 0.4822, 0.4465)
+                std = (0.2471, 0.2435, 0.2616)
+            elif self.params.dataset == 'ImageNet':
+                mean = (0.485, 0.456, 0.406)
+                std = (0.229, 0.224, 0.225)
+            # Only unnormalize if values are outside [0,1] range (indicates normalization was applied)
+            if real_tensor.min().item() < 0 or real_tensor.max().item() > 1:
+                m = torch.tensor(mean, dtype=torch.float32, device=real_tensor.device).view(1, -1, 1, 1)
+                s = torch.tensor(std, dtype=torch.float32, device=real_tensor.device).view(1, -1, 1, 1)
+                real_tensor = (real_tensor * s + m).clamp(0.0, 1.0)
+            if fake_tensor.min().item() < 0 or fake_tensor.max().item() > 1:
+                m = torch.tensor(mean, dtype=torch.float32, device=fake_tensor.device).view(1, -1, 1, 1)
+                s = torch.tensor(std, dtype=torch.float32, device=fake_tensor.device).view(1, -1, 1, 1)
+                fake_tensor = (fake_tensor * s + m).clamp(0.0, 1.0)
+        
+         # Helper to convert a float tensor [0,1] to uint8 [0,255]
+        def to_uint8(t):
+            return (t * 255.0).round().clamp(0, 255).to(torch.uint8)
+
+        # Move metrics to device (GPU if available)
+        device = torch.device(self.params.device if torch.cuda.is_available() or str(self.params.device).startswith('cuda') else 'cpu')
+        inception = InceptionScore(feature=2048).to(device)
+        fid = FrechetInceptionDistance(feature=2048).to(device)
+        
+        # Convert images to uint8 and move in batches to metric
+        real_uint8 = to_uint8(real_tensor)
+        fake_uint8 = to_uint8(fake_tensor)
+        
+        # Compute Inception Score (only uses fake images)
+        with torch.no_grad():
+            for i in range(0, fake_uint8.size(0), 64):
+                batch = fake_uint8[i:i+64].to(device)
+                inception.update(batch)
+            IS_mean = inception.compute()[0].item()
+            # Compute FID (requires both real and fake distributions)
+            for i in range(0, real_uint8.size(0), 64):
+                batch = real_uint8[i:i+64].to(device)
+                fid.update(batch, real=True)
+            for i in range(0, fake_uint8.size(0), 64):
+                batch = fake_uint8[i:i+64].to(device)
+                fid.update(batch, real=False)
+            FID_val = fid.compute().item()
+        
+        return {"IS": IS_mean, "FID": FID_val}
 
     def exit(self):
         self.logger.update(self)
@@ -267,8 +376,12 @@ class Fuzzer:
 
     # -------------- internal helpers ---------------------------------------
     def _should_stop(self):
-        return (self.epoch > 10_000) or (self.delta_time > 6*60*60)
+        # return (self.epoch > 10_000) or (self.delta_time > 6*60*60)
+        return self.epoch > 100
 
+    def _detect_failedTest(self, I_new):
+        return False
+    
     def _preprocess(self, imgs, labels):
         # shuffle & scale to [0,255] uint8 space (as in the original code)
         order = np.random.permutation(len(imgs))

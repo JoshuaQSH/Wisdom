@@ -3,21 +3,27 @@ import time
 import os
 import math
 import pandas as pd
+from responses import logger
 from tqdm import tqdm
 import numpy as np
 
 import torch
+from torch.utils.data import Dataset
 import torch.nn.functional as F
 from torch import nn
+
 from collections import defaultdict
 from captum.attr import LRP
+from captum.attr import LayerLRP
 
 
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset
 from src.attribution import get_relevance_scores_dataloader
 from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get_trainable_modules_main, _configure_logging, viz_attr
+
+
 from src.idc import IDC
-import src.idc_old
+from src.wisdom import WisdomIDC
 
 import matplotlib.pyplot as plt
 
@@ -43,49 +49,10 @@ clustering_params_all = {
     "DBSCAN": {"eps": 0.1, "min_samples": 10, "metric": "euclidean"},
     "OPTICS": {"min_samples": 2, "xi": 0.05, "min_cluster_size": 2},
     "HDBSCAN": {"min_cluster_size": 2, "min_samples": 2, "cluster_selection_epsilon": 0.01, "cluster_selection_method": "eom"},
-    "MeanShift": {"bandwidth": 1.7, "bin_seeding": True, "cluster_all": False, "max_iter": 300, "min_bin_freq": 1},
+    "MeanShift": {"bandwidth": 0.5, "bin_seeding": True, "cluster_all": False, "max_iter": 300, "min_bin_freq": 1},
     "AffinityPropagation": {"damping": 0.9, "preference": -50},
     "Birch": {"threshold": 0.5, "n_clusters": 2},
 }
-
-def analyze_model(model, input_size=(1, 3, 224, 224)):
-    total_params = sum(p.numel() for p in model.parameters())
-    learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    layer_count = sum(1 for _ in model.modules())
-
-    # Forward hook to capture activations for neuron count
-    activations = []
-
-    def hook_fn(module, input, output):
-        if isinstance(output, torch.Tensor):
-            activations.append(output)
-        elif isinstance(output, (tuple, list)):
-            activations.extend(o for o in output if isinstance(o, torch.Tensor))
-
-    hooks = []
-    for layer in model.modules():
-        if isinstance(layer, (nn.ReLU, nn.Conv2d, nn.Linear, nn.BatchNorm2d)):
-            hooks.append(layer.register_forward_hook(hook_fn))
-
-    # Run dummy input through the model
-    model.eval()
-    with torch.no_grad():
-        dummy_input = torch.randn(input_size)
-        model(dummy_input)
-
-    # Estimate number of neurons from activation maps
-    neuron_count = sum(a.numel() for a in activations)
-
-    # Cleanup hooks
-    for h in hooks:
-        h.remove()
-
-    return {
-        'Total Parameters': total_params,
-        'Learnable Parameters': learnable_params,
-        'Total Layers (nn.Module)': layer_count,
-        'Estimated Neurons (from activations)': neuron_count
-    }
 
 def prapare_data_models(args):
     # Logger settings
@@ -120,6 +87,39 @@ def save_csv_results(updated_column_dict, csv_path='results.csv', tag='original'
         df.to_csv(csv_path, mode=mode, header=header)
 
     print(f"[{tag}] Updated results saved to {csv_path}")
+
+
+# def add_gaussian_noise(imgs: torch.Tensor, mask: torch.Tensor,
+#                        mean=0., std=0.01):
+#     noise = torch.randn_like(imgs) * std + mean
+#     return torch.where(mask, imgs + noise, imgs).clamp(torch.min(imgs), torch.max(imgs))
+
+
+def add_gaussian_noise(imgs: torch.Tensor, mask: torch.Tensor,
+                       mean: float = 0.0, std: float = 0.01):
+    if std <= 0:
+        out = imgs
+    else:
+        noise = torch.randn_like(imgs) * std + mean
+        if mask.dtype is torch.bool:
+            mask_f = mask.to(imgs.dtype)
+        else:
+            mask_f = mask
+        # arithmetic selection (no boolean requirement)
+        out = imgs * (1 - mask_f) + (imgs + noise) * mask_f
+    return out.clamp(imgs.min(), imgs.max())
+
+def add_gaussian_noise_new(img: torch.Tensor, 
+                       mask: torch.Tensor, 
+                       std: float = 0.5,
+                       clamp_range = None) -> torch.Tensor:
+    if std <= 0:
+        return img
+    noise = torch.randn_like(img) * std
+    out = img * (1 - mask) + (img + noise) * mask
+    if clamp_range is not None:
+        out = out.clamp(*clamp_range)
+    return out
 
 # -----------------------------------------------------------
 # Wisdom-based input trace
@@ -183,8 +183,8 @@ def viz_attr_check(args, model, test_loader):
 def viz_attr_diff(args, logger, orig_loader, pert_loader, cmap="bwr", alpha=0.8, tag='random'):
     
     idx = random.randrange(len(orig_loader.dataset))
-    img_orig, y = orig_loader.dataset[1234]
-    img_pert, _ = pert_loader.dataset[1234]
+    img_orig, y = orig_loader.dataset[10]
+    img_pert, _ = pert_loader.dataset[10]
     
     # tensors -> HWC numpy
     o = img_orig.cpu().detach().numpy().transpose(1,2,0)
@@ -222,50 +222,6 @@ class LabelToIntDataset(torch.utils.data.Dataset):
     
     def __len__(self):
         return len(self.dataset)
-
-def build_mask_old(attributions, k=0.02):
-    """
-    Return boolean masks (important and random) with the top‐k fraction (e.g. 0.02 = 2 %)
-    of attribution magnitudes set to True (per-sample).
-    """
-    bs = attributions.size(0)
-    flat = attributions.view(bs, -1).abs()
-    kth = math.ceil((flat.size(1) * k))
-    
-    idx = flat.topk(kth, dim=1).indices
-    
-    # Create a random mask
-    rand_scores = torch.rand_like(flat, dtype=torch.float32) 
-    rand_idx = rand_scores.topk(kth, dim=1).indices   # (B, kth)
-    mask_rand = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, rand_idx, True)
-    mask_rand = mask_rand.view_as(attributions)
-    
-    # Important-based mask
-    mask = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, idx, True)
-    mask = mask.view_as(attributions)
-    
-    return mask, mask_rand
-
-def build_mask_wisdom_old(heat, k=0.02):
-    """
-    heat: (B, 1, H, W) – relevance per pixel
-    returns boolean mask where top-k fraction is True.
-    """
-    B, _, H, W = heat.shape
-    flat = heat.view(B, -1).abs()
-    kth = math.ceil((flat.size(1) * k))
-    idx = flat.topk(kth, dim=1).indices
-    
-    rand_scores = torch.rand_like(flat, dtype=torch.float32)
-    rand_idx = rand_scores.topk(kth, dim=1).indices
-    mask_rand = torch.zeros_like(flat, dtype=torch.bool).scatter_(1, rand_idx, True)
-    
-    mask = torch.zeros_like(flat, dtype=torch.bool)
-    mask.scatter_(1, idx, True)
-    mask = mask.view(B, 1, H, W)
-    mask_rand = mask_rand.view_as(mask)
-    
-    return mask, mask_rand
 
 def build_mask(attributions: torch.Tensor, k: float = 0.02, exclude_imp: bool = True) -> tuple:
     """
@@ -333,11 +289,6 @@ def build_mask_wisdom(heat: torch.Tensor, k: float = 0.02, exclude_imp: bool = T
         mask_rand = mask_rand.view_as(mask_imp)
         
     return mask_imp, mask_rand
-
-def add_gaussian_noise(imgs: torch.Tensor, mask: torch.Tensor,
-                       mean=0., std=0.01):
-    noise = torch.randn_like(imgs) * std + mean
-    return torch.where(mask, imgs + noise, imgs).clamp(torch.min(imgs), torch.max(imgs))
 
 def build_sets(model, loader, device, k, std, name):
     """
@@ -429,16 +380,157 @@ def build_sets_wisdom(model, loader, device, csv_path, k, std, name):
         
     return U_I_dataset, U_R_dataset
 
-def eval_model(model, test_loader, U_I_loader, U_R_loader, device, logger):
+# -----------------------------------------------------------
+# Dataset Wrapper
+# -----------------------------------------------------------
+def build_masks_exclusive(saliency: torch.Tensor, 
+                          k: float,
+                          gen = None,
+                          device = 'cuda'):
+    """
+    Build (important_mask, random_mask) with NON-OVERLAP:
+      - important_mask: top-k% |saliency| pixels set to 1
+      - random_mask:    k% pixels sampled UNIFORMLY from the COMPLEMENT of important_mask
+
+    saliency: (H, W) or (1, H, W) tensor (CPU or GPU)
+    k:        fraction in (0,1]
+    gen:      optional torch.Generator for deterministic sampling
+    device:   optional device for mask tensors (defaults to saliency.device)
+
+    Returns two tensors of shape (1, H, W) on `device`, dtype=float32.
+    """
+    if not (0 < k <= 1):
+        raise ValueError("k must be in (0, 1].")
+
+    if saliency.dim() == 3 and saliency.size(0) == 1:
+        sal = saliency[0]
+    elif saliency.dim() == 2:
+        sal = saliency
+    else:
+        raise ValueError("saliency must be (H,W) or (1,H,W).")
+
+    device = device or sal.device
+    H, W = sal.shape
+    n = H * W
+    kpix = max(1, int(round(k * n)))
+
+    # Important = top-k by absolute saliency
+    flat = sal.abs().reshape(-1)
+    if kpix >= n:
+        imp_flat = torch.ones(n, dtype=torch.float32, device=device)
+    else:
+        # Use topk threshold to include ties consistently
+        # (move to CPU if needed for efficiency, then back)
+        work = flat if flat.device.type == "cpu" else flat.cpu()
+        thresh = torch.topk(work, kpix, largest=True).values.min()
+        mask_cpu = (work >= thresh).float()
+        imp_flat = mask_cpu.to(device)
+
+    # Random from complement
+    comp_idx = torch.nonzero(imp_flat == 0, as_tuple=False).view(-1)
+    if comp_idx.numel() == 0:
+        # Degenerate (all important). Mirror the imp mask so masks have same cardinality.
+        rand_flat = imp_flat.clone()
+    else:
+        # Deterministic sampling using a per-dataset generator if provided
+        # torch.randperm can take generator on CPU; ensure indices on same device later.
+        cpu_gen = gen if (gen is not None and gen.device == torch.device('cpu')) else gen
+        perm = torch.randperm(comp_idx.numel(), generator=cpu_gen, device='cpu')
+        sel = comp_idx.cpu()[perm[:kpix]]
+        rand_flat = torch.zeros(n, dtype=torch.float32, device='cpu')
+        rand_flat[sel] = 1.0
+        rand_flat = rand_flat.to(device)
+
+    imp = imp_flat.view(1, H, W)
+    rand = rand_flat.view(1, H, W)
+    return imp, rand
+
+
+class PerturbedDataset(Dataset):
+    """
+    Lazily generates perturbed samples from a base dataset.
+
+    - mode='important': perturb the top-k fraction of pixels (by |saliency|)
+    - mode='random':    perturb k% pixels sampled uniformly from the COMPLEMENT
+                        of the important set (non-overlapping)
+    - strategy:         a callable that maps (1,C,H,W) -> (H,W) saliency tensor
+                        (e.g., LRPStrategy or WisdomStrategy)
+
+    Notes:
+      * This dataset does not copy the entire set; it computes one sample at a time.
+      * Random selection is deterministic per dataset if you pass a fixed seed.
+      * Noise is added in the same normalized space as your model inputs.
+    """
+
+    def __init__(self,
+                 base_dataset: Dataset,
+                 strategy,
+                 k: float,
+                 std: float,
+                 mode: str = "important",
+                 seed: int = 42,
+                 clamp_range = None):
+        """
+        base_dataset: underlying dataset yielding (img, label) where img is (C,H,W)
+        strategy:     saliency provider callable: (1,C,H,W) -> (H,W)
+        k:            fraction of pixels to perturb (0<k<=1)
+        std:          Gaussian noise std
+        mode:         'important' | 'random'
+        seed:         RNG seed for reproducible random mask sampling
+        clamp_range:  optional (min, max) clamp after perturbation (e.g., (0,1))
+        """
+        if mode not in ("important", "random"):
+            raise ValueError("mode must be 'important' or 'random'")
+        if not (0 < k <= 1):
+            raise ValueError("k must be in (0, 1].")
+
+        self.base_dataset = base_dataset
+        self.strategy = strategy
+        self.k = float(k)
+        self.std = float(std)
+        self.mode = mode
+        self.clamp_range = clamp_range
+
+        # Deterministic generator for random masks
+        self.gen = torch.Generator(device='cpu')
+        self.gen.manual_seed(int(seed))
+
+    def __len__(self) -> int:
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx: int):
+        img, label = self.base_dataset[idx]  # expects img as (C,H,W) tensor
+        if not torch.is_tensor(img):
+            raise TypeError("Base dataset must return tensors for images (C,H,W).")
+
+        # 1. Compute saliency (CPU or GPU inside strategy)
+        x = img.unsqueeze(0)  # (1,C,H,W)
+        sal = self.strategy(x)  # (H,W), typically on CPU
+
+        # 2. Build non-overlapping masks using the same saliency
+        imp_mask, rand_mask = build_masks_exclusive(
+            saliency=sal,
+            k=self.k,
+            gen=self.gen,
+            device=img.device
+        )
+
+        # 3. Choose mask and perturb
+        mask = imp_mask if self.mode == "important" else rand_mask
+        x_pert = add_gaussian_noise(img, mask, std=self.std)
+
+        return x_pert, int(label)
+
+def eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger):
     model.eval()
     original_accuracy, original_avg_loss, original_f1 = eval_model_dataloder(model, test_loader, device)
-    accuracy_I, avg_loss_I, f1_I = eval_model_dataloder(model, U_I_loader, device)
-    accuracy_R, avg_loss_R, f1_R = eval_model_dataloder(model, U_R_loader, device)
+    accuracy_I, avg_loss_I, f1_I = eval_model_dataloder(model, U_IO_loader, device)
+    accuracy_R, avg_loss_R, f1_R = eval_model_dataloder(model, U_RO_loader, device)
     
     logger.info(f"Original Accuracy: {original_accuracy:.4f}, Average Loss: {original_avg_loss:.4f}, F1 Score: {original_f1:.4f}")
-    logger.info(f"Accuracy on U_I: {accuracy_I:.4f}, Average Loss on U_I: {avg_loss_I:.4f}, F1 Score on U_I: {f1_I:.4f}")
-    logger.info(f"Accuracy on U_R: {accuracy_R:.4f}, Average Loss on U_R: {avg_loss_R:.4f}, F1 Score on U_R: {f1_R:.4f}")
-    
+    logger.info(f"Accuracy on U_IO: {accuracy_I:.4f}, Average Loss on U_IO: {avg_loss_I:.4f}, F1 Score on U_IO: {f1_I:.4f}")
+    logger.info(f"Accuracy on U_RO: {accuracy_R:.4f}, Average Loss on U_RO: {avg_loss_R:.4f}, F1 Score on U_RO: {f1_R:.4f}")
+
 
 # -----------------------------------------------------------
 # IDC coverage testing
@@ -506,11 +598,6 @@ def wisdom_coverage(args, model, train_loader, test_loader, logger, cluster_meth
         cluster_info = f"_{cluster_method_name}_"
 
     extra = clustering_params_all[cluster_method_name]
-    # extra = dict(
-    #     n_clusters =  args.n_clusters,    # same as IDC’s n_clusters, but OK to repeat
-    #     random_state = 42,   # fixes RNG
-    #     n_init = 10    # keep best of 10 centroid seeds
-    # )
 
     cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + cluster_info + "wisdom_clusters.pkl"
     idc = IDC(model, args.top_m_neurons, args.n_clusters, args.use_silhouette, args.all_class, cluster_method_name, extra, cache_path)
@@ -527,6 +614,43 @@ def wisdom_coverage(args, model, train_loader, test_loader, logger, cluster_meth
     save_csv_results(results, "rq2_sanity_{}_{}_{}.csv".format(args.dataset, args.model, TIMESTAMP), tag=tag)
     logger.info(f"Total Combination: {total_combination}, Max Coverage: {max_coverage:.4f}, IDC Coverage: {coverage_rate:.4f}, Attribution: WISDOM")
     return coverage_rate
+
+def wisdom_coverage_new(args, model, train_loader, test_loader, logger, cluster_method_name, device, tag='original'):
+    df = pd.read_csv(args.csv_file)
+    df_sorted = df.sort_values(by='Score', ascending=False).head(args.top_m_neurons)
+    top_k_neurons = {}
+    for layer_name, group in df_sorted.groupby('LayerName'):
+        top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
+    
+    if args.use_silhouette:
+        cluster_info = f"_{cluster_method_name}_silhouette_"
+    else:
+        cluster_info = f"_{cluster_method_name}_"
+
+    extra = clustering_params_all[cluster_method_name]
+    cache_path = "./cluster_pkl/" + args.model + "_" + args.dataset + "_top_" + str(args.top_m_neurons) + cluster_info + "wisdom_clusters.pkl"
+    
+    wisdom_idc = WisdomIDC(
+        model,
+        args.top_m_neurons,
+        args.n_clusters,
+        args.use_silhouette,
+        args.all_class,
+        cluster_method_name,
+        device,
+        extra,
+        cache_path
+    )
+    
+    train_acts  = wisdom_idc.get_selected_activations(train_loader, top_k_neurons)
+    cluster_groups = wisdom_idc.cluster_per_neuron(train_acts)
+    test_acts = wisdom_idc.get_selected_activations(test_loader, top_k_neurons)
+    coverage_rate, total_comb, max_cov = wisdom_idc.compute_coverage(test_acts, cluster_groups)
+    
+    logger.info(f"[WisdomIDC] [{tag}] Coverage: {coverage_rate:.6f} | total combinations: {total_comb} | max_coverage: {max_cov:.6f}")
+
+    return coverage_rate
+
 
 # thin wrapper for running IDC and WISDOM on dataloader
 def _run_idc_for_loader(tag, loader, args, model,
@@ -725,8 +849,75 @@ def sanity_check_idc(args, model, train_loader, test_loader, logger):
     logger.info(f"Total Combination: {t1}, Max Coverage: {max_coverage_1:.4f}, IDC Coverage: {coverage_rate_1:.4f}, Attribution: WISDOM_New")
     # logger.info(f"Total Combination: {t2}, Max Coverage: {max_coverage_2:.4f}, IDC Coverage: {coverage_rate_2:.4f}, Attribution: WISDOM_Old")
 
+def wisdom_fit_once(args, model, train_loader, top_k_neurons, cluster_method_name, device):
+    extra = clustering_params_all[cluster_method_name]
+    cache_path = (
+        "./cluster_pkl/"
+        f"{args.model}_{args.dataset}_top_{args.top_m_neurons}_"
+        f"{cluster_method_name}{'_sil' if args.use_silhouette else ''}_wisdom.pkl"
+    )
+    # Force determinism if not present
+    if "random_state" not in extra:
+        extra = {**extra, "random_state": 42}
+    if cluster_method_name == "KMeans" and "n_init" not in extra:
+        extra = {**extra, "n_init": 10}
 
-def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, cluster_method_name, device, logger):
+    wisdom_idc = WisdomIDC(
+        model=model,
+        top_m_neurons=args.top_m_neurons,
+        n_clusters=extra.get("n_clusters", args.n_clusters),
+        use_silhouette=args.use_silhouette,
+        test_all_classes=args.all_class,
+        clustering_method_name=cluster_method_name,
+        device=device,
+        clustering_params=extra,
+        cache_path=cache_path,
+    )
+
+    train_acts = wisdom_idc.get_selected_activations(train_loader, top_k_neurons)
+    cluster_groups = wisdom_idc.cluster_per_neuron(train_acts)
+    
+    return wisdom_idc, cluster_groups
+
+def sanity_check_wisdomIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger):
+    logger.info("=== SANITY-CHECK WISDOM IDC COVERAGE ===")
+    # prepare neurons once
+    df = pd.read_csv(args.csv_file).sort_values(by="Score", ascending=False).head(args.top_m_neurons)
+    top_k_neurons = {ln: torch.tensor(g["NeuronIndex"].values) for ln, g in df.groupby("LayerName")}
+
+    model.eval()
+    
+    
+    # fit clusters ONCE (deterministically) and reuse
+    wisdom_idc, cluster_groups = wisdom_fit_once(args, model, train_loader, top_k_neurons, cluster_method_name, device)
+    logger.info("WISDOM fits once DONE")
+    
+    # coverage on U_O
+    test_acts = wisdom_idc.get_selected_activations(test_loader, top_k_neurons)
+    cov_O, total, maxcov = wisdom_idc.compute_coverage(test_acts, cluster_groups)
+    logger.info(f"[Sanity] U_O: cov={cov_O:.6f} total={total} max={maxcov:.6f}")
+
+    # duplicate TEST set
+    dup_dataset = ConcatDataset([test_loader.dataset, test_loader.dataset])
+    dup_loader = DataLoader(dup_dataset, batch_size=args.batch_size, shuffle=False)
+    dup_acts = wisdom_idc.get_selected_activations(dup_loader, top_k_neurons)
+    cov_dup, total_dup, maxcov_dup = wisdom_idc.compute_coverage(dup_acts, cluster_groups)
+    logger.info(f"[Sanity] U_O + U_O: cov={cov_dup:.6f} total={total_dup} max={maxcov_dup:.6f}")
+
+    # U_RO (random)
+    uro_acts = wisdom_idc.get_selected_activations(U_RO_loader, top_k_neurons)
+    cov_UR, total_UR, maxcov_UR = wisdom_idc.compute_coverage(uro_acts, cluster_groups)
+    logger.info(f"[Sanity] U_RO: cov={cov_UR:.6f} total={total_UR} max={maxcov_UR:.6f}")
+
+    # U_IO (important)
+    uio_acts = wisdom_idc.get_selected_activations(U_IO_loader, top_k_neurons)
+    cov_UI, total_UI, maxcov_UI = wisdom_idc.compute_coverage(uio_acts, cluster_groups)
+    logger.info(f"[Sanity] U_IO: cov={cov_UI:.6f} total={total_UI} max={maxcov_UI:.6f}")
+
+    return dict(U_O=cov_O, U_OO=cov_dup, U_RO=cov_UR, U_IO=cov_UI)
+
+
+def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, trainable_module_name, cluster_method_name, device, logger):
     model.eval()
     
     logger.info("=== SANITY‑CHECK COVERAGE ===")
@@ -753,12 +944,12 @@ def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loade
     logger.info(new_res)
     
     
-    partial_res = partial_importance_coverage(test_dataset, U_I_dataset,
-                                            args, model,
-                                            train_loader, trainable_module_name,
-                                            cluster_method_name, device, logger,
-                                            sizes=(100, 500, 1000, 2000))
-    logger.info(partial_res)
+    # partial_res = partial_importance_coverage(test_dataset, U_I_dataset,
+    #                                         args, model,
+    #                                         train_loader, trainable_module_name,
+    #                                         cluster_method_name, device, logger,
+    #                                         sizes=(100, 500, 1000, 2000))
+    # logger.info(partial_res)
     
     # Top-k and std variations
     high_param_importance_coverage(test_dataset,
@@ -768,7 +959,7 @@ def sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loade
                                     new_topk=[0.05, 0.1, 0.2, 0.25, 0.3, 0.5],
                                     new_std=[0.1, 0.2, 0.3, 0.4, 0.5])
 
-def get_generated_datasets(args, model, test_loader, test_dataset, device):
+def get_generated_datasets(args, model, test_loader, test_dataset, device, logger):
     if args.attr == 'wisdom':
         U_I_dataset, U_R_dataset = build_sets_wisdom(model, test_loader, device, args.csv_file, TOPK, 0.5, args.dataset)
         U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
@@ -777,13 +968,118 @@ def get_generated_datasets(args, model, test_loader, test_dataset, device):
         U_I_dataset, U_R_dataset = build_sets(model, test_loader, device, TOPK, 0.5, args.dataset)
         U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])   # original + important
         U_RO_dataset = ConcatDataset([test_dataset, U_R_dataset])   # original + random
-    
-    U_I_loader = DataLoader(U_I_dataset, batch_size=args.batch_size, shuffle=False)
-    U_R_loader = DataLoader(U_R_dataset, batch_size=args.batch_size, shuffle=False)
+
     U_IO_loader = DataLoader(U_IO_dataset, batch_size=args.batch_size, shuffle=False)
     U_RO_loader = DataLoader(U_RO_dataset, batch_size=args.batch_size, shuffle=False)
+
+    U_I_loader = DataLoader(U_I_dataset, batch_size=args.batch_size, shuffle=False)
+    U_R_loader = DataLoader(U_R_dataset, batch_size=args.batch_size, shuffle=False)
+
+    logger.info(f"[Sanity] Generated datasets: U_I: {len(U_I_dataset)}, U_R: {len(U_R_dataset)}, U_IO: {len(U_IO_dataset)}, U_RO: {len(U_RO_dataset)}")
+
+    del U_I_dataset, U_R_dataset, U_IO_dataset, U_RO_dataset
+
+    return U_I_loader, U_IO_loader, U_RO_loader, U_R_loader
+
+def make_wisdom_strategy(model, relevance_scores_dict):
+    def strategy(x: torch.Tensor) -> torch.Tensor:
+        C, H, W = x.shape[1:]
+        return torch.ones(H, W)  # placeholder
+    return strategy
+
+# def make_lrp_strategy(model, target_layer):
+#     lrp = LayerLRP(model, target_layer)
+
+#     def strategy(x: torch.Tensor) -> torch.Tensor:
+#         # x is (1,C,H,W) on CPU or GPU
+#         x = x.to(next(model.parameters()).device)
+#         attr = lrp.attribute(x, target=0)  # target class could be fixed or inferred
+#         sal = attr[0].abs().sum(dim=0).detach().cpu()  # (H,W)
+#         return sal
+
+#     return strategy
+
+def make_lrp_strategy(model, target_layer=None):
+    """
+    Returns a callable: (1,C,H,W) -> (H,W) saliency map on CPU.
+    - If target_layer is a conv: use LayerLRP at that layer, upsample to input size.
+    - Otherwise: use whole-model LRP and reduce channels.
+    """
+    model.eval().to(next(model.parameters()).device)
+    global_lrp = LRP(model)
+    layer_lrp = None
+
+    # helper to check if a layer is spatial (conv-like)
+    def _is_spatial_layer(layer):
+        return hasattr(layer, "weight") and getattr(layer, "weight", None) is not None and hasattr(layer, "stride")
+
+    if target_layer is not None and _is_spatial_layer(target_layer):
+        layer_lrp = LayerLRP(model, target_layer)
+
+    def strategy(x: torch.Tensor) -> torch.Tensor:
+        device = next(model.parameters()).device
+        x = x.to(device)
+        x.requires_grad_(True)  # silence the Captum warning & be explicit
+
+        with torch.no_grad():
+            pred = model(x).argmax(dim=1)
+
+        if layer_lrp is not None:
+            # LayerLRP at conv layer → (1,C,h,w)
+            attr = layer_lrp.attribute(x, target=pred)
+            sal = attr.abs().mean(dim=1, keepdim=True)   # (1,1,h,w)
+            # upsample to input size
+            H, W = x.shape[-2:]
+            sal = F.interpolate(sal, size=(H, W), mode="bilinear", align_corners=False)[0, 0].detach().cpu()
+            return sal  # (H,W)
+
+        # Fallback: whole-model LRP → (1,C,H,W)
+        attr = global_lrp.attribute(x, target=pred)
+        sal = attr.abs().mean(dim=1, keepdim=True)[0, 0].detach().cpu()  # (H,W)
+        return sal
+
+    return strategy
+
+def get_generated_dataset_optimized(args, model, test_dataset, target_layer, logger):
+    gausian_STD = 0.5
     
-    return U_I_loader, U_R_loader, U_IO_loader, U_RO_loader, U_I_dataset, U_R_dataset, U_IO_dataset, U_RO_dataset
+    # After loading train_loader, test_loader, train_dataset, test_dataset, classes:
+    # Wrap the test_dataset in lazy perturbed datasets
+    
+    strategy = make_lrp_strategy(model, target_layer=target_layer)
+    
+    
+    U_I_dataset = PerturbedDataset(base_dataset=test_dataset, 
+                                   strategy=strategy,
+                                   k=TOPK, 
+                                   std=gausian_STD,
+                                   mode='important',
+                                   seed=42,
+                                   clamp_range=(0, 1))
+    U_R_dataset = PerturbedDataset(base_dataset=test_dataset, 
+                                   strategy=strategy,
+                                   k=TOPK, 
+                                   std=gausian_STD,
+                                   mode='random',
+                                   seed=42,
+                                   clamp_range=(0, 1))
+
+    # Build the concatenated datasets without pre‑allocating all images
+    U_IO_dataset = ConcatDataset([test_dataset, U_I_dataset])  # original + importance‑perturbed
+    U_RO_dataset = ConcatDataset([test_dataset, U_R_dataset])  # original + random‑perturbed
+
+    U_I_loader = DataLoader(U_IO_dataset, batch_size=args.batch_size, shuffle=False)
+    U_R_loader = DataLoader(U_RO_dataset, batch_size=args.batch_size, shuffle=False)
+
+    # Create dataloaders (no additional memory overhead beyond batch size)
+    U_IO_loader = DataLoader(U_IO_dataset, batch_size=args.batch_size, shuffle=False)
+    U_RO_loader = DataLoader(U_RO_dataset, batch_size=args.batch_size, shuffle=False)
+
+    logger.info(f"[Sanity] Generated datasets: U_I: {len(U_I_dataset)}, U_R: {len(U_R_dataset)}, U_IO: {len(U_IO_dataset)}, U_RO: {len(U_RO_dataset)}")
+    
+    del U_I_dataset, U_R_dataset, U_IO_dataset, U_RO_dataset
+    
+    return U_I_loader, U_IO_loader, U_RO_loader, U_R_loader
 
 # -----------------------------------------------------------
 # Main entry point
@@ -801,10 +1097,10 @@ def main(args):
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     
     # --- Get U_I, U_R, U_IO, URO datasets -------------------
-    U_I_loader, U_R_loader, U_IO_loader, U_RO_loader, U_I_dataset, U_R_dataset, U_IO_dataset, U_RO_dataset = get_generated_datasets(args, model, test_loader, test_dataset, device)
-    logger.info(f"[Sanity] Generated datasets: U_I: {len(U_I_dataset)}, U_R: {len(U_R_dataset)}, U_IO: {len(U_IO_dataset)}, U_RO: {len(U_RO_dataset)}")
+    # U_I_loader, U_IO_loader, U_RO_loader, U_R_loader = get_generated_datasets(args, model, test_loader, test_dataset, device, logger)
+    U_I_loader, U_IO_loader, U_RO_loader, U_R_loader = get_generated_dataset_optimized(args, model, test_dataset, trainable_module[-1], logger)
 
-    cluster_method_name = cluster_name_all[8]
+    cluster_method_name = cluster_name_all[0]
 
     # --- A simple acc test for the perturbed datasets -------------------
     # eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger)
@@ -815,20 +1111,19 @@ def main(args):
     # viz_attr_diff(args, logger, test_loader, U_R_loader, cmap=cmap[0], alpha=0.8, tag='random')
     # viz_attr_diff(args, logger, U_I_loader, U_R_loader, cmap=cmap[1], alpha=0.8, tag='mix')
     
+    
+    # ---  Sanity checks WisdomIDC -------------------------------------------------
+    sanity_check_wisdomIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger)
+
     # ---  Sanity checks -------------------------------------------------
-    # sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, U_I_dataset, trainable_module_name, cluster_method_name, device, logger)
+    # sanity_check(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, test_dataset, trainable_module_name, cluster_method_name, device, logger)
 
     # ---  IDC new and old test ------------------------------------------
     # sanity_check_idc(args, model, train_loader, test_loader, logger)
 
     # ---  Normal pipeline for IDC and WISDOM ---------------------------
-    normal_pipeline(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, trainable_module_name, cluster_method_name, device, logger)
+    # normal_pipeline(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, trainable_module_name, cluster_method_name, device, logger)
 
-# python ./unittest/sanity_check.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' --dataset mnist --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_mnist.csv' --attr lrp --top-m-neurons 10
-# python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth' --dataset imagenet --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_imagenet.csv' --attr lrp --top-m-neurons 10
-# python ./unittest/sanity_check.py --model vgg16 --saved-model '/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/vgg16_cifar10.csv' --attr lrp --top-m-neurons 10
-# python ./unittest/sanity_check.py --model resnet18 --saved-model '/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file './saved_files/pre_csv/resnet18_cifar10.csv' --attr lrp --top-m-neurons 10
-# python ./unittest/sanity_check.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file './saved_files/pre_csv/lenet_cifar10.csv' --attr lrp --top-m-neurons 10
 if __name__ == '__main__':
     set_seed()
     args = parse_args()

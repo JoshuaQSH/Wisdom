@@ -157,30 +157,30 @@ CLUSTERS: Dict[str, Dict[str, Any]] = {
     },
 
     # ---------------- 4. Density-based --------------------------------- #
-    "DBSCAN": {
-        "cls": DBSCAN,
-        "space": [
-            {"name": "eps",         "type": "range",  "bounds": [0.05, 5.0]},
-            {"name": "min_samples", "type": "range",  "bounds": [3, 50], "value_type": "int"},
-            {"name": "metric",      "type": "choice", "values": ["euclidean", "manhattan", "chebyshev"]},
-        ],
-    },
-    "OPTICS": {
-        "cls": OPTICS,
-        "space": [
-            {"name": "min_samples",      "type": "range", "bounds": [3, 50], "value_type": "int"},
-            {"name": "xi",               "type": "range", "bounds": [0.01, 0.3]},
-            {"name": "min_cluster_size", "type": "range", "bounds": [2, 50], "value_type": "int"},
-        ],
-    },
-     "HDBSCAN": {
-        "cls": HDBSCAN,
-        "space": [
-            {"name": "min_cluster_size",          "type": "range", "bounds": [2, 50], "value_type": "int"},
-            {"name": "min_samples",               "type": "range", "bounds": [1, 30], "value_type": "int"},
-            {"name": "cluster_selection_epsilon", "type": "range", "bounds": [0.0, 1.0]},
-        ],
-    },
+    # "DBSCAN": {
+    #     "cls": DBSCAN,
+    #     "space": [
+    #         {"name": "eps",         "type": "range",  "bounds": [0.05, 5.0]},
+    #         {"name": "min_samples", "type": "range",  "bounds": [3, 50], "value_type": "int"},
+    #         {"name": "metric",      "type": "choice", "values": ["euclidean", "manhattan", "chebyshev"]},
+    #     ],
+    # },
+    # "OPTICS": {
+    #     "cls": OPTICS,
+    #     "space": [
+    #         {"name": "min_samples",      "type": "range", "bounds": [3, 50], "value_type": "int"},
+    #         {"name": "xi",               "type": "range", "bounds": [0.01, 0.3]},
+    #         {"name": "min_cluster_size", "type": "range", "bounds": [2, 50], "value_type": "int"},
+    #     ],
+    # },
+    #  "HDBSCAN": {
+    #     "cls": HDBSCAN,
+    #     "space": [
+    #         {"name": "min_cluster_size",          "type": "range", "bounds": [2, 50], "value_type": "int"},
+    #         {"name": "min_samples",               "type": "range", "bounds": [1, 30], "value_type": "int"},
+    #         {"name": "cluster_selection_epsilon", "type": "range", "bounds": [0.0, 1.0]},
+    #     ],
+    # },
 
     # "MeanShift": {
     #     "cls": MeanShift,
@@ -200,13 +200,13 @@ CLUSTERS: Dict[str, Dict[str, Any]] = {
     },
 
     # ---------------- 5. Exemplar-based -------------------------------- #
-    "AffinityPropagation": {
-        "cls": AffinityPropagation,
-        "space": [
-            {"name": "damping",    "type": "range", "bounds": [0.5, 0.99]},
-            {"name": "preference", "type": "range", "bounds": [-300, 0]},
-        ],
-    },
+    # "AffinityPropagation": {
+    #     "cls": AffinityPropagation,
+    #     "space": [
+    #         {"name": "damping",    "type": "range", "bounds": [0.5, 0.99]},
+    #         {"name": "preference", "type": "range", "bounds": [-300, 0]},
+    #     ],
+    # },
 
     # ---------------- 6. Constraint-based ------------------------------ #
     "Birch": {
