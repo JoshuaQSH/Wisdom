@@ -343,7 +343,7 @@ def load_MNIST(batch_size=32, root='./datasets', channel_first=False, train_all=
     else:
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    
+
     classes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
     
     return train_loader, test_loader, train_dataset, test_dataset, classes

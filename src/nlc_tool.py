@@ -56,10 +56,6 @@ def get_model_layers(model):
             else:
                 name_counter[class_name] += 1
             layer_dict['%s-%d' % (class_name, name_counter[class_name])] = module
-    # DEBUG
-    # print('layer name')
-    # for k in layer_dict.keys():
-    #     print(k, ': ', layer_dict[k])
     return layer_dict
 
 def get_layer_output_sizes(model, data, pad_length=PAD_LENGTH):   
@@ -93,10 +89,6 @@ def get_layer_output_sizes(model, data, pad_length=PAD_LENGTH):
                 unrolled_output_sizes['%s-%d' % (k, i)] = output_sizes[k]
         else:
             unrolled_output_sizes[k] = output_sizes[k]
-    # DEBUG
-    # print('output size')
-    # for k in output_sizes.keys():
-    #     print(k, ': ', output_sizes[k])
     return unrolled_output_sizes
 
 def get_layer_output(model, data, pad_length=PAD_LENGTH):

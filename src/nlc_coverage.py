@@ -35,14 +35,13 @@ def calculate_coverage_ratio(build_loader, target_loader, coverage_method, model
     if isinstance(sample_batch, (list, tuple)):
         sample_batch = sample_batch[0]
     num_neuron = 0
+    model.to(device)
     layer_size_dict = get_layer_output_sizes(model, sample_batch.to(device))
     for layer_name in layer_size_dict.keys():
         num_neuron += layer_size_dict[layer_name][0]
     
     print('Total %d layers: ' % len(layer_size_dict.keys()))
     print('Total %d neurons: ' % num_neuron)
-    
-    model.to(device)
         
     # Initialize coverage method
     coverage_methods = {
