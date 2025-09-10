@@ -11,7 +11,11 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 import torchvision
+from torchvision import datasets
 import torchvision.transforms as transforms
+
+from typing import List, Tuple
+
 
 class CIFAR10Dataset(Dataset):
     def __init__(self,
@@ -164,12 +168,24 @@ class FuzzDataset:
             label_list.append(label)
         return image_list, label_list
 
+    # def to_numpy(self, image_list, is_image=True):
+    #     image_numpy_list = []
+    #     for i in tqdm(range(len(image_list))):
+    #         image = image_list[i]
+    #         if is_image:
+    #             image_numpy = image.transpose(0, 2).numpy()
+    #         else:
+    #             image_numpy = image.numpy()
+    #         image_numpy_list.append(image_numpy)
+    #     print('Numpy: %d' % len(image_numpy_list))
+    #     return image_numpy_list
+    
     def to_numpy(self, image_list, is_image=True):
         image_numpy_list = []
         for i in tqdm(range(len(image_list))):
-            image = image_list[i]
+            image = image_list[i]   
             if is_image:
-                image_numpy = image.transpose(0, 2).numpy()
+                image_numpy = image.permute(1, 2, 0).contiguous().numpy().astype("float32")
             else:
                 image_numpy = image.numpy()
             image_numpy_list.append(image_numpy)
@@ -354,6 +370,135 @@ class ImageNetFuzzDataset(FuzzDataset):
     def label2index(self, label_name):
         breakpoint()
         return self.label2index_dict[label_name]
+    
+    
+# ==================== New Here ======================
+
+def _pick_imagenet_val_dir(root: str) -> str:
+    """
+    Try common validation/test subfolders under ImageNet root.
+    Fallback: if 'root' itself has class-subfolders, use it directly.
+    """
+    candidates = [
+        os.path.join(root, "val"),
+        os.path.join(root, "validation"),
+        os.path.join(root, "test"),
+        root,  # fallback if root already has class dirs
+    ]
+    for p in candidates:
+        if os.path.isdir(p):
+            # Has at least one subdir? (ImageFolder requirement)
+            subdirs = [d for d in os.listdir(p) if os.path.isdir(os.path.join(p, d))]
+            if len(subdirs) > 0:
+                return p
+    raise FileNotFoundError(
+        f"Could not locate an ImageNet-like folder with class subdirectories under: {root}"
+    )
+
+
+def _build_transform(image_size: int | None) -> transforms.Compose:
+    """
+    PIL -> Tensor [0,1] (C,H,W); no normalization; optional resize+center crop.
+    """
+    ops = []
+    if image_size is not None and image_size > 0:
+        # For ImageNet it’s common to resize shorter side then center-crop to square
+        ops += [transforms.Resize(image_size), transforms.CenterCrop(image_size)]
+    ops += [transforms.ToTensor()]  # [0,1], CxHxW float32
+    return transforms.Compose(ops)
+
+
+def _tensor_to_hwc_np(x: torch.Tensor) -> np.ndarray:
+    """
+    CHW float tensor in [0,1] -> HWC float32 numpy in [0,1]
+    """
+    if x.dim() != 3:
+        raise ValueError(f"Expected CHW tensor, got shape {tuple(x.shape)}")
+    x = x.detach().cpu().permute(1, 2, 0).contiguous().numpy()
+    x = np.clip(x, 0.0, 1.0).astype(np.float32)
+    return x
+
+
+def _stratified_indices(targets: List[int], num_classes: int, per_class: int, seed: int) -> List[int]:
+    """
+    Pick up to `per_class` indices for each class uniformly without loading images.
+    """
+    rng = random.Random(seed)
+    by_class = [[] for _ in range(num_classes)]
+    for idx, y in enumerate(targets):
+        if 0 <= y < num_classes:
+            by_class[y].append(idx)
+
+    selected: List[int] = []
+    for c in range(num_classes):
+        pool = by_class[c]
+        if len(pool) == 0:
+            continue
+        # If fewer than requested, take all; else sample without replacement
+        k = min(per_class, len(pool))
+        chosen = rng.sample(pool, k) if len(pool) >= k else list(pool)
+        selected.extend(chosen)
+
+    # Shuffle final list to avoid class blocks
+    rng.shuffle(selected)
+    return selected
+
+
+# --------------------------
+# Public API
+# --------------------------
+
+def load_seed_pool(args) -> Tuple[List[np.ndarray], List[int]]:
+    """
+    Build a small balanced seed pool lazily.
+
+    Returns:
+        I_input: List[np.ndarray], each HxWxC float32 in [0,1]
+        L_input: List[int] labels (0..C-1)
+    """
+    rng_seed = getattr(args, "seed", 42)
+    per_class = int(getattr(args, "num_per_class", 10))
+    image_size = getattr(args, "image_size", None)
+    if image_size is not None:
+        image_size = int(image_size)
+
+    dataset_name = getattr(args, "dataset", "CIFAR10").lower()
+    data_root = getattr(args, "data_path", ".")
+
+    # Build dataset + targets without loading any image pixels yet
+    if dataset_name == "cifar10":
+        transform = _build_transform(image_size)  # will be ignored if image_size is None
+        ds = datasets.CIFAR10(root=data_root, train=False, download=False, transform=transform)
+        targets = ds.targets  # list[int]
+        num_classes = 10
+
+    elif dataset_name == "imagenet":
+        val_dir = _pick_imagenet_val_dir(data_root)
+        transform = _build_transform(image_size or 224)
+        ds = datasets.ImageFolder(root=val_dir, transform=transform)
+        # targets available via .targets in modern torchvision, else .imgs includes labels
+        targets = getattr(ds, "targets", None)
+        if targets is None:
+            targets = [lbl for (_path, lbl) in ds.imgs]
+        # infer num classes from class_to_idx
+        num_classes = len(ds.class_to_idx)
+
+    else:
+        raise ValueError(f"Unsupported dataset: {args.dataset}")
+
+    # Stratified selection of indices (no image decoding yet)
+    idxs = _stratified_indices(targets, num_classes=num_classes, per_class=per_class, seed=rng_seed)
+
+    # Now actually load *only* the selected images (decode + transform)
+    I_input: List[np.ndarray] = []
+    L_input: List[int] = []
+    for i in idxs:
+        img_tensor, label = ds[i]              # loads & transforms this item only
+        img_np = _tensor_to_hwc_np(img_tensor) # CHW->HWC float32 in [0,1]
+        I_input.append(img_np)
+        L_input.append(int(label))
+
+    return I_input, L_input
 
 if __name__ == '__main__':
     pass

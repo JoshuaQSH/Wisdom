@@ -236,6 +236,16 @@ def make(name: str, **kwargs):
 
     cls = CLUSTERS[name]["cls"]
     valid = {k: v for k, v in kwargs.items() if k != "algo" and k in cls().__dict__ or k in cls.__init__.__code__.co_varnames}
+    
+    if name == "AgglomerativeClustering":
+        linkage = valid.get("linkage", "ward")
+        # sklearn ≥1.4 uses 'metric'; older code sometimes used 'affinity'
+        metric  = valid.get("metric", valid.get("affinity", "euclidean"))
+        if linkage == "ward" and metric != "euclidean":
+            # repair illegal combo
+            valid["metric"] = "euclidean"
+            # (optional) drop legacy alias to avoid conflicts
+            valid.pop("affinity", None)
 
     if name in PREDICTLESS:
         base_estimator = cls(**valid)

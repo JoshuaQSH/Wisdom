@@ -15,7 +15,7 @@ from src.attribution import get_relevance_scores_dataloader
 from src.utils import get_data, parse_args, get_model, get_trainable_modules_main, _configure_logging
 # from src.idc import IDC
 from src.wisdom import WisdomIDC
-from src.deeepidc import DeepIDC
+from src.deepidc import DeepIDC
 from src.nlc_coverage import calculate_coverage_ratio
 
 
@@ -560,15 +560,17 @@ def main():
 
     # Run the coverage suite
     logger.info("=== Running coverage suite ===")    
-    dpo_results = idc_coverage(args, model, train_loader, test_loader, cluster_method_name, device, logger, tag='original')
-    dpr_results = idc_coverage(args, model, train_loader, U_RO_loader, cluster_method_name, device, logger, tag='U_RO')
-    dpi_results = idc_coverage(args, model, train_loader, U_IO_loader, cluster_method_name, device, logger, tag='U_IO')
+    # dpo_results = idc_coverage(args, model, train_loader, test_loader, cluster_method_name, device, logger, tag='original')
+    # dpr_results = idc_coverage(args, model, train_loader, U_RO_loader, cluster_method_name, device, logger, tag='U_RO')
+    # dpi_results = idc_coverage(args, model, train_loader, U_IO_loader, cluster_method_name, device, logger, tag='U_IO')
     
-    dpo_results_w = wisdom_coverage(args, model, train_loader, test_loader, logger, cluster_method_name, device, tag='original')
-    dpr_results_w = wisdom_coverage(args, model, train_loader, U_RO_loader, logger, cluster_method_name, device, tag='U_RO')
-    dpi_results_w = wisdom_coverage(args, model, train_loader, U_IO_loader, logger, cluster_method_name, device, tag='U_IO')
+    # dpo_results_w = wisdom_coverage(args, model, train_loader, test_loader, logger, cluster_method_name, device, tag='original')
+    # dpr_results_w = wisdom_coverage(args, model, train_loader, U_RO_loader, logger, cluster_method_name, device, tag='U_RO')
+    # dpi_results_w = wisdom_coverage(args, model, train_loader, U_IO_loader, logger, cluster_method_name, device, tag='U_IO')
     
-    methods_name = ['NC', 'KMNC', 'SNAC', 'NBC', 'TKNC', 'TKNP', 'LSC', 'DSC', 'MDSC', 'NLC', 'CC']
+    # methods_name = ['NC', 'KMNC', 'SNAC', 'NBC', 'TKNC', 'TKNP', 'LSC', 'DSC', 'MDSC', 'NLC', 'CC']
+    methods_name = ['DSC']
+
     for method in methods_name:
         uo_results, _ = run_coverage_suite_single(model, train_loader, test_loader, len(classes), method, device, logger, tag='original', skip_train=True, model_name=args.model, dataset_name=args.dataset)
         ur_results, _ = run_coverage_suite_single(model, train_loader, U_RO_loader, len(classes), method, device, logger, tag='U_RO', skip_train=True, model_name=args.model, dataset_name=args.dataset)

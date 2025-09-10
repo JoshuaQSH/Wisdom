@@ -24,7 +24,7 @@ from src.utils import get_data, parse_args, get_model, eval_model_dataloder, get
 
 from src.idc import IDC
 from src.wisdom import WisdomIDC
-from src.deeepidc import DeepIDC
+from src.deepidc import DeepIDC
 
 import matplotlib.pyplot as plt
 
@@ -971,23 +971,23 @@ def main(args):
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
     
     # --- Get U_I, U_R, U_IO, URO datasets -------------------
-    U_I_loader, U_IO_loader, U_RO_loader, U_R_loader = get_generated_datasets(args, model, test_loader, test_dataset, device, logger)
-    # U_I_loader, U_IO_loader, U_RO_loader, U_R_loader = get_generated_dataset_optimized(args, model, test_dataset, trainable_module[-1], logger)
+    # U_I_loader, U_IO_loader, U_RO_loader, U_R_loader = get_generated_datasets(args, model, test_loader, test_dataset, device, logger)
+    U_I_loader, U_IO_loader, U_RO_loader, U_R_loader = get_generated_dataset_optimized(args, model, test_dataset, trainable_module[-1], logger)
 
-    cluster_method_name = cluster_name_all[0]
+    cluster_method_name = cluster_name_all[8]
 
     # --- A simple acc test for the perturbed datasets -------------------
     # eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger)
     
     # ---  Visualization Checks ------------------------------------------
-    viz_attr_diff(args, logger, test_loader, U_I_loader, cmap=cmap[0], alpha=0.8, tag='importance')
-    viz_attr_diff(args, logger, test_loader, U_R_loader, cmap=cmap[0], alpha=0.8, tag='random')
+    # viz_attr_diff(args, logger, test_loader, U_I_loader, cmap=cmap[0], alpha=0.8, tag='importance')
+    # viz_attr_diff(args, logger, test_loader, U_R_loader, cmap=cmap[0], alpha=0.8, tag='random')
     
     # ---  Sanity checks WisdomIDC -------------------------------------------------
     # sanity_check_wisdomIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger)
     
     # ---  Sanity checks DeepImportance IDC -------------------------------------------------
-    # sanity_check_deepimportanceIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger)
+    sanity_check_deepimportanceIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger)
 
 if __name__ == '__main__':
     set_seed()

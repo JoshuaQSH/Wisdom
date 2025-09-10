@@ -3,17 +3,6 @@
 import numpy as np
 import cv2
 
-# def pad(src, dst):
-#     H_src, W_src, C_src = src.shape
-#     H_dst, W_dst, C_dst = dst.shape
-#     top = np.max((H_src - H_dst) // 2, 0)
-#     bottom = top
-#     left = np.max((W_src - W_dst) // 2, 0)
-#     right = left
-#     COLOR = [255, 255, 255] # white
-#     padded = cv2.copyMakeBorder(dst, top, bottom, left, right, cv2.BORDER_CONSTANT, value=COLOR)
-#     return padded
-
 def pad(src, dst):
     H_src, W_src, C = src.shape
     H_dst, W_dst, C = dst.shape

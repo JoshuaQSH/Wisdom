@@ -25,7 +25,7 @@ from src.clustering import make
 from src.utils import save_cluster_groups, load_cluster_groups
 
 
-class WisdomIDC:
+class DeepIDC:
     def __init__(
         self,
         model: nn.Module,
@@ -110,13 +110,6 @@ class WisdomIDC:
         dataloader: DataLoader,
         selected_neurons: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
-        """
-        - For each selected layer, collect a (N, K_l) tensor of activations across the
-        dataloader. 
-        - Conv activations are averaged over spatial dims
-        - Only the selected channels are kept. 
-        - Stored on CPU float16 to save memory.
-        """
         self.model.to(self.device).eval()
         activation_lists: Dict[str, List[torch.Tensor]] = {n: [] for n in selected_neurons}
 
@@ -155,15 +148,6 @@ class WisdomIDC:
     # ---------------------- Clustering (per neuron) ----------------------
 
     def _fit_one_model(self, values: np.ndarray) -> Any:
-        """
-        Fit a clustering model on 1-D `values` (shape: (N, 1)) according to
-        self.clustering_method_name / self.clustering_params, with special
-        handling:
-          - If method is KMeans and self.use_silhouette: choose k via silhouette.
-          - If method is MeanShift and no bandwidth provided: estimate bandwidth.
-        Additionally, for models without `predict()`, we attach `_centers_`
-        computed from training labels so we can assign clusters at test time.
-        """
         name = (self.clustering_method_name or "").lower()
         params = dict(self.clustering_params or {})
         values = np.asarray(values, dtype=np.float64, order="C")
@@ -245,12 +229,6 @@ class WisdomIDC:
         return model
 
     def cluster_per_neuron(self, activations: Dict[str, torch.Tensor]) -> Dict[str, List[Any]]:
-        """
-        For each selected layer and each selected neuron (column), fit a clusterer on
-        the 1-D activation vector (N, 1). Returns {layer_name: [model_per_neuron,...]}.
-        Respects self.clustering_method_name / self.clustering_params.
-        Applies silhouette search **only for KMeans** when self.use_silhouette==True.
-        """
         if self.cache_path and os.path.exists(self.cache_path):
             print(f"[INFO] Loading cached clusters from {self.cache_path}")
             return load_cluster_groups(self.cache_path)
@@ -282,31 +260,24 @@ class WisdomIDC:
     # ------------------------- Coverage computation -------------------------
 
     @staticmethod
-    def _predict_one_old(model: Any, x_1d: np.ndarray) -> int:
+    def _predict_one(model: Any, x_1d: np.ndarray) -> int:
         """Return cluster id for a single 1-D sample (shape (1, 1))."""
+        x = np.asarray(x_1d, dtype=np.float64, order="C")
+        if x.ndim == 1:
+            x = x.reshape(1, -1)
+        if hasattr(model, "predict"):
+             return int(model.predict(x)[0])
+        # if hasattr(model, "predict"):
+        #     return int(model.predict(x_1d)[0])
         # fallback: nearest recorded center
         centers = getattr(model, "_centers_", None)
         if centers is None or len(centers) == 0:
             # degenerate: single cluster
             return 0
         # L2 distance since data is 1-D
-        idx = int(np.argmin(np.abs(centers.reshape(-1) - x_1d.reshape(-1)[0])))
+        # idx = int(np.argmin(np.abs(centers.reshape(-1) - x_1d.reshape(-1)[0])))
+        idx = int(np.argmin(np.abs(centers.reshape(-1) - x.reshape(-1)[0])))
         return idx
-    
-    @staticmethod
-    def _predict_one(model: Any, x_1d: np.ndarray) -> int:
-        x = np.asarray(x_1d, order="C")
-        if hasattr(model, "cluster_centers_"):
-            exp_dtype = model.cluster_centers_.dtype
-        elif hasattr(model, "dtype_"):
-            exp_dtype = model.dtype_
-        else:
-            exp_dtype = np.float64
-        x = x.astype(exp_dtype, copy=False)
-        if x.ndim == 1:
-            x = x.reshape(1, -1)
-        return int(model.predict(x)[0])
-
 
     def compute_coverage(
         self,

@@ -24,12 +24,13 @@ import random
 import numpy as np
 from src.utils import get_data, parse_args, get_model, get_trainable_modules_main, _configure_logging, eval_model_dataloder
 from src.idc import IDC
+from src.wisdom import WisdomIDC
 
-from helper import get_adv_dataloader
+from helper import get_adv_dataloader, get_generated_dataset_optimized
 
 
 N_TRIALS = 5
-MINI_TEST = True  # Set to True for quick testing with a small subset
+MINI_TEST = False  # Set to True for quick testing with a small subset
 
 PREDICTLESS = {
     "AgglomerativeClustering",
@@ -79,26 +80,38 @@ def wisdom_coverage(csv_file,
                     clustering_method_name,
                     clustering_params, 
                     model, 
+                    device,
                     train_loader, 
                     test_loader):
-    
+
     df = pd.read_csv(csv_file)
     df_sorted = df.sort_values(by='Score', ascending=False).head(top_m_neurons)
     top_k_neurons = {}
     for layer_name, group in df_sorted.groupby('LayerName'):
         top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
+        
+    wisdom_idc = WisdomIDC(
+            model=model,
+            top_m_neurons=top_m_neurons,
+            n_clusters=n_clusters,
+            use_silhouette=False,
+            test_all_classes=True,
+            clustering_method_name=clustering_method_name,
+            device=device,
+            clustering_params=clustering_params,
+            cache_path=None,
+    )
 
-    idc = IDC(model, top_m_neurons, n_clusters, False, True, clustering_method_name, clustering_params, None)
+    train_acts = wisdom_idc.get_selected_activations(train_loader, top_k_neurons)
+    cluster_groups = wisdom_idc.cluster_per_neuron(train_acts)
 
-    activation_values, selected_activations = idc.get_activations_model_dataloader(train_loader, top_k_neurons)
-    selected_activations = {k: v.half().cpu() for k, v in selected_activations.items()}
-    cluster_groups = idc.cluster_activation_values_all(selected_activations)
-    coverage_rate, total_combination, max_coverage = idc.compute_idc_test_whole_dataloader(test_loader, top_k_neurons, cluster_groups)
+    test_acts = wisdom_idc.get_selected_activations(test_loader, top_k_neurons)
+    coverage_rate, total_combination, max_coverage = wisdom_idc.compute_coverage(test_acts, cluster_groups)
 
-    del activation_values
-    del selected_activations
+    del train_acts
+    del test_acts
     del cluster_groups
-    del idc
+    del wisdom_idc
     torch.cuda.empty_cache()
     
     return coverage_rate, total_combination, max_coverage
@@ -180,7 +193,7 @@ def main() -> None:
     train_loader, test_loader, train_dataset, test_dataset, classes = get_data(args.dataset, args.batch_size, args.data_path)
 
     if MINI_TEST:
-        train_loader, test_loader = mini_test(train_dataset, test_dataset, logger, sample_size=1000, test_size=200)
+        train_loader, test_loader = mini_test(train_dataset, test_dataset, logger, sample_size=100, test_size=20)
 
     accuracy, avg_loss, f1 = eval_model_dataloder(model, test_loader, device)
     print(f"Model accuracy: {accuracy:.4f}, Avg loss: {avg_loss:.4f}, F1 score: {f1:.4f}")
@@ -211,11 +224,13 @@ def main() -> None:
                     args.n_clusters, 
                     "KMeans",
                     {'random_state': 42, 'n_init': 10, 'n_clusters': args.n_clusters}, 
-                    model, 
+                    model,
+                    device,
                     train_loader, 
                     test_loader)
     
-    U_IO_loader, U_RO_loader = get_adv_dataloader(model, test_loader, device=device, batch_size=args.batch_size, csv_file=args.csv_file, attr='wisdom')
+    # U_IO_loader, U_RO_loader = get_adv_dataloader(model, test_loader, device=device, batch_size=args.batch_size, csv_file=args.csv_file, attr='wisdom')
+    U_IO_loader, U_RO_loader = get_generated_dataset_optimized(args, model, test_dataset, logger)
 
     # 2. Cov(U_IO) baseline
     coverage_rate_io_baseline, total_combination_io_baseline, max_coverage_io_baseline = wisdom_coverage(args.csv_file, 
@@ -224,6 +239,7 @@ def main() -> None:
                     "KMeans",
                     {'random_state': 42, 'n_init': 10, 'n_clusters': args.n_clusters}, 
                     model, 
+                    device,
                     train_loader, 
                     U_IO_loader)
     
@@ -236,7 +252,8 @@ def main() -> None:
                     args.n_clusters, 
                     best_cfg["algo"],
                     clustering_params_base, 
-                    model, 
+                    model,
+                    device,
                     train_loader,
                     U_IO_loader)
     
@@ -247,6 +264,7 @@ def main() -> None:
                     best_cfg["algo"],
                     clustering_params, 
                     model, 
+                    device,
                     train_loader,
                     U_IO_loader)
 
@@ -276,7 +294,7 @@ def main() -> None:
 # python ./optimization_dev/bo_test_demo.py --model lenet --saved-model "/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth" --dataset mnist --data-path /data/shenghao/dataset --batch-size 128 --device 'cuda:0' --csv-file "./saved_files/pre_csv/lenet_mnist.csv" --attr lrp --top-m-neurons 10
 # python ./optimization_dev/bo_test_demo.py --model lenet --saved-model "/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth" --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file "./saved_files/pre_csv/lenet_cifar10.csv" --attr lrp --top-m-neurons 10
 # python ./optimization_dev/bo_test_demo.py --model vgg16 --saved-model "/torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth" --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file "./saved_files/pre_csv/vgg16_cifar10.csv" --attr lrp --top-m-neurons 10
-# python ./optimization_dev/bo_test_demo.py --model resnet18 --saved-model "/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth" --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file "./saved_files/pre_csv/resnet_cifar10.csv" --attr lrp --top-m-neurons 10
-# python ./optimization_dev/bo_test_demo.py --model resnet18 --saved-model "/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth" --dataset imagenet --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file "./saved_files/pre_csv/resnet_imagenet.csv" --attr lrp --top-m-neurons 10
+# python ./optimization_dev/bo_test_demo.py --model resnet18 --saved-model "/torch-deepimportance/models_info/saved_models/resnet18_CIFAR10_whole.pth" --dataset cifar10 --data-path /data/shenghao/dataset --batch-size 64 --device 'cuda:0' --csv-file "./saved_files/pre_csv/resnet18_cifar10.csv" --attr lrp --top-m-neurons 10
+# python ./optimization_dev/bo_test_demo.py --model resnet18 --saved-model "/torch-deepimportance/models_info/saved_models/resnet18_IMAGENET_patched_whole.pth" --dataset imagenet --data-path /data/shenghao/dataset --batch-size 32 --device 'cuda:0' --csv-file "./saved_files/pre_csv/resnet18_imagenet.csv" --attr lrp --top-m-neurons 10
 if __name__ == "__main__":
     main()

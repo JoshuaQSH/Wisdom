@@ -6,12 +6,6 @@ import random
 import csv
 
 import torch
-from torchmetrics.image.inception import InceptionScore
-from torchmetrics.image.fid import FrechetInceptionDistance
-
-from PIL import Image
-import torchvision.transforms as T
-from torchvision import models, transforms
 import numpy as np
 
 from src.utils import make_path, get_model, get_trainable_modules_main, load_ImageNet
@@ -22,7 +16,6 @@ from fuzzer_core import Fuzzer, Parameters
 import fuzz_dataloader
 
 from fuzz_idc import DeepImportance, Wisdom
-
 
 """
 Usage:
@@ -91,24 +84,27 @@ def prepare_data_model(args):
     
     if args.dataset == 'CIFAR10':
         # data_set = fuzz_dataloader.CIFAR10FuzzDataset(args, split='test')
-        data_set  = fuzz_dataloader.TorchvisionCIFAR10FuzzDataset(args, root=args.data_path, split="test")
+        # data_set  = fuzz_dataloader.TorchvisionCIFAR10FuzzDataset(args, root=args.data_path, split="test")
         TOTAL_CLASS_NUM, train_loader, test_loader, seed_loader = fuzz_dataloader.get_loader(args)
     elif args.dataset == 'ImageNet':
         # data_set = fuzz_dataloader.ImageNetFuzzDataset(args, image_dir=args.data_path, label2index_file='./datasets/imagenet_labels.json', split='val')
-        data_set = fuzz_dataloader.TorchImageNetFuzzDataset(args, root=args.data_path, split="val")
+        # data_set = fuzz_dataloader.TorchImageNetFuzzDataset(args, root=args.data_path, split="val")
         train_loader, test_loader, train_dataset, val_dataset, classes = load_ImageNet(batch_size=args.batch_size, root=args.data_path, num_workers=2, use_val=False, label_path='./datasets/imagenet_labels.json')
         TOTAL_CLASS_NUM = len(classes)
     
     # TOTAL_CLASS_NUM, train_loader, test_loader, seed_loader = fuzz_dataloader.get_loader(args)
-    image_list, label_list = data_set.build()
-    image_numpy_list = data_set.to_numpy(image_list)
-    label_numpy_list = data_set.to_numpy(label_list, False)
+    # image_list, label_list = data_set.build()
+    # image_numpy_list = data_set.to_numpy(image_list)
+    # label_numpy_list = data_set.to_numpy(label_list, False)
     
-    del image_list
-    del label_list
-    gc.collect()
+    # del image_list
+    # del label_list
+    # gc.collect()
     
-    return model, layer_size_dict, TOTAL_CLASS_NUM, train_loader, test_loader, test_loader, image_numpy_list, label_numpy_list
+    image_numpy_list, label_numpy_list = fuzz_dataloader.load_seed_pool(args)
+    return model, layer_size_dict, TOTAL_CLASS_NUM, train_loader, test_loader, image_numpy_list, label_numpy_list
+    
+    # return model, layer_size_dict, TOTAL_CLASS_NUM, train_loader, test_loader, test_loader, image_numpy_list, label_numpy_list
 
 def main():
     args = parse_args()
@@ -127,7 +123,7 @@ def main():
         'DSC': 0.1,
         'MDSC': 10,
         'DeepImportance': [10, 2], # top_m_neurons, n_clusters
-        'Wisdom': [10, 2] # top_m_neurons, n_clusters
+        'Wisdom': [6, 2] # top_m_neurons, n_clusters
     }
     args.exp_name = ('%s-%s-%s' % (args.dataset, args.model, args.criterion))
     print(args.exp_name)
@@ -140,7 +136,7 @@ def main():
     make_path(args.coverage_dir)
     make_path(args.log_dir)
     
-    model, layer_size_dict, num_class, train_loader, test_loader, seed_loader, image_numpy_list, label_numpy_list = prepare_data_model(args)
+    model, layer_size_dict, num_class, train_loader, test_loader, image_numpy_list, label_numpy_list = prepare_data_model(args)
     trainable_module, trainable_module_name = get_trainable_modules_main(model)
     final_layer = trainable_module_name[-1]
 
@@ -152,9 +148,13 @@ def main():
             # Random will inherit the NC criterion
             criterion = getattr(coverage, 'NC')(model, device, layer_size_dict, hyper=hyper_map['NC'])
         elif args.criterion == 'DeepImportance':
-            criterion = DeepImportance(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, final_layer, device)
+            # criterion = DeepImportance(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, final_layer, device)
+            criterion = DeepImportance(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1],
+                               "KMeans", train_loader, final_layer, device)
         elif args.criterion == 'Wisdom':
-            criterion = Wisdom(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, args.wisdom_csv)
+            # criterion = Wisdom(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1], "KMeans", train_loader, args.wisdom_csv)        
+            criterion = Wisdom(model, hyper_map[args.criterion][0], hyper_map[args.criterion][1],
+                       "KMeans", train_loader, args.wisdom_csv, device)
         else:
             criterion = getattr(coverage, args.criterion)(model, device, layer_size_dict, hyper=hyper_map[args.criterion])
     
@@ -167,7 +167,7 @@ def main():
     print('Initial Coverage: %f' % initial_coverage)
     
     # Fuzzer engine
-    engine = Fuzzer(args, criterion, guided=args.guided)
+    engine = Fuzzer(args, model, criterion, guided=args.guided)
     metrics = engine.run(image_numpy_list, label_numpy_list)
     
     print(f"\n=== Quality metrics ===")
@@ -186,7 +186,8 @@ def main():
                 "IS", "FID", "Entropy", "Classes"]
     
     num_faults  = engine.num_ae
-    num_outputs = engine.delta_batch if engine.delta_batch else 1
+    # num_outputs = engine.delta_batch if engine.delta_batch else 1
+    num_outputs = engine.num_outputs if engine.num_outputs else 1
     faults_per_output = num_faults / num_outputs
     coverage_inc = (criterion.current - engine.initial_coverage if args.guided else 0.0)
     row = [args.dataset, args.model, args.criterion,
