@@ -19,6 +19,8 @@ import torchattacks
 
 start_ms = int(time.time() * 1000)
 TIMESTAMP = time.strftime("%Y%m%d‑%H%M%S", time.localtime(start_ms / 1000))
+SAMPLE_ROUND = 40
+
 
 # python run_rq_4_demo.py --model lenet --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' --dataset cifar10 --data-path '/data/shenghao/dataset/' --batch-size 32 --device 'cuda:0' --csv-file '/home/shenghao/torch-deepimportance/saved_files/pre_csv/lenet_cifar_b32.csv'
 
@@ -476,7 +478,7 @@ def main(args):
     
     # Display summary
     logger.info("\nCorrelation Summary:")
-    logger.info(correlation_df.round(4))
+    logger.info(correlation_df.round(SAMPLE_ROUND))
     
 if __name__ == "__main__":
     # Set random seeds for reproducibility
