@@ -37,7 +37,7 @@ python ./fuzz_guide/run_guided_eval.py \
   --cifar-root ./datasets/CIFAR10 \
   --imagenet-root /data/shenghao/dataset/ImageNet/ \
   --imagenet-index ./images/imagenet_class_index.json \
-  --gen-root ./datasets/Inpainting --generator StableDiffusion \
+  --gen-root /data/shenghao/dataset/cifar_SD --generator StableDiffusion \
   --saved-model ./models_info/saved_models/vgg16_CIFAR10_whole.pth \
   --methods Wisdom \
   --wisdom-csv ./saved_files/pre_csv/vgg16_cifar10.csv \

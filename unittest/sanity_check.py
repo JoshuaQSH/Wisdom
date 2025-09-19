@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 # -----------------------------------------------------------
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD  = (0.229, 0.224, 0.225)
-IS_IMAGENET = True
+IS_IMAGENET = False
 gaussian_STD = 0.5
 TOPK = 0.02  # Top-k fraction of pixels to perturb (2%)
 cmap = ['PuBuGn', 'Greens', 'Purples', 'Reds', 'Blues', 'YlGn', 'summer', 'cool', 'bwr']
@@ -93,6 +93,25 @@ def save_csv_results(updated_column_dict, csv_path='results.csv', tag='original'
     print(f"[{tag}] Updated results saved to {csv_path}")
 
 
+def process_neurons(csv_file, top_k=10, visualize=False):
+    df = pd.read_csv(csv_file)
+    df_sorted = df.sort_values(by='Score', ascending=False).head(top_k)
+    top_k_neurons = {}
+    for layer_name, group in df_sorted.groupby('LayerName'):
+        top_k_neurons[layer_name] = torch.tensor(group['NeuronIndex'].values)
+    
+    if visualize:
+        plt.figure(figsize=(10, 6))
+        for layer_name, group in df_sorted.groupby('LayerName'):
+            plt.scatter(group['NeuronIndex'], group['Score'], label=layer_name, alpha=0.7, s=70)
+        
+        plt.xlabel('Neuron Index')
+        plt.ylabel('Score')
+        plt.title(f'Top-{top_k} Neuron Scores Across All Layers')
+        plt.legend()
+        plt.savefig('top_k_neuron_scores.pdf', format='pdf', dpi=1200)
+        # plt.show()
+
 def add_gaussian_noise(imgs: torch.Tensor, mask: torch.Tensor,
                        mean: float = 0.0, std: float = 0.01):
     if std <= 0:
@@ -142,8 +161,8 @@ def eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger):
 def viz_attr_diff(args, logger, orig_loader, pert_loader, cmap="bwr", alpha=0.8, tag='random'):
     
     idx = random.randrange(len(orig_loader.dataset))
-    img_orig, y = orig_loader.dataset[10]
-    img_pert, _ = pert_loader.dataset[10]
+    img_orig, y = orig_loader.dataset[5]
+    img_pert, _ = pert_loader.dataset[5]
     
     # tensors -> HWC numpy
     if IS_IMAGENET:
@@ -834,7 +853,7 @@ def wisdom_fit_once(args, model, train_loader, top_k_neurons, cluster_method_nam
 
     train_acts = wisdom_idc.get_selected_activations(train_loader, top_k_neurons)
     cluster_groups = wisdom_idc.cluster_per_neuron(train_acts)
-    
+    breakpoint()
     return wisdom_idc, cluster_groups
 
 def sanity_check_wisdomIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger):
@@ -974,20 +993,21 @@ def main(args):
     # U_I_loader, U_IO_loader, U_RO_loader, U_R_loader = get_generated_datasets(args, model, test_loader, test_dataset, device, logger)
     U_I_loader, U_IO_loader, U_RO_loader, U_R_loader = get_generated_dataset_optimized(args, model, test_dataset, trainable_module[-1], logger)
 
-    cluster_method_name = cluster_name_all[8]
+    cluster_method_name = cluster_name_all[0]
 
     # --- A simple acc test for the perturbed datasets -------------------
     # eval_model(model, test_loader, U_IO_loader, U_RO_loader, device, logger)
     
     # ---  Visualization Checks ------------------------------------------
-    # viz_attr_diff(args, logger, test_loader, U_I_loader, cmap=cmap[0], alpha=0.8, tag='importance')
+    viz_attr_diff(args, logger, test_loader, U_I_loader, cmap=cmap[1], alpha=0.8, tag='importance')
     # viz_attr_diff(args, logger, test_loader, U_R_loader, cmap=cmap[0], alpha=0.8, tag='random')
+    process_neurons(args.csv_file, top_k=10, visualize=True)
     
     # ---  Sanity checks WisdomIDC -------------------------------------------------
     # sanity_check_wisdomIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger)
     
     # ---  Sanity checks DeepImportance IDC -------------------------------------------------
-    sanity_check_deepimportanceIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger)
+    # sanity_check_deepimportanceIDC(args, model, train_loader, test_loader, U_IO_loader, U_RO_loader, cluster_method_name, device, logger)
 
 if __name__ == '__main__':
     set_seed()
