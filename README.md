@@ -43,18 +43,14 @@ Once this is done, a Wisdom/dist directory will be created. Then follow the inst
 ## Directories and files
 
 - `attribution`: Main attribution methods definition and a customized template
-- `benchmark`: Benchmarking results [WiP]
 - `build`: Lib build file
 - `clustering`: Clustering methods and WISDOM assignments
 - `core`: Core files of WISDOM
 - `coverage_methods`: Some basline coverage-based methods
 - `dist`: Wheels
 - `Docker`: Docker file [WiP]
-- `examples`: Example usage [WiP]
-- `logs`: Logging file
 - `pruning`: Pruning methods (mask and weight pruning)
 - `saved_files`: Saved files, including the neuron importance scores in CSV
-- `unittest`: Unit testing and sanity check [WiP]
 - `utils`: Helper and common files
 - `config.py`
 - `requirements_venv.yaml`
