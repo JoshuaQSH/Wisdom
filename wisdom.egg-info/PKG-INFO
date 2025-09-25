@@ -1,0 +1,27 @@
+Metadata-Version: 2.1
+Name: wisdom
+Version: 0.1.0
+Summary: WISDOM: An explainable, white-box Coverage testing tool for DNNs
+Author: Shenghao Qiu
+License: Apache-2.0
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.10
+Requires-Dist: torch>=2.1
+Requires-Dist: torchaudio
+Requires-Dist: torchvision>=0.16
+Requires-Dist: scikit-learn
+Requires-Dist: numpy>=1.24
+Requires-Dist: matplotlib
+Requires-Dist: pytest
+Requires-Dist: setuptools
+Requires-Dist: onnx
+Requires-Dist: pyyaml
+Requires-Dist: opencv-python
+Requires-Dist: tqdm
+Requires-Dist: pandas
+Requires-Dist: botorch
+Requires-Dist: captum
+
+WISDOM is a PyTorch-based library for importance-driven deep neural networks system testing. It implements both the original IDC (DeepImportance) and an enhanced WISDOM pipeline with flexible attribution and clustering.

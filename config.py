@@ -21,3 +21,12 @@ class WisdomConfig:
     top_m_neurons: int = 10
     test_all_classes: bool = True
     cache_path: Optional[str] = None
+    
+@dataclass
+class WisdomTrainConfig:
+    methods: List[str] = field(default_factory=lambda: ["lrp", "ldl", "lig"])
+    device: str = "cuda:0"
+    voting_weights: Optional[List[float]] = None
+    voting_mode: str = "fine-grained"  # "fine-grained" | "coarse"
+    pruning_augmentations: Optional[List[Dict]] = None
+    out_csv: Optional[str] = None
