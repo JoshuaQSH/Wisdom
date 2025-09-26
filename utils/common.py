@@ -5,13 +5,10 @@ import pickle
 import hashlib
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
-import torchvision.models as models
 from torch.utils.data import Subset
-
-import numpy as np
-from models_info.models_cv import *
-
+from sklearn.metrics import f1_score
 
 def make_path(path):
     if not os.path.exists(path):
@@ -143,89 +140,6 @@ def get_model(load_model_path='./models_info/saved_models/lenet_CIFAR10_whole.pt
 
     return model, module_name, module
 
-def mnist_model_state2whole():
-    load_model_path=['./models_info/saved_models/lenet_MNIST.pt']
-    model_classes = { 'lenet': LeNet}
-    for i, model_name in enumerate(model_classes):
-        model = model_classes[model_name]()
-
-        data_parallel_dict = torch.load(load_model_path[i])
-        new_state_dict = {}
-        for key, value in data_parallel_dict.items():
-            new_key = key.replace('module.', '')  # Remove 'module.' prefix
-            new_state_dict[new_key] = value    
-        
-        model.load_state_dict(new_state_dict)
-        torch.save(model, load_model_path[i].replace('.pt', '_whole.pth'))
-        print("Done with ", model_name)
-
-def cifar_model_state2whole():
-    load_model_path=['./models_info/saved_models/lenet_CIFAR10.pt', 
-                     './models_info/saved_models/vgg16_CIFAR10.pt', 
-                     './models_info/saved_models/resnet18_CIFAR10.pt',
-                     './models_info/saved_models/densenet_CIFAR10.pt',
-                     './models_info/saved_models/mobilenetv2_CIFAR10.pt',
-                     './models_info/saved_models/shufflenetv2_CIFAR10.pt',
-                     './models_info/saved_models/efficientnet_CIFAR10.pt']
-    
-    model_classes = {
-        'lenet': LeNet,
-        'vgg16': lambda: VGG('VGG16'),
-        'resnet18': ResNet18,
-        # 'googlenet': GoogLeNet,
-        'densenet': DenseNet121,
-        # 'resnext29': ResNeXt29_2x64d,
-        'mobilenetv2': MobileNetV2,
-        'shufflenetv2': lambda: ShuffleNetV2(1),
-        # 'senet': SENet18,
-        # 'preresnet': PreActResNet18,
-        # 'mobilenet': MobileNet,
-        # 'DPN92': DPN92,
-        'efficientnet': EfficientNetB0,
-        # 'regnet': RegNetX_200MF,
-        # 'simpledla': SimpleDLA,
-    }
-
-    for i, model_name in enumerate(model_classes):
-        model = model_classes[model_name]()
-
-        data_parallel_dict = torch.load(load_model_path[i])
-        new_state_dict = {}
-        for key, value in data_parallel_dict.items():
-            new_key = key.replace('module.', '')  # Remove 'module.' prefix
-            new_state_dict[new_key] = value    
-        
-        model.load_state_dict(new_state_dict)
-        torch.save(model, load_model_path[i].replace('.pt', '_whole.pth'))
-        print("Done with ", model_name)
-
-def imagenet_model_state2whole():
-    # Hardcoded model names for now
-    offer_moder_name = ['vgg16', 
-                        'convnext_base', 
-                        'efficientnet_v2_s', 
-                        'efficientnet_v2_m', 
-                        'mnasnet1_0', 
-                        'googlenet',
-                        'inception_v3',
-                        'mobilenet_v3_small',
-                        'resnet18',
-                        'resnet152',
-                        'resnext101_32x8d',
-                        'vit_b_16']
-    
-     # Check if model_name is in the list
-    for model_name in offer_moder_name:
-        # Dynamically get the model function from torchvision.models
-        model_func = getattr(models, model_name)
-        
-        # Dynamically get the weights attribute for the model
-        # "IMAGENET1K_V2", "IMAGENET1K_V1"
-        model = model_func(weights="IMAGENET1K_V1")        
-        print(f"{model_name} model loaded with weights.")
-        torch.save(model, f"./models_info/saved_models/{model_name}_IMAGENET_whole.pth")
-        print("Done with ", model_name)
-
 def get_class_data(dataloader, classes, target_class):
     max_test_sample = 8000
     class_index = classes.index(target_class)
@@ -312,7 +226,6 @@ def eval_model_dataloder(model, dataloader, device='cpu'):
     running_loss = 0.0
     all_labels = []
     all_preds = []
-    from sklearn.metrics import f1_score
     criterion = nn.CrossEntropyLoss()
 
     with torch.no_grad():

@@ -17,15 +17,25 @@ $ conda env create -f requirements_venv.yaml
 ## Install wheel package
 
 ```shell
-git clone https://github.com/JoshuaQSH/Wisdom.git
-cd Wisdom/dist
-pip install wisdom-0.1.0-py3-none-any.whl
+$ git clone https://github.com/JoshuaQSH/Wisdom.git
+$ cd Wisdom/dist
+$ pip install wisdom-0.1.0-py3-none-any.whl
+```
+
+## Using `uv`
+
+We will provide a package later on, but now you could use `uv pip install` just like `pip install` to get the lib.
+
+```shell
+$ uv venv wisdom --python 3.12
+$ source .venv/bin/activate
+$ uv pip install wisdom-0.1.0-py3-none-any.whl
 ```
 
 ## Uninstall wheel package
 
 ```shell
-pip uninstall wisdom
+$ pip uninstall wisdom
 ```
 
 ## Install changes in the library
@@ -33,8 +43,8 @@ pip uninstall wisdom
 In case of changes in the source code of the library, then the wheel package needs to be recreated. Please follow the steps below for receating the wheel package.
 
 ```shell
-cd Wisdom/
-python setup.py bdist_wheel
+$ cd Wisdom/
+$ python setup.py bdist_wheel
 ```
 
 Once this is done, a Wisdom/dist directory will be created. Then follow the instractions in the installation section.
@@ -61,18 +71,18 @@ Once this is done, a Wisdom/dist directory will be created. Then follow the inst
 ## Run Wisdom
 
 ```shell
-python3 run_wisdom.py \
-      --model <str:model_name> \
-      --saved-model <str:path_to_file> \
-      --dataset <str:dataset_name> \
-      --data-path <str:path_to_file> \
-      --device <cpu/cuda> \
-      --n-cluster <int> \
-      --top-m-neurons <int> \
-      --end2end \
-      --num-samples <int> \
-      --csv-file <str:path_to_file> \
-      --idc-test-all 
+$ python3 run_wisdom.py \ 
+    --impl wisdom \
+    --model-name lenet \
+    --dataset cifar10 \
+    --data-path /path/to/datasets \
+    --device cuda:0 \
+    --top-m-neurons 10 \
+    --batch-size 64 \
+    --end2end \
+    --all-class \
+    --csv-file ./saved_files/pre_csv/lenet_cifar10.csv \
+    --model-path ./models_info/saved_models/lenet_CIFAR10_whole.pth
 ```
 
 ## Docker
