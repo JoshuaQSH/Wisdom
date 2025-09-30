@@ -11,7 +11,7 @@ setup(
     ),
     author="Shenghao Qiu",
     license="Apache-2.0",
-    packages = ["core", "attribution", "clustering", "utils", "pruning"],
+    packages = ["wisdom", "wisdom/core", "wisdom/attribution", "wisdom/clustering", "wisdom/utils", "wisdom/pruning"],
     python_requires=">=3.10",
     install_requires=[
         "torch>=2.1",
