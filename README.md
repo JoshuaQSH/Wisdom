@@ -2,6 +2,11 @@
 
 A package for WISDOM, a white-box and semantically informed coverage testing tool for Deep Neural Networks with xAI methods.
 
+<!-- ![Wisdom Overview diagram](figs/wisdom_overview.png) -->
+<div align="center">
+  <img src="figs/wisdom_overview.png" alt="Wisdom Overview diagram" width="1500"/>
+</div>
+
 ## Prerequest
 
 Use `conda` or `pyvenv` to build a virtual environment.
@@ -32,6 +37,15 @@ $ source .venv/bin/activate
 $ uv pip install wisdom-0.1.0-py3-none-any.whl
 ```
 
+Or
+
+```shell
+$ uv pip install wisdom
+```
+
+with the `pyproject.toml`.
+
+
 ## Uninstall wheel package
 
 ```shell
@@ -52,19 +66,21 @@ Once this is done, a Wisdom/dist directory will be created. Then follow the inst
 
 ## Directories and files
 
-- `attribution`: Main attribution methods definition and a customized template
 - `build`: Lib build file
-- `clustering`: Clustering methods and WISDOM assignments
-- `core`: Core files of WISDOM
+- `wisdom`
+    - `attribution`: Main attribution methods definition and a customized template
+    - `clustering`: Clustering methods and WISDOM assignments
+    - `core`: Core files of WISDOM
+    - `pruning`: Pruning methods (mask and weight pruning)
+    - `utils`: Helper and common files
 - `coverage_methods`: Some basline coverage-based methods
 - `dist`: Wheels
 - `Docker`: Docker file [WiP]
-- `pruning`: Pruning methods (mask and weight pruning)
 - `saved_files`: Saved files, including the neuron importance scores in CSV
-- `utils`: Helper and common files
 - `config.py`
 - `requirements_venv.yaml`
 - `requirements.txt`
+- `pyproject.toml`
 - `setup.py`
 - `run_wisdom.py`
 
