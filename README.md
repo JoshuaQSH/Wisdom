@@ -1,50 +1,34 @@
-# Torch4DeepImportance
+# WISDOM for YOLO and transformer-based models
 
-A pytorch version for Deepimportance (test version). [TensorFlow version for DeepImportance](https://github.com/DeepImportance/deepimportance_code_release/tree/ga_modifications). [Paper](https://zenodo.org/records/3628024).
+A developed branch for YOLOvx and other transformer-based model Testing. 
 
-A Captum lib added.
+# TODO
 
-## How to run (Captum version)
+- [ ] [**Dev**] Tool combination with [Introduction: Advanced Explainable AI for computer vision](https://jacobgil.github.io/pytorch-gradcam-book/introduction.html) and [Layer-wise Relevance Propagation for Transformers](https://github.com/rachtibat/LRP-eXplains-Transformers?tab=readme-ov-file#getting-started)
+- [x] [**YOLO**] [YOLOv5](https://github.com/mihir135/yolov5) prepared.
+  - [ ] Testing with single layer w/ WISDOM
+  - [ ] 
+- [ ] [**YOLO**] [YOLOv11](https://docs.ultralytics.com/models/yolo11/) prepared
+- [ ] [**Compression**] YOLOv11 comression test with attribution methods
+- [ ] [**Compression**] LLM with compression
 
-The Captum version demo is tested and should be fine for further developments. After installing the prerequest libs with `pip`, please go to `captum_demo` for more details.
+# Tools and Design
 
-Use `conda` or `pyvenv` to build a virtual environment.
+## YOLO recommanded dataset form
 
 ```shell
-# requriements
-$ pip -r install requirements.txt
+/datasets/
+└── coco128/  # Dataset root
+    ├── images/
+    │   ├── train2017/  # Training images
+    │   │   ├── 000000000009.jpg
+    │   │   └── ...
+    │   └── val2017/    # Validation images (optional if using same set for train/val)
+    │       └── ...
+    └── labels/
+        ├── train2017/  # Training labels
+        │   ├── 000000000009.txt
+        │   └── ...
+        └── val2017/    # Validation labels (optional if using same set for train/val)
+            └── ...
 ```
-
-Run with a script:
-
-```shell
-$ cd captum_demo
-
-# The default test will be using a customized LeNet-5 with CIFAR10 dataset
-# Usage: ./script.sh <chosen-layer>, <chosen-layer> could be ['fc1', 'fc2', 'conv1', 'conv2'], example:
-$ ./script.sh fc1
-```
-
-## Routes
-
-- Activation values for important neuros (v_1, v_2, ...)
-- Clustering with Silhoutte score (or with the customized `n_cluster`)
-- Combination of clusters from important neuros
-- Testset comes in (x_1, y_1)
-- Check coverage (See combinations covered by the test set, e.g., 4/6, 1/6 ,....), A.k.a. IDC
-
-## TODO
-
-- [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
-  - [ ] Layers by layers
-  - [ ] Architecture analysation block by block, YOLOv5s
-- [ ] [**YOLO**] YOLO v11
-
-
-## Directory information
-
-- `images`: All the saved images, including the example images and the heatmap saved by the running demos
-- `models_info`: Pre-trained model files (*.pt) and also the model architecture visualisations
-- `saved_files`: Saved JSON files for the model importances
-- `logs`: Saved the log files
-- `examples`: Small example testing captum
