@@ -132,11 +132,11 @@ $ mAP = \frac{1}{N_{class}}\sum_{c=1}^{N_{class}}AP_c$
 
 So mAP@50 is
 
-$ mAP_{50} = \frac{1}{N_{class}}\sum_{c=1}^{N_{class}}AP_c(IoU=0.5)$
+$mAP_{50} = \frac{1}{N_{class}}\sum_{c=1}^{N_{class}}AP_c(IoU=0.5)$
 
 mAP@[.5:.95] (or mAP50–95) is to Compute AP at multiple IoU thresholds: {0.50,0.55,0.60,…,0.95} and average over all 10 thresholds:
 
-$ mAP_{50-95} = \frac{1}{10}\sum_{t=0.5}^{0.95}mAP_t$
+$mAP_{50-95} = \frac{1}{10}\sum_{t=0.5}^{0.95}mAP_t$
 
 
 - TP (True Positive): predicted box matches a ground truth box with IoU ≥ threshold (e.g., 0.5)
