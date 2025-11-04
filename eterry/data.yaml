@@ -1,0 +1,6 @@
+train: eterry/images/train
+val: eterry/images/val  # You can change this later if you add a val split
+
+nc: 2
+names: ['person', 'box']
+

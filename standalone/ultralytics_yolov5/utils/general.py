@@ -417,7 +417,6 @@ def check_git_info(path="."):
     except git.exc.InvalidGitRepositoryError:  # path is not a git dir
         return {"remote": None, "branch": None, "commit": None}
 
-
 def check_python(minimum="3.8.0"):
     """Checks if current Python version meets the minimum required version, exits if not."""
     check_version(platform.python_version(), minimum, name="Python ", hard=True)

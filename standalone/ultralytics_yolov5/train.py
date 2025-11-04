@@ -99,8 +99,8 @@ from utils.torch_utils import (
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv("RANK", -1))
 WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
-GIT_INFO = check_git_info()
-
+# GIT_INFO = check_git_info()
+GIT_INFO = {"remote": None, "branch": None, "commit": None}
 
 def train(hyp, opt, device, callbacks):
     """
