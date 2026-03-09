@@ -23,6 +23,9 @@ class WisdomTrainConfig:
     voting_mode: str = "fine-grained"  # "fine-grained" | "coarse"
     pruning_augmentations: Optional[List[Dict]] = None
     out_csv: Optional[str] = None
+    # YOLO-specific: when True, use detection surrogate loss instead of CE
+    is_yolo: bool = False
+    num_classes: int = 80  # COCO classes for YOLO
 
 
 # -----------------------------
@@ -43,12 +46,24 @@ def _criterion():
     return nn.CrossEntropyLoss()
 
 def _eval_loss(model: nn.Module, x: torch.Tensor, y: torch.Tensor, device: str) -> float:
+    """Evaluate classification loss for a batch."""
     model.eval().to(device)
     x = x.to(device); y = y.to(device)
     with torch.no_grad():
         out = model(x)
         loss = _criterion()(out, y).item()
     return loss
+
+def _eval_loss_yolo(model: nn.Module, x: torch.Tensor, device: str) -> float:
+    """Surrogate loss for YOLO: negative sum of class confidences.
+    When neurons are pruned, confidence drops → loss rises."""
+    model.eval().to(device)
+    x = x.to(device)
+    with torch.no_grad():
+        out = model(x)
+        preds = out[0] if isinstance(out, (tuple, list)) else out
+        cls_scores = preds[:, 4:, :]  # (B, nc, A)
+        return -cls_scores.sum().item()
 
 def _voting_init(layer_scores: Dict[str, torch.Tensor],
                  trainable_names: List[str],
@@ -214,7 +229,7 @@ class _WeightsGuard:
         self.model.load_state_dict(self.state, strict=True)
 
 def _mask_prune_once(model: nn.Module, selection: Dict[str, List[int]], x: torch.Tensor, y: torch.Tensor, device: str) -> float:
-    from pruning.mask_pruning import mask_model_neurons
+    from wisdom.pruning.mask_pruning import mask_model_neurons
     handle = mask_model_neurons(model, selection)
     try:
         return _eval_loss(model, x, y, device)
@@ -223,13 +238,143 @@ def _mask_prune_once(model: nn.Module, selection: Dict[str, List[int]], x: torch
         except Exception: pass
 
 def _weights_prune_once(model: nn.Module, selection: Dict[str, List[int]], x: torch.Tensor, y: torch.Tensor, device: str) -> float:
-    from pruning.weights_pruning import prune_model_neurons
+    from wisdom.pruning.weights_pruning import prune_model_neurons
     guard = _WeightsGuard(model)
     try:
         prune_model_neurons(model, selection)
         return _eval_loss(model, x, y, device)
     finally:
         guard.restore()
+
+
+# -----------------------------
+# YOLO-specific helpers
+# -----------------------------
+def _compute_yolo_importance(
+    wrapper: nn.Module,
+    images: torch.Tensor,
+    method: str,
+    device: str,
+    num_classes: int = 80,
+) -> Dict[str, torch.Tensor]:
+    """
+    Compute per-layer importance for a YOLO model via the YOLOWrapper.
+    Uses the wrapper (which outputs (B, nc)) so Captum can attribute
+    to a class target.
+    """
+    try:
+        from captum.attr import (
+            LayerGradientXActivation, LayerIntegratedGradients,
+            LayerGradientShap, LayerActivation,
+        )
+    except ImportError as e:
+        raise RuntimeError("Captum is required") from e
+
+    # Methods known to work with YOLO (LRP and DeepLift fail)
+    name2ctor = {
+        "lgxa": LayerGradientXActivation,
+        "lig":  LayerIntegratedGradients,
+        "lgs":  LayerGradientShap,
+        "la":   LayerActivation,
+    }
+
+    key = method.lower()
+    if key not in name2ctor:
+        # Fallback: use gradient magnitude
+        return _gradient_importance(wrapper, images, device, num_classes)
+
+    wrapper = wrapper.to(device).eval()
+    images = images.to(device)
+    # Target the most common class (0) for attribution
+    target = torch.zeros(images.size(0), dtype=torch.long, device=device)
+
+    out: Dict[str, torch.Tensor] = {}
+    for lname, layer in wrapper.named_modules():
+        if not _is_trainable_module(layer):
+            continue
+        A = name2ctor[key](wrapper, layer)
+        if key == "la":
+            attr = A.attribute(images)
+        elif key == "lgs":
+            attr = A.attribute(images, baselines=torch.zeros_like(images), target=target)
+        else:
+            attr = A.attribute(images, target=target)
+        if attr.dim() == 4:
+            vec = attr.sum(dim=(0, 2, 3)).detach().cpu()
+        else:
+            vec = attr.sum(dim=0).detach().cpu()
+        out[lname] = vec
+    return out
+
+
+def _gradient_importance(
+    model: nn.Module,
+    images: torch.Tensor,
+    device: str,
+    num_classes: int = 80,
+) -> Dict[str, torch.Tensor]:
+    """
+    Fallback importance: gradient magnitude w.r.t. each layer's parameters.
+    Works with any model architecture.
+    """
+    model = model.to(device).eval()
+    images = images.to(device).requires_grad_(False)
+
+    # Enable grad for parameters
+    for p in model.parameters():
+        p.requires_grad_(True)
+
+    out_logits = model(images)
+    if isinstance(out_logits, (tuple, list)):
+        out_logits = out_logits[0]
+    # Sum all outputs as the target scalar
+    scalar = out_logits.sum()
+    scalar.backward()
+
+    scores: Dict[str, torch.Tensor] = {}
+    for lname, m in model.named_modules():
+        if not _is_trainable_module(m):
+            continue
+        w = m.weight
+        if w.grad is not None:
+            if isinstance(m, nn.Conv2d):
+                vec = w.grad.abs().sum(dim=(1, 2, 3)).detach().cpu()
+            else:
+                vec = w.grad.abs().sum(dim=1).detach().cpu()
+            scores[lname] = vec
+
+    model.zero_grad()
+    for p in model.parameters():
+        p.requires_grad_(False)
+    return scores
+
+
+def _yolo_prune_eval(
+    model: nn.Module,
+    selection: Dict[str, List[int]],
+    images: torch.Tensor,
+    device: str,
+    prune_mode: str,
+) -> float:
+    """Prune, evaluate YOLO surrogate loss, then restore."""
+    if prune_mode == "mask":
+        from wisdom.pruning.mask_pruning import mask_model_neurons
+        handle = mask_model_neurons(model, selection)
+        try:
+            return _eval_loss_yolo(model, images, device)
+        finally:
+            try:
+                handle.remove()
+            except Exception:
+                pass
+    else:
+        guard = _WeightsGuard(model)
+        try:
+            from wisdom.pruning.weights_pruning import prune_model_neurons
+            prune_model_neurons(model, selection)
+            return _eval_loss_yolo(model, images, device)
+        finally:
+            guard.restore()
 
 
 # -----------------------------
@@ -247,6 +392,10 @@ class ConsensusWisdom:
            then vote them by rank (like prepare_data.voting_neurons).
          - coarse: take only the optimal method's neurons and vote by rank.
       5) After all batches, save CSV.
+
+    For YOLO models, set cfg.is_yolo=True.  The model must be the raw
+    torch Module (``model.model`` from Ultralytics), and the wrapper is
+    built internally so that Captum receives a classifier-like interface.
     """
 
     def __init__(self, model: nn.Module, device: str = "cuda:0"):
@@ -270,38 +419,68 @@ class ConsensusWisdom:
         assert cfg.out_csv, "Please provide cfg.out_csv to save layer scores."
         final_layer = final_layer or (self.trainable_names[-1] if self.trainable_names else None)
 
+        # For YOLO, create a wrapper for Captum attribution
+        wrapper = None
+        if cfg.is_yolo:
+            from wisdom.utils.yolo_wrapper import YOLOWrapper
+            wrapper = YOLOWrapper(self.model, num_classes=cfg.num_classes)
+            wrapper.eval().to(self.device)
+            # Remap trainable layer names to wrapper namespace
+            wrapper_names, wrapper_mods = _trainable_modules(wrapper)
+
         layer_scores: Dict[str, torch.Tensor] = {}
         init_done = False
 
-        # for images, labels in train_loader:
-        for images, labels in tqdm(train_loader):
+        for batch in tqdm(train_loader):
+            if cfg.is_yolo:
+                # YOLO dataloaders may yield (images,) or (images, targets)
+                images = batch[0] if isinstance(batch, (list, tuple)) else batch
+                labels = torch.zeros(images.size(0), dtype=torch.long)  # dummy
+            else:
+                images, labels = batch
+
             # 1) Important neurons per method on THIS batch
             important_neurons_dict: Dict[str, List[Tuple[str, float, int]]] = {}
             for method in cfg.methods:
-                imp = batch_per_layer_scores(
-                    model=self.model,
-                    images=images,
-                    labels=labels,
-                    device=cfg.device,
-                    method=method,
-                    target_layers=None, # all layers
-                )
+                if cfg.is_yolo:
+                    imp = _compute_yolo_importance(
+                        wrapper, images, method, cfg.device, cfg.num_classes
+                    )
+                else:
+                    imp = batch_per_layer_scores(
+                        model=self.model,
+                        images=images,
+                        labels=labels,
+                        device=cfg.device,
+                        method=method,
+                        target_layers=None,
+                    )
                 _, selected_triplets = _select_top_neurons_all(
                     imp, top_m_neurons=top_m_neurons, filter_layer=final_layer
                 )
-                # list of (layer_name, score, idx)
                 important_neurons_dict[method] = selected_triplets
 
             # 2) Identify optimal method by loss gain after pruning
-            base_loss = _eval_loss(self.model, images, labels, cfg.device)
+            if cfg.is_yolo:
+                base_loss = _eval_loss_yolo(self.model, images, cfg.device)
+            else:
+                base_loss = _eval_loss(self.model, images, labels, cfg.device)
 
             loss_gains: Dict[str, float] = {}
             for method, triplets in important_neurons_dict.items():
                 selection: Dict[str, List[int]] = {}
                 for (layer_name, _score, idx) in triplets:
-                    selection.setdefault(layer_name, []).append(int(idx))
+                    # Map wrapper names back to raw model names for pruning
+                    prune_name = layer_name
+                    if cfg.is_yolo and layer_name.startswith("yolo_model."):
+                        prune_name = layer_name[len("yolo_model."):]
+                    selection.setdefault(prune_name, []).append(int(idx))
 
-                if prune_mode == "mask":
+                if cfg.is_yolo:
+                    pruned_loss = _yolo_prune_eval(
+                        self.model, selection, images, cfg.device, prune_mode
+                    )
+                elif prune_mode == "mask":
                     pruned_loss = _mask_prune_once(self.model, selection, images, labels, cfg.device)
                 elif prune_mode == "weights":
                     pruned_loss = _weights_prune_once(self.model, selection, images, labels, cfg.device)
@@ -314,19 +493,20 @@ class ConsensusWisdom:
 
             # 3) Voting buffers
             if not init_done:
-                layer_scores = _voting_init(layer_scores, self.trainable_names, self.trainable_mods, excluded_layer=final_layer)
+                if cfg.is_yolo:
+                    # Use wrapper layer names for scoring
+                    layer_scores = _voting_init(layer_scores, wrapper_names, wrapper_mods, excluded_layer=final_layer)
+                else:
+                    layer_scores = _voting_init(layer_scores, self.trainable_names, self.trainable_mods, excluded_layer=final_layer)
                 init_done = True
 
             # 4) Vote according to mode
             if cfg.voting_mode == "coarse":
-                # Optimal-only neurons, by rank
                 opt_triplets = important_neurons_dict[optimal_method]
-                # sort descending by raw score
                 opt_triplets = sorted(opt_triplets, key=lambda t: t[1], reverse=True)
                 layer_index_pairs = [(layer, idx) for (layer, _score, idx) in opt_triplets]
                 _voting_neurons(layer_index_pairs, layer_scores)
             else:
-                # fine-grained: across methods, weighted by loss gains → pick TOP-K → vote by rank
                 top_across = _weighted_top_neurons(important_neurons_dict, loss_gains, top_k=top_m_neurons)
                 layer_index_pairs = [pair for (pair, _wscore) in top_across]
                 _voting_neurons(layer_index_pairs, layer_scores)
