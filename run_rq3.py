@@ -36,42 +36,50 @@ from wisdom_yolo_train import COCOImageDataset, _collate
 from wisdom.utils.yolo_wrapper import YOLOWrapper
 from run_rq2 import collect_activations
 
-SAMPLE_SIZES = [10]  # Reduced for feasibility; paper uses [100, 1000, 3000]
+SAMPLE_SIZES = [100, 500, 1000]
 ERROR_RATES = [0.01, 0.05, 0.10]
 ATTACKS = ["fgsm", "pgd"]
 
 
 # ── Adversarial attack helpers ─────────────────────────────────────
-def fgsm_attack(wrapper: nn.Module, images: torch.Tensor, device: str, eps: float = 0.03) -> torch.Tensor:
-    """Fast Gradient Sign Method."""
+def fgsm_attack(wrapper: nn.Module, images: torch.Tensor, device: str,
+                eps: float = 0.03, batch_size: int = 4) -> torch.Tensor:
+    """Fast Gradient Sign Method (batched to avoid OOM)."""
     wrapper.eval().to(device)
-    x = images.to(device).requires_grad_(True)
-    out = wrapper(x)
-    loss = out.sum()
-    loss.backward()
-    adv = x + eps * x.grad.sign()
-    return adv.clamp(0, 1).detach().cpu()
+    adv_list = []
+    for i in range(0, len(images), batch_size):
+        x = images[i:i + batch_size].to(device).requires_grad_(True)
+        out = wrapper(x)
+        loss = out.sum()
+        loss.backward()
+        adv = x + eps * x.grad.sign()
+        adv_list.append(adv.clamp(0, 1).detach().cpu())
+    return torch.cat(adv_list, dim=0)
 
 
 def pgd_attack(
     wrapper: nn.Module, images: torch.Tensor, device: str,
     eps: float = 0.03, alpha: float = 0.01, steps: int = 5,
+    batch_size: int = 4,
 ) -> torch.Tensor:
-    """Projected Gradient Descent attack."""
+    """Projected Gradient Descent attack (batched to avoid OOM)."""
     wrapper.eval().to(device)
-    x_adv = images.clone().to(device)
-    x_orig = images.to(device)
-
-    for _ in range(steps):
-        x_adv.requires_grad_(True)
-        out = wrapper(x_adv)
-        loss = out.sum()
-        loss.backward()
-        with torch.no_grad():
-            x_adv = x_adv + alpha * x_adv.grad.sign()
-            delta = torch.clamp(x_adv - x_orig, -eps, eps)
-            x_adv = torch.clamp(x_orig + delta, 0, 1)
-    return x_adv.detach().cpu()
+    adv_list = []
+    for i in range(0, len(images), batch_size):
+        chunk = images[i:i + batch_size]
+        x_adv = chunk.clone().to(device)
+        x_orig = chunk.to(device)
+        for _ in range(steps):
+            x_adv.requires_grad_(True)
+            out = wrapper(x_adv)
+            loss = out.sum()
+            loss.backward()
+            with torch.no_grad():
+                x_adv = x_adv + alpha * x_adv.grad.sign()
+                delta = torch.clamp(x_adv - x_orig, -eps, eps)
+                x_adv = torch.clamp(x_orig + delta, 0, 1)
+        adv_list.append(x_adv.detach().cpu())
+    return torch.cat(adv_list, dim=0)
 
 
 ATTACK_FNS = {
@@ -84,15 +92,29 @@ ATTACK_FNS = {
 def batch_coverage(
     model: nn.Module, images: torch.Tensor, device: str,
     top_neurons: Dict[str, List[int]],
+    batch_size: int = 8,
 ) -> float:
-    """Compute fraction of top neurons that are 'active' (above mean)."""
-    acts = collect_activations(model, images, device, top_neurons)
+    """Compute fraction of top neurons that are 'active' (above mean).
+
+    Processes images in batches to avoid GPU OOM on large inputs.
+    """
+    # Accumulate activations across batches
+    all_acts: Dict[str, list] = {k: [] for k in top_neurons}
+    for i in range(0, len(images), batch_size):
+        chunk = images[i:i + batch_size]
+        acts = collect_activations(model, chunk, device, top_neurons)
+        for lname, act_t in acts.items():
+            all_acts[lname].append(act_t.cpu())
+
     active = 0
     total = 0
-    for lname, act_t in acts.items():
-        mean_act = act_t.abs().mean()
-        active += (act_t.abs() > mean_act * 0.5).sum().item()
-        total += act_t.numel()
+    for lname in top_neurons:
+        if not all_acts[lname]:
+            continue
+        combined = torch.cat(all_acts[lname], dim=0)
+        mean_act = combined.abs().mean()
+        active += (combined.abs() > mean_act * 0.5).sum().item()
+        total += combined.numel()
     return active / max(total, 1)
 
 

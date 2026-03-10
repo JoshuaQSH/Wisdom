@@ -86,39 +86,76 @@ For unsupported methods, a gradient-magnitude fallback is used automatically.
 
 ## Usage
 
-### 1. Generate Neuron Importance Scores
+All commands assume you are in the `Wisdom/` directory with the virtual environment activated:
 
 ```bash
 cd Wisdom
 source ../.venv/bin/activate
+```
 
+### 1. Generate Neuron Importance Scores (Train Set)
+
+Uses the **COCO2017 train split** (118,287 images) for consensus-based importance scoring.
+
+```bash
 python wisdom_yolo_train.py \
   --weights weights/yolo11n.pt \
   --img-dir standalone/data/coco/images/train2017 \
-  --batch-size 2 --num-images 100 --top-m 20 \
+  --batch-size 2 --num-images 118287 --top-m 20 \
   --methods lgxa lig lgs \
   --out-csv neuron_eval_out/wisdom_yolo11n_scores.csv \
   --device cuda:0 --imgsz 320
 ```
 
-### 2. Run Research Questions
+> **Note:** With `--batch-size 2 --imgsz 320` this is safe from OOM on an 11 GB GPU.
+> Estimated runtime: ~280 hours (59 K batches × ~17 s each). For a quick
+> sanity check use `--num-images 200`.
+
+### 2. Run Research Questions (Val/Test Set)
+
+All RQ scripts evaluate on the **COCO2017 val split** (5,000 images).
 
 ```bash
-# RQ1: Critical neurons (with IoU + classification accuracy)
-python run_rq1.py --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv --num-images 50
+# RQ1: Critical neuron pruning (IoU + classification accuracy + recall)
+python run_rq1.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 5000 --batch-size 2 --imgsz 320 --device cuda:0
 
-# RQ2: Diversity
-python run_rq2.py --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv --num-images 20
+# RQ2: Diversity – important vs random pixel perturbation
+python run_rq2.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 5000 --batch-size 2 --imgsz 320 --device cuda:0
 
-# RQ3: Adversarial effectiveness
-python run_rq3.py --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv --num-images 20
+# RQ3: Adversarial effectiveness (FGSM / PGD)
+python run_rq3.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 5000 --batch-size 4 --imgsz 320 --device cuda:0
 
-# RQ4: Correlation
-python run_rq4.py --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv --num-images 30
+# RQ4: Correlation (Pielou's evenness vs WISDOM coverage)
+python run_rq4.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 5000 --imgsz 320 --device cuda:0
 
-# RQ5: Efficiency
-python run_rq5.py --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv --num-images 4
+# RQ5: Runtime and memory overhead
+python run_rq5.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 50 --batch-size 2 --imgsz 320 --device cuda:0
 ```
+
+> **OOM avoidance:** All scripts use batched processing internally.
+> `--batch-size 2 --imgsz 320` is safe on an 11 GB GPU for all scripts.
+> RQ3 can use `--batch-size 4` because adversarial generation is batched
+> separately (4 images per attack batch).
 
 ### 3. Run Tests
 
@@ -128,6 +165,8 @@ python -m pytest tests/ -v
 
 ## Notes
 
+- **Train set** → `standalone/data/coco/images/train2017` (for `wisdom_yolo_train.py` only)
+- **Val/test set** → `standalone/data/coco/images/val2017` (for all `run_rq*.py` scripts)
 - Use `--imgsz 320` for testing (640 may cause OOM on smaller GPUs)
 - Start with `--num-images` small values (10-20) for validation, increase for full experiments
 - The WISDOM consensus scores CSV is shared across RQ1-RQ5 scripts

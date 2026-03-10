@@ -41,7 +41,7 @@ from wisdom.utils.yolo_wrapper import YOLOWrapper
 from wisdom.core.wisdom_train import _is_trainable_module
 from run_rq2 import collect_activations
 
-SUITE_SIZES = [5, 10, 15, 20]
+SUITE_SIZES = [10, 50, 100, 200]
 
 
 # ── Pielou's evenness ─────────────────────────────────────────────
@@ -66,64 +66,86 @@ def pielou_evenness(predictions: List[int]) -> float:
 def wisdom_coverage(
     model: nn.Module, images: torch.Tensor, device: str,
     top_neurons: Dict[str, List[int]],
+    batch_size: int = 16,
 ) -> float:
     """Fraction of WISDOM-selected neurons that are activated above threshold."""
-    acts = collect_activations(model, images, device, top_neurons)
+    all_acts: Dict[str, list] = {k: [] for k in top_neurons}
+    for i in range(0, len(images), batch_size):
+        acts = collect_activations(model, images[i:i + batch_size], device, top_neurons)
+        for lname, act_t in acts.items():
+            all_acts[lname].append(act_t.cpu())
     active = 0
     total = 0
-    for lname, act_t in acts.items():
-        threshold = act_t.abs().mean() * 0.1 + 1e-6
-        active += (act_t.abs() > threshold).sum().item()
-        total += act_t.numel()
+    for lname in top_neurons:
+        if not all_acts[lname]:
+            continue
+        combined = torch.cat(all_acts[lname], dim=0)
+        threshold = combined.abs().mean() * 0.1 + 1e-6
+        active += (combined.abs() > threshold).sum().item()
+        total += combined.numel()
     return active / max(total, 1)
 
 
-def neuron_coverage(model: nn.Module, images: torch.Tensor, device: str, threshold: float = 0.5) -> float:
-    """Traditional NC: fraction of all neurons activated above threshold."""
+def neuron_coverage(model: nn.Module, images: torch.Tensor, device: str,
+                    threshold: float = 0.5, batch_size: int = 16) -> float:
+    """Traditional NC: fraction of all neurons activated above threshold.
+
+    Processes images in batches to avoid GPU OOM.
+    """
     model.eval().to(device)
-    acts_list = []
-    hooks = []
+    all_batch_acts = []
 
-    for lname, m in model.named_modules():
-        if not _is_trainable_module(m):
-            continue
+    for i in range(0, len(images), batch_size):
+        chunk = images[i:i + batch_size]
+        acts_list: list = []
+        hooks = []
 
-        def make_hook(name):
-            def hook_fn(_mod, _inp, out):
-                if out.dim() == 4:
-                    acts_list.append(out.mean(dim=(2, 3)).detach().cpu())
-                elif out.dim() == 2:
-                    acts_list.append(out.detach().cpu())
-            return hook_fn
+        for lname, m in model.named_modules():
+            if not _is_trainable_module(m):
+                continue
 
-        h = m.register_forward_hook(make_hook(lname))
-        hooks.append(h)
+            def make_hook(name):
+                def hook_fn(_mod, _inp, out):
+                    if out.dim() == 4:
+                        acts_list.append(out.mean(dim=(2, 3)).detach().cpu())
+                    elif out.dim() == 2:
+                        acts_list.append(out.detach().cpu())
+                return hook_fn
 
-    with torch.no_grad():
-        model(images.to(device))
+            h = m.register_forward_hook(make_hook(lname))
+            hooks.append(h)
 
-    for h in hooks:
-        h.remove()
+        with torch.no_grad():
+            model(chunk.to(device))
 
-    if not acts_list:
+        for h in hooks:
+            h.remove()
+
+        if acts_list:
+            all_batch_acts.append(torch.cat(acts_list, dim=1))
+
+    if not all_batch_acts:
         return 0.0
-    all_acts = torch.cat(acts_list, dim=1)  # (B, total_neurons)
+    all_acts = torch.cat(all_batch_acts, dim=0)  # (total_images, total_neurons)
     return (all_acts.abs() > threshold).float().mean().item()
 
 
 # ── Get YOLO predictions ──────────────────────────────────────────
-def get_yolo_predictions(model: nn.Module, images: torch.Tensor, device: str) -> List[int]:
+def get_yolo_predictions(model: nn.Module, images: torch.Tensor, device: str,
+                         batch_size: int = 16) -> List[int]:
     """Return list of predicted class IDs across all images and detections."""
     model.eval().to(device)
+    predictions = []
     with torch.no_grad():
-        out = model(images.to(device))
-        preds = out[0] if isinstance(out, (tuple, list)) else out
-        cls_scores = preds[:, 4:, :]  # (B, 80, A)
-        top_classes = cls_scores.argmax(dim=1)  # (B, A)
-        top_conf = cls_scores.max(dim=1).values  # (B, A)
-        # Filter by confidence
-        mask = top_conf > 0.25
-        predictions = top_classes[mask].cpu().tolist()
+        for i in range(0, len(images), batch_size):
+            chunk = images[i:i + batch_size]
+            out = model(chunk.to(device))
+            preds = out[0] if isinstance(out, (tuple, list)) else out
+            cls_scores = preds[:, 4:, :]  # (B, 80, A)
+            top_classes = cls_scores.argmax(dim=1)  # (B, A)
+            top_conf = cls_scores.max(dim=1).values  # (B, A)
+            mask = top_conf > 0.25
+            predictions.extend(top_classes[mask].cpu().tolist())
     return predictions
 
 
