@@ -199,14 +199,21 @@ def _nms_predictions(raw_preds: torch.Tensor, conf_thresh: float = 0.25,
 
 def eval_iou_and_accuracy(
     model: nn.Module, loader: DataLoader, device: str, imgsz: int = 320,
-    conf_thresh: float = 0.25,
-) -> Tuple[float, float]:
-    """Evaluate mean IoU and classification accuracy on labeled data.
-    Returns (mean_iou, classification_accuracy)."""
+    conf_thresh: float = 0.01,
+) -> Tuple[float, float, float]:
+    """Evaluate mean IoU, classification accuracy and detection recall.
+
+    Uses a low default conf_thresh (0.01) so that even heavily-pruned
+    models still produce some detections, avoiding the cliff-to-zero
+    behaviour that makes the metric uninformative.
+
+    Returns (mean_iou, classification_accuracy, detection_recall).
+    """
     model.eval().to(device)
     all_ious = []
     correct_cls = 0
     total_matched = 0
+    total_gt = 0
 
     with torch.no_grad():
         for images, gt_labels_batch in loader:
@@ -215,10 +222,10 @@ def eval_iou_and_accuracy(
             preds_batch = _nms_predictions(raw_preds, conf_thresh=conf_thresh, imgsz=imgsz)
 
             for preds, gt_boxes in zip(preds_batch, gt_labels_batch):
+                total_gt += len(gt_boxes)
                 if not gt_boxes or not preds:
                     continue
                 # Greedy matching: for each GT box, find best matching pred
-                gt_matched = [False] * len(gt_boxes)
                 pred_matched = [False] * len(preds)
 
                 for gi, (gt_cls, gt_cx, gt_cy, gt_w, gt_h) in enumerate(gt_boxes):
@@ -234,7 +241,6 @@ def eval_iou_and_accuracy(
                             best_iou = iou
                             best_pi = pi
                     if best_pi >= 0 and best_iou > 0.1:
-                        gt_matched[gi] = True
                         pred_matched[best_pi] = True
                         all_ious.append(best_iou)
                         total_matched += 1
@@ -243,7 +249,8 @@ def eval_iou_and_accuracy(
 
     mean_iou = float(np.mean(all_ious)) if all_ious else 0.0
     cls_acc = correct_cls / total_matched if total_matched > 0 else 0.0
-    return mean_iou, cls_acc
+    recall = total_matched / total_gt if total_gt > 0 else 0.0
+    return mean_iou, cls_acc, recall
 
 
 # ── YOLO evaluation helper ────────────────────────────────────────
@@ -347,12 +354,13 @@ def run_rq1(
 
     # Baseline performance
     baseline_conf = eval_yolo_confidence(torch_model, loader, device)
-    baseline_iou, baseline_cls_acc = eval_iou_and_accuracy(
+    baseline_iou, baseline_cls_acc, baseline_recall = eval_iou_and_accuracy(
         torch_model, labeled_loader, device, imgsz=imgsz
     )
     print(f"Baseline confidence: {baseline_conf:.2f}")
     print(f"Baseline mean IoU: {baseline_iou:.4f}")
     print(f"Baseline classification accuracy: {baseline_cls_acc:.4f}")
+    print(f"Baseline detection recall: {baseline_recall:.4f}")
 
     # Get all trainable layer names (exclude detection head)
     trainable = [
@@ -380,12 +388,13 @@ def run_rq1(
                 mapped[lname] = idxs
         prune_neurons(pruned, mapped)
         pruned_conf = eval_yolo_confidence(pruned, loader, device)
-        pruned_iou, pruned_cls_acc = eval_iou_and_accuracy(
+        pruned_iou, pruned_cls_acc, pruned_recall = eval_iou_and_accuracy(
             pruned, labeled_loader, device, imgsz=imgsz
         )
         conf_drop = baseline_conf - pruned_conf
         iou_drop = baseline_iou - pruned_iou
         cls_acc_drop = baseline_cls_acc - pruned_cls_acc
+        recall_drop = baseline_recall - pruned_recall
         accuracy_records.append({
             "Attribution Method": "Wisdom",
             "Top-N": n_prune,
@@ -398,10 +407,14 @@ def run_rq1(
             "Cls Accuracy": pruned_cls_acc,
             "Baseline Cls Acc": baseline_cls_acc,
             "Cls Acc Drop": cls_acc_drop,
+            "Det Recall": pruned_recall,
+            "Baseline Recall": baseline_recall,
+            "Recall Drop": recall_drop,
         })
         print(f"  Top-{n_prune}: conf_drop={conf_drop:.2f}, "
               f"IoU={pruned_iou:.4f} (Δ{iou_drop:+.4f}), "
-              f"ClsAcc={pruned_cls_acc:.4f} (Δ{cls_acc_drop:+.4f})")
+              f"ClsAcc={pruned_cls_acc:.4f} (Δ{cls_acc_drop:+.4f}), "
+              f"Recall={pruned_recall:.4f} (Δ{recall_drop:+.4f})")
 
     # ── Attribution methods ──
     wrapper = YOLOWrapper(torch_model, num_classes=80)
@@ -446,12 +459,13 @@ def run_rq1(
                 selection.setdefault(mapped_name, []).append(idx)
             prune_neurons(pruned, selection)
             pruned_conf = eval_yolo_confidence(pruned, loader, device)
-            pruned_iou, pruned_cls_acc = eval_iou_and_accuracy(
+            pruned_iou, pruned_cls_acc, pruned_recall = eval_iou_and_accuracy(
                 pruned, labeled_loader, device, imgsz=imgsz
             )
             conf_drop = baseline_conf - pruned_conf
             iou_drop = baseline_iou - pruned_iou
             cls_acc_drop = baseline_cls_acc - pruned_cls_acc
+            recall_drop = baseline_recall - pruned_recall
             accuracy_records.append({
                 "Attribution Method": attr_name,
                 "Top-N": n_prune,
@@ -464,10 +478,14 @@ def run_rq1(
                 "Cls Accuracy": pruned_cls_acc,
                 "Baseline Cls Acc": baseline_cls_acc,
                 "Cls Acc Drop": cls_acc_drop,
+                "Det Recall": pruned_recall,
+                "Baseline Recall": baseline_recall,
+                "Recall Drop": recall_drop,
             })
             print(f"  Top-{n}: conf_drop={conf_drop:.2f}, "
                   f"IoU={pruned_iou:.4f} (Δ{iou_drop:+.4f}), "
-                  f"ClsAcc={pruned_cls_acc:.4f} (Δ{cls_acc_drop:+.4f})")
+                  f"ClsAcc={pruned_cls_acc:.4f} (Δ{cls_acc_drop:+.4f}), "
+                  f"Recall={pruned_recall:.4f} (Δ{recall_drop:+.4f})")
 
         # Random pruning baseline
         print(f"  Random baseline:")
@@ -480,12 +498,13 @@ def run_rq1(
                 selection.setdefault(lname, []).append(idx)
             prune_neurons(pruned, selection)
             pruned_conf = eval_yolo_confidence(pruned, loader, device)
-            pruned_iou, pruned_cls_acc = eval_iou_and_accuracy(
+            pruned_iou, pruned_cls_acc, pruned_recall = eval_iou_and_accuracy(
                 pruned, labeled_loader, device, imgsz=imgsz
             )
             conf_drop = baseline_conf - pruned_conf
             iou_drop = baseline_iou - pruned_iou
             cls_acc_drop = baseline_cls_acc - pruned_cls_acc
+            recall_drop = baseline_recall - pruned_recall
             accuracy_records.append({
                 "Attribution Method": f"Random ({attr_name})",
                 "Top-N": n_prune,
@@ -498,10 +517,14 @@ def run_rq1(
                 "Cls Accuracy": pruned_cls_acc,
                 "Baseline Cls Acc": baseline_cls_acc,
                 "Cls Acc Drop": cls_acc_drop,
+                "Det Recall": pruned_recall,
+                "Baseline Recall": baseline_recall,
+                "Recall Drop": recall_drop,
             })
             print(f"    Top-{n}: conf_drop={conf_drop:.2f}, "
                   f"IoU={pruned_iou:.4f} (Δ{iou_drop:+.4f}), "
-                  f"ClsAcc={pruned_cls_acc:.4f} (Δ{cls_acc_drop:+.4f})")
+                  f"ClsAcc={pruned_cls_acc:.4f} (Δ{cls_acc_drop:+.4f}), "
+                  f"Recall={pruned_recall:.4f} (Δ{recall_drop:+.4f})")
 
     # Save results
     rel_path = f"{out_prefix}_relevance.csv"

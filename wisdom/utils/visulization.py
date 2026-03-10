@@ -111,7 +111,8 @@ def viz_rq1_acc_drop(csv_file, out_path=None, figsize=(14, 5)):
     metrics = [
         ("Confidence Drop", "Confidence Drop"),
         ("IoU Drop", "IoU Drop"),
-        ("Cls Acc Drop", "Classification Accuracy Drop"),
+        ("Cls Acc Drop", "Cls Accuracy Drop"),
+        ("Recall Drop", "Detection Recall Drop"),
     ]
     # Keep only metrics that exist in the CSV
     metrics = [(col, title) for col, title in metrics if col in df.columns]
