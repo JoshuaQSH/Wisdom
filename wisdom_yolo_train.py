@@ -11,7 +11,7 @@ neuron importance scores to a CSV file.
 Usage
 -----
     python wisdom_yolo_train.py \
-        --weights standalone/models/yolo11n.pt \
+        --weights weights/yolo11n.pt \
         --data standalone/data/coco128.yaml \
         --batch-size 4 \
         --num-images 100 \
@@ -130,7 +130,7 @@ def train_wisdom_yolo(
 # ------------------------------------------------------------------
 def parse_args():
     p = argparse.ArgumentParser(description="WISDOM consensus training for YOLOv11")
-    p.add_argument("--weights", default="standalone/models/yolo11n.pt", help="YOLOv11 weights file")
+    p.add_argument("--weights", default="weights/yolo11n.pt", help="YOLOv11 weights file")
     p.add_argument("--data", default="standalone/data/coco128.yaml", help="Dataset YAML (used to locate images)")
     p.add_argument("--img-dir", default=None, help="Override: path to image directory")
     p.add_argument("--batch-size", type=int, default=4)
@@ -138,7 +138,7 @@ def parse_args():
     p.add_argument("--top-m", type=int, default=20, help="Top-M neurons per method")
     p.add_argument("--methods", nargs="+", default=["lgxa", "lig", "lgs"])
     p.add_argument("--voting-mode", default="fine-grained", choices=["fine-grained", "coarse"])
-    p.add_argument("--out-csv", default="wisdom_yolo_scores.csv")
+    p.add_argument("--out-csv", default="neuron_eval_out/wisdom_yolo_scores.csv")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--imgsz", type=int, default=640)
     return p.parse_args()

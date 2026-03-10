@@ -4,7 +4,7 @@ yolo_test.py - Verify YOLOv11 model loading and inference on COCO images.
 import glob
 from ultralytics import YOLO
 
-WEIGHTS = "standalone/models/yolo11n.pt"
+WEIGHTS = "weights/yolo11n.pt"
 COCO_VAL = "standalone/data/coco/images/val2017"
 
 

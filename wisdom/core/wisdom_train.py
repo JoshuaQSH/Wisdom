@@ -68,11 +68,14 @@ def _eval_loss_yolo(model: nn.Module, x: torch.Tensor, device: str) -> float:
 def _voting_init(layer_scores: Dict[str, torch.Tensor],
                  trainable_names: List[str],
                  trainable_mods: List[nn.Module],
-                 excluded_layer: Optional[str] = None) -> Dict[str, torch.Tensor]:
+                 excluded_layer: Optional[str] = None,
+                 excluded_prefixes: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
     if layer_scores:
         return layer_scores
     for lname, m in zip(trainable_names, trainable_mods):
         if excluded_layer and lname == excluded_layer:
+            continue
+        if excluded_prefixes and any(lname.startswith(p) for p in excluded_prefixes):
             continue
         if isinstance(m, nn.Conv2d):
             layer_scores[lname] = torch.zeros(m.out_channels, dtype=torch.float32)
@@ -185,9 +188,11 @@ def _select_top_neurons_all(
     importance_scores_dict: Dict[str, torch.Tensor],
     top_m_neurons: int,
     filter_layer: Optional[str] = None,
+    filter_prefixes: Optional[List[str]] = None,
 ) -> Tuple[Dict[str, torch.Tensor], List[Tuple[str, float, int]]]:
     """
-    Flatten all layers' importance and pick top-M across layers (optionally excluding final layer).
+    Flatten all layers' importance and pick top-M across layers (optionally excluding final layer
+    or layers matching given prefixes, e.g. detection head).
     Returns:
       - indices_by_layer: {layer: 1D LongTensor of selected indices}
       - selected_triplets: list of (layer_name, score, idx) sorted desc by score
@@ -195,6 +200,8 @@ def _select_top_neurons_all(
     flattened: List[Tuple[str, float, int]] = []
     for layer_name, scores in importance_scores_dict.items():
         if filter_layer and layer_name == filter_layer:
+            continue
+        if filter_prefixes and any(layer_name.startswith(p) for p in filter_prefixes):
             continue
         if scores.dim() == 1:
             for idx, s in enumerate(scores):
@@ -256,11 +263,16 @@ def _compute_yolo_importance(
     method: str,
     device: str,
     num_classes: int = 80,
+    exclude_detect_head: bool = True,
 ) -> Dict[str, torch.Tensor]:
     """
     Compute per-layer importance for a YOLO model via the YOLOWrapper.
     Uses the wrapper (which outputs (B, nc)) so Captum can attribute
     to a class target.
+
+    When exclude_detect_head=True, skips all layers in the detection head
+    (model.23.*) to avoid pruning the final detection layers – analogous
+    to excluding the classifier in classification networks.
     """
     try:
         from captum.attr import (
@@ -292,6 +304,9 @@ def _compute_yolo_importance(
     for lname, layer in wrapper.named_modules():
         if not _is_trainable_module(layer):
             continue
+        # Skip detection head layers (model.23.*)
+        if exclude_detect_head and "model.23." in lname:
+            continue
         A = name2ctor[key](wrapper, layer)
         if key == "la":
             attr = A.attribute(images)
@@ -312,6 +327,7 @@ def _gradient_importance(
     images: torch.Tensor,
     device: str,
     num_classes: int = 80,
+    exclude_detect_head: bool = True,
 ) -> Dict[str, torch.Tensor]:
     """
     Fallback importance: gradient magnitude w.r.t. each layer's parameters.
@@ -334,6 +350,8 @@ def _gradient_importance(
     scores: Dict[str, torch.Tensor] = {}
     for lname, m in model.named_modules():
         if not _is_trainable_module(m):
+            continue
+        if exclude_detect_head and "model.23." in lname:
             continue
         w = m.weight
         if w.grad is not None:
@@ -419,6 +437,14 @@ class ConsensusWisdom:
         assert cfg.out_csv, "Please provide cfg.out_csv to save layer scores."
         final_layer = final_layer or (self.trainable_names[-1] if self.trainable_names else None)
 
+        # For YOLO, exclude all detection head layers (model.23.*) instead
+        # of just the single final layer – analogous to excluding the
+        # classifier head in classification networks.
+        detect_head_prefixes: Optional[List[str]] = None
+        if cfg.is_yolo:
+            detect_head_prefixes = ["yolo_model.model.23."]
+            final_layer = None  # prefix-based exclusion replaces single-layer
+
         # For YOLO, create a wrapper for Captum attribution
         wrapper = None
         if cfg.is_yolo:
@@ -456,7 +482,9 @@ class ConsensusWisdom:
                         target_layers=None,
                     )
                 _, selected_triplets = _select_top_neurons_all(
-                    imp, top_m_neurons=top_m_neurons, filter_layer=final_layer
+                    imp, top_m_neurons=top_m_neurons,
+                    filter_layer=final_layer,
+                    filter_prefixes=detect_head_prefixes,
                 )
                 important_neurons_dict[method] = selected_triplets
 
@@ -495,9 +523,16 @@ class ConsensusWisdom:
             if not init_done:
                 if cfg.is_yolo:
                     # Use wrapper layer names for scoring
-                    layer_scores = _voting_init(layer_scores, wrapper_names, wrapper_mods, excluded_layer=final_layer)
+                    layer_scores = _voting_init(
+                        layer_scores, wrapper_names, wrapper_mods,
+                        excluded_layer=final_layer,
+                        excluded_prefixes=detect_head_prefixes,
+                    )
                 else:
-                    layer_scores = _voting_init(layer_scores, self.trainable_names, self.trainable_mods, excluded_layer=final_layer)
+                    layer_scores = _voting_init(
+                        layer_scores, self.trainable_names, self.trainable_mods,
+                        excluded_layer=final_layer,
+                    )
                 init_done = True
 
             # 4) Vote according to mode

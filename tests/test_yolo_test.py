@@ -2,7 +2,7 @@
 import os
 import pytest
 
-WEIGHTS = os.path.join(os.path.dirname(__file__), "..", "standalone", "models", "yolo11n.pt")
+WEIGHTS = os.path.join(os.path.dirname(__file__), "..", "weights", "yolo11n.pt")
 COCO_VAL = os.path.join(os.path.dirname(__file__), "..", "standalone", "data", "coco", "images", "val2017")
 
 skip_no_weights = pytest.mark.skipif(

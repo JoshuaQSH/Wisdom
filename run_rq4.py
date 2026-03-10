@@ -196,10 +196,10 @@ def run_rq4(
 # ── CLI ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="RQ4: Correlation evaluation for YOLOv11")
-    p.add_argument("--weights", default="standalone/models/yolo11n.pt")
+    p.add_argument("--weights", default="weights/yolo11n.pt")
     p.add_argument("--img-dir", default="standalone/data/coco/images/val2017")
-    p.add_argument("--csv-file", default="wisdom_yolo11n_scores.csv")
-    p.add_argument("--out-csv", default="rq4_yolo11n_correlation.csv")
+    p.add_argument("--csv-file", default="neuron_eval_out/wisdom_yolo11n_scores.csv")
+    p.add_argument("--out-csv", default="results/rq4_yolo11n_correlation.csv")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--num-images", type=int, default=30)
     p.add_argument("--imgsz", type=int, default=320)

@@ -72,3 +72,97 @@ def viz_topk_neurons_score(csv_file, top_k=10):
     plt.legend()
     plt.savefig(f'top_{top_k}_neuron_scores.pdf', format='pdf', dpi=1200)
     # plt.show()
+
+
+# color_choice = ['PuBuGn', 'Greens', 'Purples', 'Reds', 'Blues', 'YlGn', 'summer', 'cool', 'bwr']
+METHOD_COLORS = {
+    "Wisdom": "#2ca02c",       # Greens palette
+    "GradXAct": "#9467bd",     # Purples palette
+    "IntegGrad": "#d62728",    # Reds palette
+    "GradShap": "#1f77b4",     # Blues palette
+}
+RANDOM_COLOR = "#7f7f7f"
+
+
+def viz_rq1_acc_drop(csv_file, out_path=None, figsize=(14, 5)):
+    """Visualize RQ1 accuracy drop results as a grouped bar chart.
+
+    Plots three sub-figures side by side:
+      1. Confidence Drop vs Top-N neurons pruned
+      2. IoU Drop vs Top-N neurons pruned
+      3. Classification Accuracy Drop vs Top-N neurons pruned
+
+    Each method gets its own colour following the project's color_choice
+    palette; random baselines are shown in grey.
+
+    Parameters
+    ----------
+    csv_file : str
+        Path to the RQ1 acc_drop CSV (output of run_rq1).
+    out_path : str, optional
+        Output PDF path.  Defaults to ``rq1_acc_drop.pdf`` next to csv_file.
+    figsize : tuple
+        Figure size (width, height).
+    """
+    df = pd.read_csv(csv_file)
+    if out_path is None:
+        out_path = csv_file.replace("_acc_drop.csv", "_acc_drop_plot.pdf")
+
+    metrics = [
+        ("Confidence Drop", "Confidence Drop"),
+        ("IoU Drop", "IoU Drop"),
+        ("Cls Acc Drop", "Classification Accuracy Drop"),
+    ]
+    # Keep only metrics that exist in the CSV
+    metrics = [(col, title) for col, title in metrics if col in df.columns]
+    if not metrics:
+        print("Warning: no drop metrics found in CSV, skipping plot.")
+        return
+
+    n_metrics = len(metrics)
+    fig, axes = plt.subplots(1, n_metrics, figsize=figsize, sharey=False)
+    if n_metrics == 1:
+        axes = [axes]
+
+    methods = df["Attribution Method"].unique()
+    n_list = sorted(df["Top-N"].unique())
+    bar_width = 0.8 / len(methods)
+    x = np.arange(len(n_list))
+
+    for ax, (col, title) in zip(axes, metrics):
+        for i, method in enumerate(methods):
+            subset = df[df["Attribution Method"] == method]
+            vals = []
+            for n in n_list:
+                row = subset[subset["Top-N"] == n]
+                vals.append(float(row[col].values[0]) if len(row) > 0 else 0.0)
+
+            if "Random" in method:
+                color = RANDOM_COLOR
+                hatch = "//"
+            else:
+                color = METHOD_COLORS.get(method, "#333333")
+                hatch = None
+
+            bars = ax.bar(
+                x + i * bar_width, vals, bar_width,
+                label=method, color=color, alpha=0.85,
+                hatch=hatch, edgecolor="white", linewidth=0.5,
+            )
+
+        ax.set_xlabel("Top-N Neurons Pruned")
+        ax.set_ylabel(title)
+        ax.set_title(title)
+        ax.set_xticks(x + bar_width * (len(methods) - 1) / 2)
+        ax.set_xticklabels([str(n) for n in n_list])
+        ax.axhline(y=0, color="black", linewidth=0.5, linestyle="--")
+
+    # Single legend outside the subplots
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=min(len(methods), 4),
+               bbox_to_anchor=(0.5, -0.05), fontsize=8, frameon=True)
+
+    fig.tight_layout(rect=[0, 0.05, 1, 1])
+    fig.savefig(out_path, format="pdf", dpi=1200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"RQ1 plot saved: {out_path}")

@@ -193,10 +193,10 @@ def run_rq5(
 # ── CLI ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="RQ5: Efficiency evaluation for YOLOv11")
-    p.add_argument("--weights", default="standalone/models/yolo11n.pt")
+    p.add_argument("--weights", default="weights/yolo11n.pt")
     p.add_argument("--img-dir", default="standalone/data/coco/images/val2017")
-    p.add_argument("--csv-file", default="wisdom_yolo11n_scores.csv")
-    p.add_argument("--out-csv", default="rq5_yolo11n_efficiency.csv")
+    p.add_argument("--csv-file", default="neuron_eval_out/wisdom_yolo11n_scores.csv")
+    p.add_argument("--out-csv", default="results/rq5_yolo11n_efficiency.csv")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--num-images", type=int, default=4)
     p.add_argument("--batch-size", type=int, default=2)

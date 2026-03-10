@@ -4,9 +4,9 @@ import csv
 import tempfile
 import pytest
 
-WEIGHTS = os.path.join(os.path.dirname(__file__), "..", "standalone", "models", "yolo11n.pt")
+WEIGHTS = os.path.join(os.path.dirname(__file__), "..", "weights", "yolo11n.pt")
 COCO_VAL = os.path.join(os.path.dirname(__file__), "..", "standalone", "data", "coco", "images", "val2017")
-SCORES_CSV = os.path.join(os.path.dirname(__file__), "..", "wisdom_yolo11n_scores.csv")
+SCORES_CSV = os.path.join(os.path.dirname(__file__), "..", "neuron_eval_out", "wisdom_yolo11n_scores.csv")
 
 skip_no_weights = pytest.mark.skipif(not os.path.isfile(WEIGHTS), reason="yolo11n.pt not found")
 skip_no_data = pytest.mark.skipif(not os.path.isdir(COCO_VAL), reason="COCO val images not found")
