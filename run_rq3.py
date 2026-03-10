@@ -164,7 +164,38 @@ def run_rq3(
                 print(f"  n={n}, err={error_rate}: clean={clean_cov:.4f}, mixed={mixed_cov:.4f}, Δ={norm_change:.4f}")
 
     df = pd.DataFrame(records)
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
     df.to_csv(out_csv, index=False)
+
+    # Line plot: Normalised Change vs Error Rate for each attack
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        attack_colors = {"FGSM": "#d62728", "PGD": "#1f77b4"}
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for attack_name_upper in df["Attack"].unique():
+            subset = df[df["Attack"] == attack_name_upper]
+            err_rates = sorted(subset["Error Rate"].unique())
+            norm_changes = [subset[subset["Error Rate"] == er]["Normalised Change"].mean() for er in err_rates]
+            color = attack_colors.get(attack_name_upper, "#333333")
+            ax.plot(err_rates, norm_changes, marker="o", linewidth=2, markersize=8,
+                    label=attack_name_upper, color=color)
+
+        ax.set_xlabel("Error Rate (fraction of adversarial inputs)", fontsize=11)
+        ax.set_ylabel("Normalised Coverage Change", fontsize=11)
+        ax.set_title("RQ3: Adversarial Detection via WISDOM Coverage", fontsize=12)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        plot_path = out_csv.replace(".csv", "_plot.pdf")
+        fig.savefig(plot_path, format="pdf", dpi=1200, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Plot saved: {plot_path}")
+    except Exception as e:
+        print(f"Warning: could not generate plot: {e}")
+
     print(f"\nSaved: {out_csv}")
     return out_csv
 

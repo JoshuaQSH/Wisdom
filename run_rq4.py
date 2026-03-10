@@ -180,14 +180,58 @@ def run_rq4(
             print(f"  n={n}, trial={trial}: J'={J:.4f}, wisdom_cov={w_cov:.4f}, NC={nc:.4f}")
 
     df = pd.DataFrame(records)
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
     df.to_csv(out_csv, index=False)
 
-    # Compute Pearson correlations
+    # Summary table
+    table_lines = []
+    table_lines.append("=" * 80)
+    table_lines.append("RQ4: Correlation – WISDOM Coverage vs Pielou's Evenness")
+    table_lines.append("=" * 80)
+    table_lines.append(f"{'Suite Size':>10} {'Trial':>6} {'Pielou J':>10} {'WISDOM Cov':>12} {'Neuron Cov':>12}")
+    table_lines.append("-" * 80)
+    for _, row in df.iterrows():
+        table_lines.append(
+            f"{int(row['Suite Size']):>10} {int(row['Trial']):>6} "
+            f"{row['Pielou Evenness']:10.4f} {row['WISDOM Coverage']:12.4f} {row['Neuron Coverage']:12.4f}"
+        )
+    table_lines.append("-" * 80)
+
+    # Per-suite-size summary
+    table_lines.append(f"\n{'Suite Size':>10} {'Avg J':>10} {'Avg WISDOM':>12} {'Avg NC':>12}")
+    table_lines.append("-" * 50)
+    for ss in sorted(df["Suite Size"].unique()):
+        sub = df[df["Suite Size"] == ss]
+        table_lines.append(
+            f"{int(ss):>10} {sub['Pielou Evenness'].mean():10.4f} "
+            f"{sub['WISDOM Coverage'].mean():12.4f} {sub['Neuron Coverage'].mean():12.4f}"
+        )
+
+    # Pearson correlations
+    corr_wisdom = float("nan")
+    corr_nc = float("nan")
     if len(df) > 2:
         corr_wisdom = df["Pielou Evenness"].corr(df["WISDOM Coverage"])
         corr_nc = df["Pielou Evenness"].corr(df["Neuron Coverage"])
-        print(f"\nPearson correlation (evenness vs WISDOM coverage): {corr_wisdom:.4f}")
-        print(f"Pearson correlation (evenness vs Neuron Coverage): {corr_nc:.4f}")
+        table_lines.append("")
+        table_lines.append(f"Pearson r (Evenness vs WISDOM Coverage): {corr_wisdom:.4f}")
+        table_lines.append(f"Pearson r (Evenness vs Neuron Coverage):  {corr_nc:.4f}")
+        table_lines.append(f"WISDOM {'shows stronger' if abs(corr_wisdom) > abs(corr_nc) else 'shows weaker'} correlation than baseline NC")
+    table_lines.append("=" * 80)
+
+    table_str = "\n".join(table_lines)
+    print(table_str)
+
+    # Save log
+    log_dir = os.path.join(os.path.dirname(out_csv) or ".", "..", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "rq4_results.log")
+    with open(log_path, "w") as f:
+        f.write(table_str + "\n\n")
+        f.write("Full records:\n")
+        f.write(df.to_string(index=False))
+        f.write("\n")
+    print(f"Log saved: {log_path}")
 
     print(f"Saved: {out_csv}")
     return out_csv

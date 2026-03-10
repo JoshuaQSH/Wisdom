@@ -204,12 +204,42 @@ def run_rq2(
             print(f"  iter={it}: U_I coverage={cov_i:.4f}, U_R coverage={cov_r:.4f}")
 
     df = pd.DataFrame(records)
+    os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
     df.to_csv(out_csv, index=False)
 
-    # Summary
+    # Summary table
+    summary = df.groupby("Perturbation")["Coverage"].agg(["mean", "std", "min", "max"])
     mean_i = df[df["Perturbation"] == "Important (U_I)"]["Coverage"].mean()
     mean_r = df[df["Perturbation"] == "Random (U_R)"]["Coverage"].mean()
-    print(f"\nMean coverage: U_I={mean_i:.4f}, U_R={mean_r:.4f}")
+
+    table_lines = []
+    table_lines.append("=" * 60)
+    table_lines.append("RQ2: Diversity – Perturbation Coverage Summary")
+    table_lines.append("=" * 60)
+    table_lines.append(f"{'Perturbation':<22} {'Mean':>8} {'Std':>8} {'Min':>8} {'Max':>8}")
+    table_lines.append("-" * 60)
+    for pert, row in summary.iterrows():
+        table_lines.append(f"{pert:<22} {row['mean']:8.4f} {row['std']:8.4f} {row['min']:8.4f} {row['max']:8.4f}")
+    table_lines.append("-" * 60)
+    ratio = mean_i / mean_r if mean_r > 0 else float("inf")
+    table_lines.append(f"U_I / U_R ratio: {ratio:.4f}")
+    table_lines.append(f"WISDOM-guided perturbation {'OUTPERFORMS' if mean_i > mean_r else 'underperforms'} random by {abs(mean_i - mean_r):.4f}")
+    table_lines.append("=" * 60)
+
+    table_str = "\n".join(table_lines)
+    print(table_str)
+
+    # Save log
+    log_dir = os.path.join(os.path.dirname(out_csv) or ".", "..", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "rq2_results.log")
+    with open(log_path, "w") as f:
+        f.write(table_str + "\n\n")
+        f.write("Full records:\n")
+        f.write(df.to_string(index=False))
+        f.write("\n")
+    print(f"Log saved: {log_path}")
+
     print(f"Saved: {out_csv}")
     return out_csv
 

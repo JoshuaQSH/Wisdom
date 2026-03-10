@@ -48,14 +48,19 @@ To match the classification model behavior where the final classifier layer is e
 
 This ensures only backbone/neck layers (63 of 88 total Conv2d layers) contribute to the importance analysis.
 
-## RQ1 Metrics
+## RQ Experiment Outputs
 
-RQ1 now reports three metrics for each pruning level:
-1. **Confidence Drop**: Sum of class confidence scores (existing)
-2. **IoU Drop**: Mean Intersection-over-Union between predicted and ground-truth bounding boxes
-3. **Classification Accuracy Drop**: Fraction of matched detections with correct class prediction
+### RQ1 – Critical Neurons
+Reports four metrics per pruning level: Confidence Drop, IoU Drop, Classification Accuracy Drop, Detection Recall Drop. Results → `results/rq1_*.csv` + PDF plot.
 
-Results are saved to CSV and automatically visualized as a grouped bar chart PDF.
+### RQ2 – Diversity
+Perturbs 2% of pixels (important vs random), measures WISDOM neuron coverage change. Prints summary table to console. Results → `results/rq2_*.csv`, logs → `logs/rq2_results.log`.
+
+### RQ3 – Adversarial Effectiveness
+Generates FGSM/PGD adversarial examples at varying error rates, measures normalised coverage change. Saves line plot. Results → `results/rq3_*.csv` + PDF plot.
+
+### RQ4 – Correlation
+Computes Pearson correlation between Pielou's evenness (test diversity) and WISDOM coverage vs baseline neuron coverage. Prints summary table. Results → `results/rq4_*.csv`, logs → `logs/rq4_results.log`.
 
 ## Dependencies
 
