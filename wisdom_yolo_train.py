@@ -83,9 +83,19 @@ def train_wisdom_yolo(
     voting_mode: str = "fine-grained",
     device: str = "cuda:0",
     imgsz: int = 640,
+    checkpoint_path: str | None = None,
+    checkpoint_every: int = 50,
 ) -> str:
     """
     Run WISDOM consensus training on a YOLOv11 model.
+
+    Parameters
+    ----------
+    checkpoint_path : str, optional
+        Path to a ``.pt`` checkpoint file.  If the file already exists
+        the run resumes from the last saved batch.
+    checkpoint_every : int
+        Save a checkpoint every N batches (default 50).
 
     Returns the path to the generated CSV file.
     """
@@ -115,7 +125,11 @@ def train_wisdom_yolo(
 
     # Run consensus
     cw = ConsensusWisdom(torch_model, device=device)
-    layer_scores, csv_path = cw.fit(loader, cfg, top_m_neurons=top_m, prune_mode="mask")
+    layer_scores, csv_path = cw.fit(
+        loader, cfg, top_m_neurons=top_m, prune_mode="mask",
+        checkpoint_path=checkpoint_path,
+        checkpoint_every=checkpoint_every,
+    )
 
     print(f"Saved layer scores to {csv_path}")
     print(f"Layers scored: {len(layer_scores)}")
@@ -141,6 +155,10 @@ def parse_args():
     p.add_argument("--out-csv", default="neuron_eval_out/wisdom_yolo_scores.csv")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--imgsz", type=int, default=640)
+    p.add_argument("--checkpoint", default=None,
+                   help="Path to .pt checkpoint file for resume support")
+    p.add_argument("--checkpoint-every", type=int, default=50,
+                   help="Save checkpoint every N batches (default 50)")
     return p.parse_args()
 
 
@@ -169,5 +187,7 @@ if __name__ == "__main__":
         voting_mode=args.voting_mode,
         device=args.device,
         imgsz=args.imgsz,
+        checkpoint_path=args.checkpoint,
+        checkpoint_every=args.checkpoint_every,
     )
     print(f"\nDone. CSV: {csv_path}")

@@ -163,6 +163,91 @@ python run_rq5.py \
 python -m pytest tests/ -v
 ```
 
+## Checkpoint / Resume Mechanism
+
+Long-running WISDOM training (~280 h for full COCO2017) saves periodic
+checkpoints so you can safely interrupt and resume later.
+
+### How It Works
+- Every `--checkpoint-every` batches (default 50), a `.pt` file is saved
+  containing the current `layer_scores` dict and the batch index.
+- On restart with the same `--checkpoint` path, training resumes from the
+  next batch after the last checkpoint.
+- After successful completion the checkpoint file is **deleted**
+  automatically.
+
+### CLI Usage
+```bash
+python wisdom_yolo_train.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/train2017 \
+  --batch-size 2 --num-images 118287 --top-m 20 \
+  --methods lgxa lig lgs \
+  --out-csv neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --device cuda:0 --imgsz 320 \
+  --checkpoint neuron_eval_out/wisdom_yolo11n_ckpt.pt \
+  --checkpoint-every 100
+```
+
+If the job is killed or OOMs, simply re-run the exact same command —
+it picks up where it left off.
+
+## End-to-End Pipeline
+
+The full WISDOM-YOLOv11 pipeline from scratch:
+
+```bash
+cd Wisdom && source ../.venv/bin/activate
+
+# Step 1: Generate importance scores (with checkpoint for long runs)
+python wisdom_yolo_train.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/train2017 \
+  --batch-size 2 --num-images 5000 --top-m 20 \
+  --methods lgxa lig lgs --voting-mode coarse \
+  --out-csv neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --device cuda:0 --imgsz 320 \
+  --checkpoint neuron_eval_out/wisdom_yolo11n_ckpt.pt
+
+# Step 2: RQ1 – Critical neuron pruning
+python run_rq1.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 200 --batch-size 2 --imgsz 320 --device cuda:0
+
+# Step 3: RQ2 – Diversity
+python run_rq2.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 200 --batch-size 2 --imgsz 320 --device cuda:0
+
+# Step 4: RQ3 – Adversarial effectiveness
+python run_rq3.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 200 --batch-size 4 --imgsz 320 --device cuda:0
+
+# Step 5: RQ4 – Correlation
+python run_rq4.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 200 --imgsz 320 --device cuda:0
+
+# Step 6: RQ5 – Efficiency
+python run_rq5.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores.csv \
+  --num-images 50 --batch-size 2 --imgsz 320 --device cuda:0
+```
+
+> Increase `--num-images` for production runs (e.g. 5000 for val set,
+> 118287 for full train set in Step 1).
+
 ## Notes
 
 - **Train set** → `standalone/data/coco/images/train2017` (for `wisdom_yolo_train.py` only)

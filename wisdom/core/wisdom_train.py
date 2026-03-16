@@ -430,10 +430,23 @@ class ConsensusWisdom:
         top_m_neurons: int,
         final_layer: Optional[str] = None,
         prune_mode: str = "mask",  # "mask" | "weights"
+        checkpoint_path: Optional[str] = None,
+        checkpoint_every: int = 50,
     ) -> Tuple[Dict[str, torch.Tensor], str]:
         """
         Returns (layer_scores, csv_path).
+
+        Parameters
+        ----------
+        checkpoint_path : str, optional
+            Path to a ``.pt`` file for saving/resuming progress.  If the
+            file already exists, training resumes from the saved batch
+            index.  A checkpoint is written every *checkpoint_every*
+            batches.
+        checkpoint_every : int
+            How often (in batches) to save a checkpoint.  Default 50.
         """
+        import os
         assert cfg.out_csv, "Please provide cfg.out_csv to save layer scores."
         final_layer = final_layer or (self.trainable_names[-1] if self.trainable_names else None)
 
@@ -457,7 +470,18 @@ class ConsensusWisdom:
         layer_scores: Dict[str, torch.Tensor] = {}
         init_done = False
 
-        for batch in tqdm(train_loader):
+        # Checkpoint resume
+        start_batch = 0
+        if checkpoint_path and os.path.isfile(checkpoint_path):
+            ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            layer_scores = {k: v.clone() for k, v in ckpt["layer_scores"].items()}
+            start_batch = ckpt["batch_idx"] + 1
+            init_done = bool(layer_scores)
+            print(f"[WISDOM] Resuming from checkpoint batch {start_batch}")
+
+        for batch_idx, batch in enumerate(tqdm(train_loader)):
+            if batch_idx < start_batch:
+                continue
             if cfg.is_yolo:
                 # YOLO dataloaders may yield (images,) or (images, targets)
                 images = batch[0] if isinstance(batch, (list, tuple)) else batch
@@ -546,6 +570,16 @@ class ConsensusWisdom:
                 layer_index_pairs = [pair for (pair, _wscore) in top_across]
                 _voting_neurons(layer_index_pairs, layer_scores)
 
+            # Periodic checkpoint
+            if checkpoint_path and (batch_idx + 1) % checkpoint_every == 0:
+                torch.save(
+                    {"layer_scores": layer_scores, "batch_idx": batch_idx},
+                    checkpoint_path,
+                )
+
         # 5) Save CSV
+        # Remove checkpoint after successful completion
+        if checkpoint_path and os.path.isfile(checkpoint_path):
+            os.remove(checkpoint_path)
         out_csv = save_layer_scores_csv(layer_scores, cfg.out_csv)
         return layer_scores, out_csv
