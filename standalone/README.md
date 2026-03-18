@@ -143,6 +143,17 @@ $mAP_{50-95} = \frac{1}{10}\sum_{t=0.5}^{0.95}mAP_t$
 - FP (False Positive): predicted box does not match any ground truth (IoU < threshold or duplicate prediction)
 - FN (False Negative): ground truth box not matched by any prediction
 
+## Loss Components
+
+- Class loss ($L_{cls}$): It is the loss associated with the error in the classification task. It uses Binary Cross Entropy (BCE) to support multi-label classification.
+- Objectness loss ($L_{obj}$): It is the loss associated with the error in detecting the presence of an object in a particular grid cell. It also uses BCE.
+- Bounding box loss ($L_{box}$): It is the loss associated with the bounding box prediction error. This is a regression task and, like YOLOv4, it uses the IoU loss (CIoU by default), which has been shown to perform better than MSE for this problem.
+
+These losses are computed for each prediction layer and then summed up. Each loss component is weighted to control its contribution (tunable hyperparameters). Additionally, the objectness loss has an extra weight that varies for each prediction layer to ensure predictions at different scales contribute appropriately to the total loss. 
+
+
+
+
 
 ## Training pipeline
 
@@ -170,7 +181,15 @@ Precision = True Positives / (True Positives + False Positives)
 Recall is a metric evaluating the ability of a machine learning model to correctly identify all of the actual positive instances within a data set. True positives are data points classified as positive by the model that are actually positive (correct), and false negatives are data points the model identifies as negative that are actually positive (incorrect).
 Recall = True Positives / (True Positives + False Negatives)
 
+## Non-Maximum Suppression (NMS)
 
+Filtering the overlapping bounding boxes for a single object. It relies heavily on two key metrics: the confidence score, which indicates how certain the model is that a box contains an object, and the Intersection over Union (IoU), which measures the spatial overlap between two boxes.
+
+- Thresholding: All candidate boxes with a confidence score below a specific threshold are immediately discarded to remove weak predictions.
+- Sorting: The remaining boxes are sorted in descending order based on their confidence scores.
+- Selection: The box with the highest score is selected as a valid detection.
+- Suppression: The algorithm compares the selected box with all other remaining boxes. If the IoU between the selected box and another box exceeds a defined limit (e.g., 0.5), the lower-score box is suppressed (deleted) because it is assumed to represent the same object.
+- Iteration: This process repeats for the next highest-scoring box until all candidates have been processed.
 
 ## Credits
 https://ultralytics.com/ <br/>

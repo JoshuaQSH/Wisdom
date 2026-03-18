@@ -7,12 +7,15 @@ from tqdm import tqdm
 import os, csv, tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Iterable
-import torch
-import torch.nn as nn
 import pandas as pd
 import yaml
 import numpy as np
 import matplotlib.pyplot as plt
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, Subset
+
 
 from captum.attr import (
     LayerConductance, LayerActivation, InternalInfluence, LayerGradientXActivation,
@@ -42,8 +45,6 @@ from utils.general import (
 )
 from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
 from utils.plots import output_to_target, plot_images, plot_val_study
-from utils.general import non_max_suppression
-
 
 data_yaml = "/scratch/staff/lrr550/Wisdom_dev_trans/Wisdom/standalone/data/coco128.yaml"
 weights_path = "./weights/yolov5s.pt"
@@ -54,8 +55,11 @@ device = "cuda:2" if torch.cuda.is_available() else "cpu"
 batch_size = 2
 iou = 0.65
 conf = 0.001
-prune_list = [100, 200, 300, 400, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000, 1200, 1500, 2000, 2500, 3000, 4000]
-results_csv = Path("./logs/prune_demo/neuron_prune_results_4.csv")
+prune_list = [100, 200, 300, 500]
+# prune_list = [20, 50, 100, 200, 300, 500, 800, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 3000]
+
+# results_csv = Path("./logs/prune_demo/neuron_prune_results_6.csv")
+results_csv = Path("neuron_prune_results.csv")
 device_ids = [0,1,2,3] 
 
 ATTRS = {
@@ -72,36 +76,69 @@ ATTRS = {
     "lrp": LayerLRP,
 }
 
-# attribution_name = "la"
-
-
 # ---------------------------------
 # Visualization of strategies
 # ---------------------------------
-def viz_strategy(k_values, strategies, results):        
+def viz_strategy_attr(k_values, strategies, baseline_value, random_values, attr, results, metric_name="mAP50"):        
     ks = sorted(k_values)
-    for strategy in strategies:
-        means50 = [results[(strategy,k)]["mean_map50"] for k in ks]
-        stds50  = [results[(strategy,k)]["std_map50"]  for k in ks]
-        plt.errorbar(ks, means50, yerr=stds50, label=f"{strategy} mAP50")
-    plt.xlabel("# pruned neurons")
-    plt.ylabel("mAP50")
+    plt.axhline(y=baseline_value, color='r', linestyle='-', label='Baseline')
+    random_value_list = [random_values[k][metric_name] for k in ks]
+    plt.plot(ks, random_value_list, label=f"Random")
+    for attr_ in attr:
+        map_result = [results[(strategies,k,attr_)][metric_name] for k in ks]
+        plt.plot(ks, map_result, label=f"{strategies}_{attr_}")
+    plt.xlabel("#Neurons")
+    plt.ylabel(metric_name)
     plt.legend()
-    plt.title("mAP50 vs pruned neurons")
-    plt.figure()
-    for strategy in strategies:
-        means95 = [results[(strategy,k)]["mean_map95"] for k in ks]
-        stds95  = [results[(strategy,k)]["std_map95"]  for k in ks]
-        plt.errorbar(ks, means95, yerr=stds95, label=f"{strategy} mAP95")
-    plt.xlabel("# pruned neurons")
-    plt.ylabel("mAP95")
-    plt.legend()
-    plt.title("mAP95 vs pruned neurons")
-    plt.savefig("neuron_prune_strategies.pdf", bbox_inches="tight", dpi=1200, format="pdf")
+    plt.title(f"{metric_name} vs pruned neurons")
+    plt.savefig(f"yolov5_prune_{metric_name}.pdf", bbox_inches="tight", dpi=1200, format="pdf")
+    plt.close()
 
 # ---------------------------------
 # Utility Functions
 # ---------------------------------
+
+# Calibration for YOLOv5 model wrapper
+def split_train_calibration_dataloader(
+    train_loader,
+    calib_fraction = 0.1,
+    seed = 42,
+):
+    dataset = train_loader.dataset
+    n = len(dataset)
+    assert 0.0 < calib_fraction < 1.0, "calib_fraction must be in (0,1)"
+    n_calib = max(1, int(round(n * calib_fraction)))
+
+    # Make a reproducible random split of indices
+    idx = np.arange(n)
+    rng = np.random.RandomState(seed)
+    rng.shuffle(idx)
+
+    calib_idx = idx[:n_calib]
+    train_idx = idx[n_calib:]
+
+    train_subset = Subset(dataset, train_idx)
+    calib_subset = Subset(dataset, calib_idx)
+
+    # Reuse original dataloader settings
+    kwargs = {
+        "batch_size": train_loader.batch_size,
+        "num_workers": train_loader.num_workers,
+        "pin_memory": train_loader.pin_memory,
+        "collate_fn": train_loader.collate_fn,
+        "drop_last": getattr(train_loader, "drop_last", False),
+    }
+
+    # New loaders
+    train_loader_new = DataLoader(train_subset, shuffle=True, **kwargs)
+    calib_loader_new = DataLoader(calib_subset, shuffle=True, **kwargs)
+
+    print(
+        f"[split_train_calibration_dataloader] total={n}, "
+        f"train={len(train_subset)}, calib={len(calib_subset)} "
+        f"({calib_fraction*100:.1f}% for calibration)"
+    )
+    return train_loader_new, calib_loader_new
 
 def unwrap_yolov5(m: nn.Module) -> nn.Module:
     base = getattr(m, "model", m)
@@ -130,6 +167,21 @@ def write_importance_csv(rows: List[Tuple[str, int, float]], out_csv: str):
         w.writerow(["LayerName", "NeuronIndex", "Score"])
         w.writerows(rows)
 
+def model_param_count_and_size_mb(model: nn.Module) -> Tuple[int, float]:
+    total_params = 0
+    total_bytes = 0
+    for p in model.parameters():
+        numel = p.numel()
+        total_params += numel
+        total_bytes += numel * p.element_size()
+    size_mb = total_bytes / (1024 ** 2)
+    return total_params, size_mb
+
+def report_model_memory(model: nn.Module, label: str = ""):
+    n_params, size_mb = model_param_count_and_size_mb(model)
+    prefix = f"[{label}] " if label else ""
+    print(f"{prefix}Params: {n_params/1e6:.2f}M | Param size: {size_mb:.2f} MB")
+
 # ---------------------------------
 # Standalone prune map generators
 # ---------------------------------
@@ -139,35 +191,117 @@ def load_scores(csv_path):
     df['NeuronIndex'] = df['NeuronIndex'].astype(int)
     return df
 
-def build_prune_map_random(df, k):
+def build_prune_map_random(df, k, filter_layers=None):
     sel = df.sample(n=k, replace=False)
     prune_map = {}
+    count = 0
     for _, row in sel.iterrows():
+        if count >= k:
+            break
+        if filter_layers and row['LayerName'] in filter_layers:
+            continue
         prune_map.setdefault(row['LayerName'], []).append(row['NeuronIndex'])
+        count += 1
     return prune_map
 
-def build_prune_map_prune_top_k(df, k):
+def build_prune_map_prune_top_k(df, k, filter_layers=None):
     sel = df.sort_values('Score', ascending=False).head(k)
     prune_map = {}
+    count = 0
     for _, row in sel.iterrows():
+        if count >= k:
+            break
+        if filter_layers and row['LayerName'] in filter_layers:
+            continue
         prune_map.setdefault(row['LayerName'], []).append(row['NeuronIndex'])
+        count += 1
     return prune_map
 
-def build_prune_map_prune_bottom_k(df, k):
-    sel = df.sort_values('Score', ascending=True).head(k)
+def build_prune_map_prune_bottom_k(df, k, filter_layers=None):
+    sel = df.sort_values('Score', ascending=True)
     prune_map = {}
+    count = 0
     for _, row in sel.iterrows():
+        if count >= k:
+            break
+        if filter_layers and row['LayerName'] in filter_layers:
+            continue
         prune_map.setdefault(row['LayerName'], []).append(row['NeuronIndex'])
+        count += 1
     return prune_map
 
-def build_prune_map_keep_top_k(df, k):
+def build_prune_map_keep_top_k(df, k, filter_layers=None):
     df_sorted = df.sort_values('Score', ascending=False)
     topk = set(zip(df_sorted.head(k)['LayerName'], df_sorted.head(k)['NeuronIndex']))
     prune_map = {}
+    count = 0
     for _, row in df_sorted.iterrows():
+        if count >= (len(df) - k):
+            break
+        if filter_layers and row['LayerName'] in filter_layers:
+            continue
         if (row['LayerName'], row['NeuronIndex']) not in topk:
             prune_map.setdefault(row['LayerName'], []).append(row['NeuronIndex'])
+            count += 1
     return prune_map
+
+# Prune and Quantization map builder
+def build_prune_and_quanti_maps(df, k_prune: int, p_quanti: int, filter_layers=None):
+    df_sorted = df.sort_values('Score', ascending=True)
+
+    prune_sel = df_sorted
+    quanti_sel = df_sorted.iloc[k_prune:k_prune + p_quanti]
+
+    prune_map = {}
+    quanti_map = {}
+    count = 0
+    for _, row in prune_sel.iterrows():
+        if count >= k_prune:
+            break
+        if filter_layers and row['LayerName'] in filter_layers:
+            continue
+        prune_map.setdefault(row['LayerName'], []).append(int(row['NeuronIndex']))
+        count += 1
+    count = 0
+    for _, row in quanti_sel.iterrows():
+        if count >= p_quanti:
+            break
+        if filter_layers and row['LayerName'] in filter_layers:
+            continue
+        quanti_map.setdefault(row['LayerName'], []).append(int(row['NeuronIndex']))
+        count += 1
+
+    return prune_map, quanti_map
+
+#  Random baseline
+def build_prune_and_quanti_maps_random(df, k_prune: int, p_quanti: int, filter_layers=None):
+    df_shuffled = df.sample(frac=1.0, replace=False, random_state=42).reset_index(drop=True)
+    prune_sel = df_shuffled
+    quanti_sel = df_shuffled
+
+    prune_map = {}
+    quanti_map = {}
+    count = 0
+
+    for _, row in prune_sel.iterrows():
+        if count >= k_prune:
+            break
+        if filter_layers and row['LayerName'] in filter_layers:
+            continue
+        prune_map.setdefault(row['LayerName'], []).append(int(row['NeuronIndex']))
+        count += 1
+
+    count = 0
+    for _, row in quanti_sel.iterrows():
+        if count >= p_quanti:
+            break
+        if filter_layers and row['LayerName'] in filter_layers:
+            continue
+        quanti_map.setdefault(row['LayerName'], []).append(int(row['NeuronIndex']))
+        count += 1
+
+    return prune_map, quanti_map
+
 
 # ---------------------------------
 # Simple evaluation function
@@ -312,6 +446,72 @@ def prune_model_by_neurons(model, prune_map):
                 print(f"Warning: layer {name} is {type(module)}, skip pruning by neurons for this type")
     return model
 
+# Quantization / Dtype casting function
+def fake_quantize_tensor(t: torch.Tensor, num_bits: int = 4):
+    """
+    Symmetric fake quantization to num_bits; keeps dtype (e.g., float32).
+    """
+    qmax = 2 ** (num_bits - 1) - 1  # e.g. 7 for 4 bits
+    s = t.abs().max()
+    if s == 0:
+        return t.clone()
+    scale = s / qmax
+    t_q = torch.round(t / scale).clamp(-qmax, qmax) * scale
+    return t_q
+
+def quanti_model(model: torch.nn.Module,
+                prune_map: dict,
+                target_dtype: torch.dtype = torch.bfloat16,
+                only_layers: bool = False, 
+                num_bits: int = 4) -> torch.nn.Module:
+    for name, module in model.named_modules():
+        if name in prune_map:
+            indices = prune_map[name]
+            if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear):
+                with torch.no_grad():
+                    w = module.weight.data
+                    if only_layers:
+                        # cast full weight tensor
+                        module.weight.data = w.to(dtype=target_dtype)
+                    else:
+                        # cast only selected output channels / neurons
+                        # For Conv2d: index refers to output channels dimension
+                        if isinstance(module, torch.nn.Conv2d):
+                            w_slice = w[indices, :, :, :]
+                            # w_slice = w_slice.to(dtype=target_dtype)
+                            w_slice = fake_quantize_tensor(w_slice, num_bits=num_bits)
+                            w[indices, :, :, :] = w_slice
+                        else:
+                            # Linear: output neurons
+                            w_slice = w[indices, :]
+                            # w_slice = w_slice.to(dtype=target_dtype)
+                            w_slice = fake_quantize_tensor(w_slice, num_bits=num_bits)
+                            w[indices, :] = w_slice
+                    # if bias exists, also cast
+                    if module.bias is not None:
+                        b = module.bias.data
+                        if only_layers:
+                            module.bias.data = b.to(dtype=target_dtype)
+                        else:
+                            # module.bias.data[indices] = module.bias.data[indices].to(dtype=target_dtype)
+                            module.bias.data[indices] = fake_quantize_tensor(module.bias.data[indices], num_bits=4)
+            else:
+                print(f"Warning: layer {name} is {type(module)}, skip dtype cast for this type")
+    return model
+
+def quanti_model_(model, prune_map, target_dtype=torch.bfloat16):
+    for name, module in model.named_modules():
+        if name in prune_map:
+            if isinstance(module, (nn.Conv2d, nn.Linear)):
+                with torch.no_grad():
+                    module.weight.data = module.weight.data.to(target_dtype)
+                    if module.bias is not None:
+                        module.bias.data = module.bias.data.to(target_dtype)
+                print(f"[quantise_layers_by_map] Quantised entire layer {name} to {target_dtype}.")
+            else:
+                print(f"[quantise_layers_by_map] Warning: layer {name} is {type(module)}, skipping.")
+    return model
+
 # ---------------------------------
 # Saving the model for evaluation
 # ---------------------------------   
@@ -403,7 +603,6 @@ def build_eval_weights_from_model(model: nn.Module, selection: dict | None, prun
             pass
         delattr(eval_model, "fuse")
 
-    # If you masked the live model, mirror it here with permanent zeroing
     if selection:
         if pruning_mode == "mask":
             from wisdom.pruning.weights_pruning import prune_model_neurons
@@ -425,14 +624,6 @@ def build_eval_weights_from_model(model: nn.Module, selection: dict | None, prun
 # ---------------------------------
 # Gradient-based scoring
 # ---------------------------------
-# @torch.no_grad()
-# def forward_scores(model: nn.Module, x: torch.Tensor, class_idx: int = 0) -> torch.Tensor:
-#     # A simple scalar objective that propagates through the full model.
-#     out = model(x)
-#     if isinstance(out, (list, tuple)):
-#         return sum(t.float().sum() for t in out if torch.is_tensor(t))
-#     return out.float().sum()
-
 @torch.enable_grad()
 def forward_scores(model: nn.Module, x: torch.Tensor, target_class: int | None) -> torch.Tensor:
     """
@@ -557,8 +748,6 @@ def save_tmp_weights_from_model(model: nn.Module) -> str:
 # Entry Point
 # ---------------------------------
 def run_neuron_importance_experiment(
-    *,
-    coco_data_yaml: str,              # points to train2017 and val2017 (e.g., coco128.yaml adjusted)
     weights_path: str,                # e.g., 'yolov5s.pt' (COCO-pretrained)
     device: str = "cuda:0",
     use_csv_importance: bool = True,
@@ -567,8 +756,6 @@ def run_neuron_importance_experiment(
     k_per_layer: int = 8,
     pruning_mode: str = "mask",       # 'mask' or 'permanent'
     out_dir: str = "neuron_eval_out",
-    val_imgsz: int = 640,
-    val_batch: int = 16,
 ) -> str:
     """
     Returns path to results CSV with columns:
@@ -671,32 +858,10 @@ def run_neuron_importance_experiment(
     return results_csv
 
 # ---------------------------------
-# Unit Test / Demo
-# ---------------------------------
-
-def simple_test():
-    results = yolo_val_run(
-        data="/scratch/staff/lrr550/Wisdom_dev_trans/Wisdom/standalone/data/coco128.yaml",
-        weights=["/scratch/staff/lrr550/Wisdom_dev_trans/Wisdom/standalone/ultralytics_yolov5/yolov5s.pt"],
-        imgsz=640,
-        batch_size=16,
-        device=0,
-        iou_thres=0.65,
-        conf_thres=0.001,
-        project="logs/val",
-        name="external_eval",
-        save_json=True,
-        plots=False,
-    )
-    # return results
-
-# ---------------------------------
 # Entry Point for pruning demo
 # ---------------------------------
 
 def prune_demo(data_yaml, csv_file: str, k_value: List[int] = [10, 20, 50], results_path=Path("prune_results.csv"), use_csv_importance=True, attribution_name='lgxa', total_runs: int = 5, epochs: int = 3, name: str = "fine_tune_demo", project: str = "./logs/prune_demo"):
-    
-    data = "/scratch/staff/lrr550/Wisdom_dev_trans/Wisdom/standalone/data/coco128.yaml"
     # model_orig = torch.hub.load('ultralytics/yolov5', 'custom', path=weights_path, autoshape=False, trust_repo=True)
     # model_orig = model_orig.to(device)
     data_dict = yaml.safe_load(open(check_yaml(data_yaml), "r"))
@@ -749,23 +914,24 @@ def prune_demo(data_yaml, csv_file: str, k_value: List[int] = [10, 20, 50], resu
 
         for k in k_value:
             for strategy_name, map_fn in [
-                    ('baseline', None),
+                    # ('baseline', None),
                     ('random', build_prune_map_random),
-                    ('prune_top_k', build_prune_map_prune_top_k),
+                    # ('prune_top_k', build_prune_map_prune_top_k),
                     ('prune_bottom_k', build_prune_map_prune_bottom_k),
-                    ('keep_top_k', build_prune_map_keep_top_k),
+                    # ('keep_top_k', build_prune_map_keep_top_k),
                 ]:
                 metrics_list = []
                 for i in range(total_runs):
                     print(f"=== Run {i+1}/{total_runs} ===")
-                    yolo_train_run(data=data, imgsz=640, weights=weights_path, epochs=epochs, name=name, project=project, batch_size=16, device=device)
-                    model_orig = torch.hub.load('ultralytics/yolov5', 'custom', path=project+name+".pt", autoshape=False, trust_repo=True)
+                    # yolo_train_run(data=data, imgsz=640, weights=weights_path, epochs=epochs, name=name, project=project, batch_size=16, device=device)
+                    # model_orig = torch.hub.load('ultralytics/yolov5', 'custom', path=project+name+".pt", autoshape=False, trust_repo=True)
+                    model_orig = torch.hub.load('ultralytics/yolov5', 'custom', path=weights_path, autoshape=False, trust_repo=True)
                     model_orig = model_orig.to(device)
                     
                     print(f"=== Running strategy {strategy_name} with k={k} ===")
                     
                     if strategy_name == 'baseline':
-                        metrics = evaluate_yolov5(model_orig, data, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
+                        metrics = evaluate_yolov5(model_orig, data_yaml, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
                         metrics_list.append(metrics)
                         continue
                     
@@ -773,7 +939,7 @@ def prune_demo(data_yaml, csv_file: str, k_value: List[int] = [10, 20, 50], resu
                     model = deepcopy(model_orig)
                     model = prune_model_by_neurons(model, prune_map)
                     # model, data, dataloader, device='cuda', conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=True
-                    metrics = evaluate_yolov5(model, data, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
+                    metrics = evaluate_yolov5(model, data_yaml, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
                     metrics_list.append(metrics)
                 
                 mean_precision = np.mean([m["Precision"] for m in metrics_list])
@@ -793,25 +959,375 @@ def prune_demo(data_yaml, csv_file: str, k_value: List[int] = [10, 20, 50], resu
                     "mean_map95": mean_map95, "std_map95": std_map95,
                     "mean_map50_95": mean_map50_95, "std_map50_95": std_map50_95
                 }
-                breakpoint()
-                writer.writerow([f"{strategy_name}_{k}", results["mean_precision"], results["std_precision"], results["mean_recall"], results["std_recall"], results["mean_map50"], results["std_map50"], results["mean_map95"], results["std_map95"], results["mean_map50_95"], results["std_map50_95"]])
+                writer.writerow([f"{strategy_name}_{k}", results[(strategy_name, k)]["mean_precision"], results[(strategy_name, k)]["std_precision"], 
+                                 results[(strategy_name, k)]["mean_recall"], results[(strategy_name, k)]["std_recall"], results[(strategy_name, k)]["mean_map50"], 
+                                 results[(strategy_name, k)]["std_map50"], results[(strategy_name, k)]["mean_map95"], results[(strategy_name, k)]["std_map95"], 
+                                 results[(strategy_name, k)]["mean_map50_95"], results[(strategy_name, k)]["std_map50_95"]])
                 f.flush()
 
-        viz_strategy(k_value, ['baseline', 'random', 'prune_top', 'prune_bottom', 'keep_top'], results)
+        # viz_strategy(k_value, ['baseline', 'random', 'prune_top', 'prune_bottom', 'keep_top'], results)
+
+def quanti_demo(data_yaml, csv_file: str, k_value: List[int] = [10, 20, 50], results_path=Path("quanti_results.csv")):
+    model_orig = torch.hub.load('ultralytics/yolov5', 'custom', path=weights_path, autoshape=False, trust_repo=True)
+    model_orig = model_orig.to(device)
+    data_dict = yaml.safe_load(open(check_yaml(data_yaml), "r"))
+    val_path = data_dict["val"]
+
+    # Basic setup
+    results = {}
+    metrics_list = []
+    val_loader = create_dataloader(
+                val_path,
+                imgsz,
+                batch_size,
+                stride=32,
+                single_cls=False,
+                hyp=None,
+                augment=False,
+                cache=False,
+                rect=False,
+                rank=-1)[0]
+    
+    # metrics = evaluate_yolov5(model_orig, data_yaml, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
+    # Write CSV header if not exists
+    write_header = not results_path.exists()
+    with open(results_path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["Type", "Precision", "Recall", "mAP50", "mAP95",  "mAP50-95"])
+        
+        # Baseline
+        # writer.writerow([f"baseline", metrics["Precision"], metrics["Recall"], metrics["mAP50"], metrics["mAP95"], metrics["mAP50-95"]])
+        # baseline_value = {
+        #     "Precision": metrics["Precision"], "Recall": metrics["Recall"],
+        #     "mAP50": metrics["mAP50"], "mAP95": metrics["mAP95"],
+        #     "mAP50-95": metrics["mAP50-95"] }
+        
+        
+        # Random
+        random_values = {}
+        random_df = load_scores(csv_file_list[0])
+        for k in k_value:
+            print(f"=== Running strategy random with k={k} ===")
+            prune_map = build_prune_map_random(random_df, k)
+            model = deepcopy(model_orig)
+            model = quanti_model(model, prune_map, target_dtype=torch.bfloat16, only_layers=False)
+            metrics = evaluate_yolov5(model, data_yaml, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
+            
+            random_values[k] = {
+                "Precision": metrics["Precision"], "Recall": metrics["Recall"],
+                "mAP50": metrics["mAP50"], "mAP95": metrics["mAP95"],
+                "mAP50-95": metrics["mAP50-95"] }
+            
+            writer.writerow([f"random_{k}", random_values[k]["Precision"], random_values[k]["Recall"],
+                             random_values[k]["mAP50"], random_values[k]["mAP95"], random_values[k]["mAP50-95"]])
+            f.flush()
+        
+        # Looping #neurons
+        df = load_scores(csv_file)
+        attr = csv_file.split("_")[-1].split(".")[0]
+        strategy_name = 'quanti_bottom'
+        for k in k_value:
+            print(f"=== Quantizing with bottom k={k}, attribution:{attr} ===")
+            prune_map = build_prune_map_prune_bottom_k(df, k)
+            model = deepcopy(model_orig)
+            model = prune_model_by_neurons(model, prune_map)
+            metrics = evaluate_yolov5(model, data_yaml, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
+                    
+            # metrics_list["Precision"], metrics_list["Recall"], metrics_list["mAP50"], metrics_list["mAP95"], metrics_list["mAP50-95"]
+                
+            results[(strategy_name, k, attr)] = {
+                    "Precision": metrics["Precision"], "Recall": metrics["Recall"],
+                    "mAP50": metrics["mAP50"], "mAP95": metrics["mAP95"],
+                    "mAP50-95": metrics["mAP50-95"] }
+
+            writer.writerow([f"{strategy_name}_{k}_{attr}", results[(strategy_name, k, attr)]["Precision"], results[(strategy_name, k, attr)]["Recall"],
+                                     results[(strategy_name, k, attr)]["mAP50"], results[(strategy_name, k, attr)]["mAP95"], results[(strategy_name, k, attr)]["mAP50-95"]])
+            f.flush()
+    
+def prune_demo_all_attr(data_yaml, csv_file_list: str, k_value: List[int] = [10, 20, 50], results_path=Path("prune_results.csv")):
+    
+    model_orig = torch.hub.load('ultralytics/yolov5', 'custom', path=weights_path, autoshape=False, trust_repo=True)
+    model_orig = model_orig.to(device)
+    data_dict = yaml.safe_load(open(check_yaml(data_yaml), "r"))
+    val_path = data_dict["val"]
+
+    # Basic setup
+    results = {}
+    metrics_list = []
+    val_loader = create_dataloader(
+                val_path,
+                imgsz,
+                batch_size,
+                stride=32,
+                single_cls=False,
+                hyp=None,
+                augment=False,
+                cache=False,
+                rect=False,
+                rank=-1)[0]
+    
+    metrics = evaluate_yolov5(model_orig, data_yaml, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
+            
+    # Write CSV header if not exists
+    write_header = not results_path.exists()
+    with open(results_path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["Type", "Precision", "Recall", "mAP50", "mAP95",  "mAP50-95"])
+        
+        # Baseline
+        writer.writerow([f"baseline", metrics["Precision"], metrics["Recall"], metrics["mAP50"], metrics["mAP95"], metrics["mAP50-95"]])
+        baseline_value = {
+            "Precision": metrics["Precision"], "Recall": metrics["Recall"],
+            "mAP50": metrics["mAP50"], "mAP95": metrics["mAP95"],
+            "mAP50-95": metrics["mAP50-95"] }
+        
+        
+        # Random
+        random_values = {}
+        random_df = load_scores(csv_file_list[0])
+        for k in k_value:
+            print(f"=== Running strategy random with k={k} ===")
+            prune_map = build_prune_map_random(random_df, k)
+            model = deepcopy(model_orig)
+            model = prune_model_by_neurons(model, prune_map)
+            metrics = evaluate_yolov5(model, data_yaml, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
+            
+            random_values[k] = {
+                "Precision": metrics["Precision"], "Recall": metrics["Recall"],
+                "mAP50": metrics["mAP50"], "mAP95": metrics["mAP95"],
+                "mAP50-95": metrics["mAP50-95"] }
+            
+            writer.writerow([f"random_{k}", random_values[k]["Precision"], random_values[k]["Recall"],
+                             random_values[k]["mAP50"], random_values[k]["mAP95"], random_values[k]["mAP50-95"]])
+            f.flush()
+        
+        # Load scores - in a loop
+        attr_list = []
+        for csv_file in csv_file_list:
+            df = load_scores(csv_file)
+            attr = csv_file.split("_")[-1].split(".")[0]
+            attr_list.append(attr)
+
+            # Looping #neurons
+            for k in k_value:
+                for strategy_name, map_fn in [
+                        # ('random', build_prune_map_random),
+                        # ('prune_top', build_prune_map_prune_top_k),
+                        ('prune_bottom', build_prune_map_prune_bottom_k),
+                        # ('keep_top', build_prune_map_keep_top_k),
+                    ]:
+                       
+                    print(f"=== Running strategy {strategy_name} with k={k}, attribution:{attr} ===")
+                        
+                    prune_map = map_fn(df, k)
+                    model = deepcopy(model_orig)
+                    model = prune_model_by_neurons(model, prune_map)
+                    metrics = evaluate_yolov5(model, data_yaml, val_loader, device=device, conf_thres=0.001, iou_thres=0.6, plots=False, single_cls=False, half=False, save_txt=False, save_dir=Path("./logs/prune_demo"))
+                    
+                    # metrics_list["Precision"], metrics_list["Recall"], metrics_list["mAP50"], metrics_list["mAP95"], metrics_list["mAP50-95"]
+                
+                    results[(strategy_name, k, attr)] = {
+                        "Precision": metrics["Precision"], "Recall": metrics["Recall"],
+                        "mAP50": metrics["mAP50"], "mAP95": metrics["mAP95"],
+                        "mAP50-95": metrics["mAP50-95"] }
+
+                    writer.writerow([f"{strategy_name}_{k}_{attr}", results[(strategy_name, k, attr)]["Precision"], results[(strategy_name, k, attr)]["Recall"],
+                                     results[(strategy_name, k, attr)]["mAP50"], results[(strategy_name, k, attr)]["mAP95"], results[(strategy_name, k, attr)]["mAP50-95"]])
+                    f.flush()
+
+       # viz_strategy_attr(k_value, ['random', 'prune_bottom'], attr_list, results)
+        viz_strategy_attr(k_value, 'prune_bottom', baseline_value["mAP50"], random_values, attr_list, results, metric_name="mAP50")
+        viz_strategy_attr(k_value, 'prune_bottom', baseline_value["Precision"], random_values, attr_list, results, metric_name="Precision")
+        viz_strategy_attr(k_value, 'prune_bottom', baseline_value["Recall"], random_values, attr_list, results, metric_name="Recall")
+        viz_strategy_attr(k_value, 'prune_bottom', baseline_value["mAP50-95"], random_values, attr_list, results, metric_name="mAP50-95")
+        viz_strategy_attr(k_value, 'prune_bottom', baseline_value["mAP95"], random_values, attr_list, results, metric_name="mAP95")
+
+def prune_quanti_combo_demo(
+    data_yaml,
+    csv_file_list: List[str],
+    k_prune_list: List[int] = [100, 200, 500],
+    p_quanti: int = 200,
+    results_path: Path = Path("combo_prune_quanti_results.csv"),
+    target_dtype: torch.dtype = torch.bfloat16,
+    num_bits: int = 4,
+):
+    # Load baseline model only once
+    model_orig = torch.hub.load('ultralytics/yolov5', 'custom',
+                                path=weights_path, autoshape=False, trust_repo=True)
+    model_orig = model_orig.to(device)
+    report_model_memory(model_orig, label="baseline")
+
+    data_dict = yaml.safe_load(open(check_yaml(data_yaml), "r"))
+    val_path = data_dict["val"]
+
+    val_loader = create_dataloader(
+        val_path,
+        imgsz,
+        batch_size,
+        stride=32,
+        single_cls=False,
+        hyp=None,
+        augment=False,
+        cache=False,
+        rect=False,
+        rank=-1,
+    )[0]
+
+    # Evaluate baseline
+    base_metrics = evaluate_yolov5(
+        model_orig,
+        data_yaml,
+        val_loader,
+        device=device,
+        conf_thres=0.001,
+        iou_thres=0.6,
+        plots=False,
+        single_cls=False,
+        half=False,
+        save_txt=False,
+        save_dir=Path("./logs/prune_demo"),
+    )
+
+    write_header = not results_path.exists()
+    with open(results_path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow([
+                "Attr",
+                "k_prune",
+                "p_quanti",
+                "Type",
+                "Precision",
+                "Recall",
+                "mAP50",
+                "mAP95",
+                "mAP50-95",
+                "Params_M",
+                "ParamSize_MB",
+                "SavedModelPath",
+            ])
+
+        # Log baseline (no pruning, no quantization)
+        base_params, base_size_mb = model_param_count_and_size_mb(model_orig)
+        writer.writerow([
+            "baseline",
+            0,
+            0,
+            "baseline",
+            base_metrics["Precision"],
+            base_metrics["Recall"],
+            base_metrics["mAP50"],
+            base_metrics["mAP95"],
+            base_metrics["mAP50-95"],
+            base_params / 1e6,
+            base_size_mb,
+            "",
+        ])
+        f.flush()
+
+        for csv_file in csv_file_list:
+            df = load_scores(csv_file)
+            attr = csv_file.split("_")[-1].split(".")[0]
+
+            for k_prune in k_prune_list:
+                print(f"=== Attr {attr}: prune {k_prune}, quantize {p_quanti} ===")
+
+                prune_map, quanti_map = build_prune_and_quanti_maps(
+                    df, k_prune=k_prune, p_quanti=p_quanti
+                )
+
+                model = deepcopy(model_orig)
+
+                # 1) prune
+                model = prune_model_by_neurons(model, prune_map)
+
+                # 2) quantize
+                model = quanti_model(
+                    model,
+                    quanti_map,
+                    target_dtype=target_dtype,
+                    only_layers=False,
+                    num_bits=num_bits,
+                )
+
+                # memory report
+                n_params, size_mb = model_param_count_and_size_mb(model)
+                report_model_memory(model, label=f"{attr}-prune{k_prune}-quanti{p_quanti}")
+
+                # 3) evaluate
+                metrics = evaluate_yolov5(
+                    model,
+                    data_yaml,
+                    val_loader,
+                    device=device,
+                    conf_thres=0.001,
+                    iou_thres=0.6,
+                    plots=False,
+                    single_cls=False,
+                    half=False,
+                    save_txt=False,
+                    save_dir=Path("./logs/prune_demo"),
+                )
+
+                # 4) save model for fine-tuning
+                out_dir = Path("./logs/prune_demo/models")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                out_path = out_dir / f"yolov5s_prune{k_prune}_quanti{p_quanti}_{attr}.pt"
+
+                # Make it look like a regular YOLOv5 checkpoint
+                normalize_yolo_attrs(model)
+                torch.save({"model": model}, out_path)
+
+                writer.writerow([
+                    attr,
+                    k_prune,
+                    p_quanti,
+                    "prune+quanti",
+                    metrics["Precision"],
+                    metrics["Recall"],
+                    metrics["mAP50"],
+                    metrics["mAP95"],
+                    metrics["mAP50-95"],
+                    n_params / 1e6,
+                    size_mb,
+                    str(out_path),
+                ])
+                f.flush()
 
 if __name__ == "__main__":
-    # simple_test()
-    # run_neuron_importance_experiment(
-    #     coco_data_yaml=data_yaml,
-    #     weights_path=weights_path,
-    #     device=device,
-    #     use_csv_importance=True,
-    #     importance_csv_in="yolov5_neuron_scores.csv",
-    #     k_per_layer=top_k_neurons,
-    #     pruning_mode="mask",  # or "permanent"
-    #     out_dir="neuron_eval_out"
-    # )
-    demo_csv = "./neuron_eval_out/yolov5_neuron_scores_ii.csv"
+    demo_csv = "./neuron_eval_out/yolov5_neuron_scores_lgxa.csv"
     demo_attr = ["lc", "la", "ii", "lgxa", "lgc", "ldl", "ldls", "lgs", "lig", "lfa", "lrp"]
-    # prune_demo(data_yaml, demo_csv, prune_list, results_path=results_csv, use_csv_importance=True, attribution_name=demo_attr[3])
-    prune_demo(data_yaml, demo_csv, prune_list, results_path=results_csv, use_csv_importance=True, attribution_name=demo_attr[3], total_runs=2, epochs=2, name="fine_tune_temp", project="./logs/prune_demo2")
+    csv_file_list = [f"./neuron_eval_out/yolov5_neuron_scores_{attr}.csv" for attr in demo_attr[:1]]
+    
+    data_dict = yaml.safe_load(open(check_yaml(data_yaml), "r"))
+    train_path, val_path = data_dict["train"], data_dict["val"]
+    train_loader, dataset = create_dataloader(
+        train_path,
+        imgsz,
+        batch_size,
+        stride=32, # 32 is the default stride for yolov5
+        single_cls=False,
+        hyp=None,
+        augment=False,
+        cache=False,
+        rect=False, # Use rectangular training. Defaults to False.
+        rank=-1,
+        image_weights=False, # Use weighted image selection for training. Defaults to False.
+        quad=False, # Use quadrilateral training. Defaults to False.
+        shuffle=True,
+        seed=42)
+    
+    train_loader, calib_loader = split_train_calibration_dataloader(train_loader, calib_fraction=0.1, seed=42)
+    
+    # prune_demo(data_yaml, demo_csv, prune_list, results_path=results_csv, use_csv_importance=True, attribution_name=demo_attr[3], total_runs=2, epochs=2, name="fine_tune_temp", project="./logs/prune_demo2")
+    # prune_demo_all_attr(data_yaml, csv_file_list, k_value=prune_list, results_path=results_csv)
+    # quanti_demo(data_yaml, demo_csv, k_value=prune_list, results_path=Path("quanti_results.csv"))
+    prune_quanti_combo_demo(
+        data_yaml,
+        csv_file_list,
+        k_prune_list=[100, 200, 300],
+        p_quanti=200,
+        results_path=Path("./logs/prune_demo/neuron_prune_quanti_results.csv"),
+    )

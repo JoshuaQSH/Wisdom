@@ -8,10 +8,13 @@
 
 
 # train and val datasets (image directory or *.txt file with image paths)
-train: /home/shenghao/torch-deepimportance/yolov5/data/coco128/train2017/
-val: /home/shenghao/torch-deepimportance/yolov5/data/coco128/val2017/
-# train: ../coco128/images/train2017/
-# val: ../coco128/images/train2017/
+# train: /home/shenghao/torch-deepimportance/yolov5/data/coco128/train2017/
+# val: /home/shenghao/torch-deepimportance/yolov5/data/coco128/val2017/
+# train: ../../data/coco/images/train2017/
+# val: ../../data/coco/images/val2017/
+
+train: /scratch/staff/lrr550/Wisdom_dev_trans/Wisdom/standalone/data/coco/images/train2017/
+val: /scratch/staff/lrr550/Wisdom_dev_trans/Wisdom/standalone/data/coco/images/val2017/
 
 # number of classes
 nc: 80

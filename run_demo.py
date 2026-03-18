@@ -17,7 +17,6 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
 from captum.attr import LayerLRP, LayerGradientXActivation, LayerActivation
-from captum.attr import visualization as viz
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
@@ -125,7 +124,7 @@ def load_yolov5(device: str):
     # raw nn.Module (no AutoShape), keeps grads & raw outputs
     # model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True, autoshape=False)
     # /scratch/staff/lrr550/yolo-dev/yolov5-eterry-detection/runs/train/exp/weights/best.pt
-    model = torch.hub.load('ultralytics/yolov5', 'custom', path=weights_path, trust_repo=True, force_reload=True, autoshape=False)
+    model = torch.hub.load('ultralytics/yolov5', 'custom', path=weights_path, trust_repo=True, force_reload=True)
     model.to(device).eval()
     return model
 
@@ -180,14 +179,13 @@ def lrp_scores_layer(
     """
     Aggregation = sum over batch (and spatial for conv) of |LRP|.
     """
-    grad_explainer = LayerGradientXActivation(lambda z: forward_scores(model, z, 0), layer)
+    grad_explainer = LayerActivation(lambda z: forward_scores(model, z, 0), layer)
 
     agg = None
     steps = 0
     for xb, yb in loader:
         xb = xb.to(device).requires_grad_(True)
         attr = grad_explainer.attribute(xb)  # shape: conv->[B,C,H,W], linear->[B, out]
-        breakpoint()
         if kind == 'conv':
             batch_scores = attr.abs().sum(dim=(0, 2, 3))  # [C]
         else:  # linear
@@ -311,16 +309,10 @@ def coverage_mc(
     return hit / len(sample)
 
 # ---------------------------
-# Pruning pipeline
+# Detection
 # ---------------------------
-def prune_model():
-    pass
 
-# ---------------------------
-# Visualization
-# ---------------------------
-def visualize_neuron_clusters():
-    pass
+
 
 # ---------------------------
 # Pipeline
@@ -354,14 +346,14 @@ def run_pipeline(
             "NeuronIndex": list(range(len(scores))),
             "Score": scores.tolist()
         })
-        # print(f"  -> layer {lname} | top scores: {np.sort(scores)[-5:]}")
+        csv_path = f"{lname.replace('.', '_')}_{kind}_scores.csv"
+        # df.to_csv(csv_path, index=False)
+        # print(f"  -> saved {csv_path}")
+        print(f"  -> layer {lname} | top scores: {np.sort(scores)[-5:]}")
         all_rows.append(df)
-    
-    big = pd.concat(all_rows, ignore_index=True)
-    big.to_csv("yolov5_neuron_scores.csv", index=False)
-    print(f"[Score] saved all neuron scores -> yolov5_neuron_kind_scores.csv")
+
     # 2) global Top-K selection (optionally cap per layer to avoid single layer dominating)
-    
+    big = pd.concat(all_rows, ignore_index=True)
     per_layer_cap = None  # e.g. 4
     if per_layer_cap is not None:
         big["abs_score"] = big["Score"].abs()
@@ -381,7 +373,7 @@ def run_pipeline(
         top_df = big.reindex(big["Score"].abs().sort_values(ascending=False).index).head(global_topk)
 
     top_df = top_df.reset_index(drop=True)
-    top_df_path = "global_topk_kind_neurons.csv"
+    top_df_path = "global_topk_neurons.csv"
     top_df.to_csv(top_df_path, index=False)
     print(f"[Select] saved global Top-K -> {top_df_path}")
 
