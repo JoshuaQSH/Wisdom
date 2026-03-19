@@ -254,6 +254,7 @@ def run_rq2_opt(
     pixel_frac=PIXEL_FRAC,
     noise_std=NOISE_STD,
     importance="wisdom",
+    n_clusters=3,
 ):
     from ultralytics import YOLO
 
@@ -276,13 +277,22 @@ def run_rq2_opt(
     cluster_comp = None
     thresholds = None
     if coverage_mode == "cluster":
+        # When user specifies n_clusters, disable silhouette auto-selection
+        # so every neuron gets exactly n_clusters clusters.
+        use_sil = (n_clusters is None)
+        nc = n_clusters or 3
         cluster_comp = ClusterCoverageComputer(
             model, top_neurons, device=device,
-            method="KMeans", use_silhouette=True, k_max=5,
+            method="KMeans", use_silhouette=use_sil,
+            k_max=max(nc + 2, 5), n_clusters=nc,
         )
-        print("Fitting clusters on calibration images...")
+        print(f"Fitting clusters (n_clusters={nc}, silhouette={'on' if use_sil else 'off'})...")
         cluster_comp.fit(calib_imgs, batch_size=batch_size)
-        print("Clusters fitted.")
+        # Report actual cluster sizes
+        sizes = list(cluster_comp.cluster_sizes.values())
+        print(f"Clusters fitted: {len(sizes)} neurons, "
+              f"k range [{min(sizes)}-{max(sizes)}], "
+              f"mean k={np.mean(sizes):.1f}")
     else:
         # p90 threshold: ~10% neurons active per image → 90% headroom
         # High threshold ensures only strong perturbations cross →
@@ -552,5 +562,9 @@ if __name__ == "__main__":
                    help="Pixel importance method: 'wisdom' (gradient of "
                         "WISDOM neuron activations) or 'output' (gradient of "
                         "model detection output)")
+    p.add_argument("--n-clusters", type=int, default=3,
+                   help="Number of KMeans clusters per neuron (default: 3). "
+                        "Controls the combinatorial space: with k neurons per "
+                        "layer, total combinations = n_clusters^k.")
     a = p.parse_args()
     run_rq2_opt(**vars(a))
