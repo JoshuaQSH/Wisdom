@@ -30,6 +30,7 @@ from optimize.coverage_utils import (
     load_layerwise_top_neurons,
     ActivationCollector, calibrate_thresholds,
     compute_stratified_coverage,
+    ClusterCoverageComputer,
 )
 from torch.utils.data import DataLoader
 
@@ -180,6 +181,7 @@ def run_rq4_opt(
     weights, img_dir, csv_file, num_images=200,
     imgsz=320, device="cuda:0",
     out_prefix="results/rq4_opt", per_layer_k=5,
+    coverage_mode="plain",
 ):
     from ultralytics import YOLO
     yolo = YOLO(weights)
@@ -188,12 +190,33 @@ def run_rq4_opt(
     top_neurons = load_layerwise_top_neurons(csv_file, per_layer_k=per_layer_k)
     total_n = sum(len(v) for v in top_neurons.values())
     print(f"Monitoring {total_n} neurons across {len(top_neurons)} layers")
+    print(f"Coverage mode: {coverage_mode}")
 
     ds = COCOImageDataset(img_dir, max_images=num_images, imgsz=imgsz)
     all_images = torch.stack([ds[i][0] for i in range(len(ds))])
 
     calib_imgs = all_images[:min(50, len(all_images))]
-    thresholds = calibrate_thresholds(model, top_neurons, calib_imgs, device, percentile=75.0)
+
+    # Setup coverage based on mode
+    cluster_comp = None
+    thresholds = None
+    if coverage_mode == "cluster":
+        cluster_comp = ClusterCoverageComputer(
+            model, top_neurons, device=device,
+            method="KMeans", use_silhouette=True, k_max=5,
+        )
+        print("Fitting clusters on calibration images...")
+        cluster_comp.fit(calib_imgs, batch_size=4)
+        print(f"Clusters fitted: {len(cluster_comp.cluster_sizes)} neurons")
+    else:
+        thresholds = calibrate_thresholds(model, top_neurons, calib_imgs, device, percentile=75.0)
+
+    def _compute_suite_coverage(suite):
+        """Compute coverage for a suite of images using chosen mode."""
+        if coverage_mode == "cluster":
+            return cluster_comp.coverage(suite, batch_size=4)
+        else:
+            return wisdom_coverage_stratified(model, suite, top_neurons, thresholds, device)
 
     SUITE_SIZES = [5, 10, 20, 50]
     if num_images >= 200:
@@ -205,27 +228,28 @@ def run_rq4_opt(
             indices = random.sample(range(len(all_images)), n)
             suite = all_images[indices]
 
-            # Class diversity (Pielou's evenness) – reuse existing
+            # Class diversity (Pielou's evenness)
             preds = get_yolo_predictions(model, suite, device)
             J_class = pielou_evenness(preds)
 
-            # Spatial diversity (new)
+            # Spatial diversity
             J_spatial = spatial_diversity(model, suite, device, imgsz=imgsz)
 
-            # WISDOM coverage (stratified)
-            w_cov = wisdom_coverage_stratified(model, suite, top_neurons, thresholds, device)
+            # WISDOM coverage (stratified or cluster)
+            w_cov = _compute_suite_coverage(suite)
 
-            # Baseline neuron coverage – reuse existing
+            # Baseline neuron coverage
             nc = neuron_coverage(model, suite, device)
 
-            # Coverage variability
-            cov_var = coverage_variability_metric(model, suite, top_neurons, thresholds, device)
+            # Coverage variability (plain mode: explicit computation; cluster mode: from coverage dict)
+            cov_var = coverage_variability_metric(model, suite, top_neurons, thresholds, device) if coverage_mode == "plain" else w_cov.get("variability", 0.0)
 
-            # Activation profile diversity (new)
-            apd = activation_profile_diversity(model, suite, top_neurons, thresholds, device)
+            # Activation profile diversity (only meaningful in plain mode)
+            apd = activation_profile_diversity(model, suite, top_neurons, thresholds, device) if coverage_mode == "plain" else {"overall": 0.0, "late": 0.0}
 
             row = {
                 "suite_size": n, "trial": trial,
+                "coverage_mode": coverage_mode,
                 "pielou_class": J_class,
                 "spatial_diversity": J_spatial,
                 "wisdom_overall": w_cov["overall"],
@@ -240,8 +264,8 @@ def run_rq4_opt(
             }
             records.append(row)
             print(f"  N={n} trial={trial}: J_cls={J_class:.3f} J_spat={J_spatial:.3f} "
-                  f"W_all={w_cov['overall']:.3f} APD={apd['overall']:.3f} "
-                  f"APD_late={apd['late']:.3f} cv={cov_var:.4f}")
+                  f"W_all={w_cov['overall']:.6f} W_late={w_cov['late']:.6f} "
+                  f"W_var={w_cov['variability']:.6f} nc={nc:.4f}")
 
     df = pd.DataFrame(records)
     csv_out = f"{out_prefix}_correlation.csv"
@@ -299,5 +323,6 @@ if __name__ == "__main__":
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--out-prefix", default="results/rq4_opt")
     p.add_argument("--per-layer-k", type=int, default=5)
+    p.add_argument("--coverage-mode", choices=["plain", "cluster"], default="plain")
     a = p.parse_args()
     run_rq4_opt(**vars(a))

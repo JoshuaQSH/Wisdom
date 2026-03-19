@@ -21,6 +21,7 @@ class WisdomTrainConfig:
     device: str = "cuda:0"
     voting_weights: Optional[List[float]] = None
     voting_mode: str = "fine-grained"  # "fine-grained" | "coarse"
+    selection_mode: str = "global"  # "global" | "per-group"
     pruning_augmentations: Optional[List[Dict]] = None
     out_csv: Optional[str] = None
     # YOLO-specific: when True, use detection surrogate loss instead of CE
@@ -221,6 +222,80 @@ def _select_top_neurons_all(
 
     indices_by_layer = {
         layer: torch.tensor(sorted(idxs), dtype=torch.long) for layer, idxs in by_layer.items()
+    }
+    return indices_by_layer, selected
+
+
+# Layer-group boundaries for per-group selection (YOLOv11 architecture)
+_GROUP_BOUNDS = {
+    "early": (0, 5),
+    "middle": (6, 12),
+    "late": (13, 22),
+}
+
+def _layer_group_from_name(layer_name: str) -> str:
+    """Determine early/middle/late group from layer name like 'yolo_model.model.7.cv1.conv'."""
+    import re
+    m = re.search(r"model\.(\d+)", layer_name)
+    if m is None:
+        return "late"
+    idx = int(m.group(1))
+    if idx <= 5:
+        return "early"
+    elif idx <= 12:
+        return "middle"
+    else:
+        return "late"
+
+
+def _select_top_neurons_per_group(
+    importance_scores_dict: Dict[str, torch.Tensor],
+    top_m_per_group: int,
+    filter_layer: Optional[str] = None,
+    filter_prefixes: Optional[List[str]] = None,
+) -> Tuple[Dict[str, torch.Tensor], List[Tuple[str, float, int]]]:
+    """
+    Select top-M neurons **per layer group** (early/middle/late).
+
+    This ensures balanced representation across network depth, avoiding
+    the early-layer dominance that occurs with global top-M selection.
+
+    Returns same format as ``_select_top_neurons_all``.
+    """
+    # Flatten all neurons with their group tags
+    grouped: Dict[str, List[Tuple[str, float, int]]] = {
+        "early": [], "middle": [], "late": [],
+    }
+    for layer_name, scores in importance_scores_dict.items():
+        if filter_layer and layer_name == filter_layer:
+            continue
+        if filter_prefixes and any(layer_name.startswith(p) for p in filter_prefixes):
+            continue
+        grp = _layer_group_from_name(layer_name)
+        if scores.dim() == 1:
+            for idx, s in enumerate(scores):
+                grouped[grp].append((layer_name, float(s.item()), int(idx)))
+        else:
+            mean_attr = scores.mean(dim=tuple(range(1, scores.dim())))
+            for idx, s in enumerate(mean_attr):
+                grouped[grp].append((layer_name, float(s.item()), int(idx)))
+
+    # Select top-M per group, combine
+    selected: List[Tuple[str, float, int]] = []
+    for grp in ("early", "middle", "late"):
+        grp_sorted = sorted(grouped[grp], key=lambda x: x[1], reverse=True)
+        selected.extend(grp_sorted[:top_m_per_group])
+
+    # Re-sort combined result DESC by score (for voting)
+    selected.sort(key=lambda x: x[1], reverse=True)
+
+    by_layer: Dict[str, List[int]] = {}
+    for layer_name, _, idx in selected:
+        by_layer.setdefault(layer_name, []).append(idx)
+
+    indices_by_layer = {
+        layer: torch.tensor(sorted(idxs), dtype=torch.long)
+        for layer, idxs in by_layer.items()
     }
     return indices_by_layer, selected
 
@@ -505,11 +580,19 @@ class ConsensusWisdom:
                         method=method,
                         target_layers=None,
                     )
-                _, selected_triplets = _select_top_neurons_all(
-                    imp, top_m_neurons=top_m_neurons,
-                    filter_layer=final_layer,
-                    filter_prefixes=detect_head_prefixes,
-                )
+                # Select top neurons: global or per-group
+                if cfg.selection_mode == "per-group" and cfg.is_yolo:
+                    _, selected_triplets = _select_top_neurons_per_group(
+                        imp, top_m_per_group=max(1, top_m_neurons // 3),
+                        filter_layer=final_layer,
+                        filter_prefixes=detect_head_prefixes,
+                    )
+                else:
+                    _, selected_triplets = _select_top_neurons_all(
+                        imp, top_m_neurons=top_m_neurons,
+                        filter_layer=final_layer,
+                        filter_prefixes=detect_head_prefixes,
+                    )
                 important_neurons_dict[method] = selected_triplets
 
             # 2) Identify optimal method by loss gain after pruning
@@ -566,7 +649,13 @@ class ConsensusWisdom:
                 layer_index_pairs = [(layer, idx) for (layer, _score, idx) in opt_triplets]
                 _voting_neurons(layer_index_pairs, layer_scores)
             else:
-                top_across = _weighted_top_neurons(important_neurons_dict, loss_gains, top_k=top_m_neurons)
+                effective_top_k = top_m_neurons
+                if cfg.selection_mode == "per-group" and cfg.is_yolo:
+                    # Each group contributes top_m//3 → total ≈ top_m
+                    effective_top_k = max(1, top_m_neurons // 3) * 3
+                top_across = _weighted_top_neurons(
+                    important_neurons_dict, loss_gains, top_k=effective_top_k
+                )
                 layer_index_pairs = [pair for (pair, _wscore) in top_across]
                 _voting_neurons(layer_index_pairs, layer_scores)
 

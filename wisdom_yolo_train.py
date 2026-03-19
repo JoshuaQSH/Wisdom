@@ -81,6 +81,7 @@ def train_wisdom_yolo(
     top_m: int = 20,
     methods: list[str] | None = None,
     voting_mode: str = "fine-grained",
+    selection_mode: str = "global",
     device: str = "cuda:0",
     imgsz: int = 640,
     checkpoint_path: str | None = None,
@@ -91,6 +92,10 @@ def train_wisdom_yolo(
 
     Parameters
     ----------
+    selection_mode : str
+        ``"global"`` — select top-M neurons across all layers (original).
+        ``"per-group"`` — select top-M/3 neurons per layer group
+        (early/middle/late) for balanced depth representation.
     checkpoint_path : str, optional
         Path to a ``.pt`` checkpoint file.  If the file already exists
         the run resumes from the last saved batch.
@@ -118,6 +123,7 @@ def train_wisdom_yolo(
         methods=methods,
         device=device,
         voting_mode=voting_mode,
+        selection_mode=selection_mode,
         out_csv=out_csv,
         is_yolo=True,
         num_classes=80,
@@ -152,6 +158,8 @@ def parse_args():
     p.add_argument("--top-m", type=int, default=20, help="Top-M neurons per method")
     p.add_argument("--methods", nargs="+", default=["lgxa", "lig", "lgs"])
     p.add_argument("--voting-mode", default="fine-grained", choices=["fine-grained", "coarse"])
+    p.add_argument("--selection-mode", default="global", choices=["global", "per-group"],
+                   help="global: top-M across all layers; per-group: top-M/3 per early/middle/late")
     p.add_argument("--out-csv", default="neuron_eval_out/wisdom_yolo_scores.csv")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--imgsz", type=int, default=640)
@@ -185,6 +193,7 @@ if __name__ == "__main__":
         top_m=args.top_m,
         methods=args.methods,
         voting_mode=args.voting_mode,
+        selection_mode=args.selection_mode,
         device=args.device,
         imgsz=args.imgsz,
         checkpoint_path=args.checkpoint,

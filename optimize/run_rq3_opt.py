@@ -28,6 +28,7 @@ from optimize.coverage_utils import (
     load_layerwise_top_neurons,
     ActivationCollector, calibrate_thresholds,
     compute_stratified_coverage,
+    ClusterCoverageComputer,
 )
 
 
@@ -146,6 +147,7 @@ def run_rq3_opt(
     weights, img_dir, csv_file, num_images=200,
     batch_size=4, imgsz=320, device="cuda:0",
     out_prefix="results/rq3_opt", per_layer_k=5,
+    coverage_mode="plain",
 ):
     from ultralytics import YOLO
     yolo = YOLO(weights)
@@ -155,15 +157,40 @@ def run_rq3_opt(
     top_neurons = load_layerwise_top_neurons(csv_file, per_layer_k=per_layer_k)
     total_n = sum(len(v) for v in top_neurons.values())
     print(f"Monitoring {total_n} neurons across {len(top_neurons)} layers")
+    print(f"Coverage mode: {coverage_mode}")
 
     ds = COCOImageDataset(img_dir, max_images=num_images, imgsz=imgsz)
     all_images = torch.stack([ds[i][0] for i in range(len(ds))])
 
     calib_imgs = all_images[:min(50, len(all_images))]
-    thresholds = calibrate_thresholds(model, top_neurons, calib_imgs, device, percentile=50.0)
+
+    # Setup coverage based on mode
+    cluster_comp = None
+    thresholds = None
+    if coverage_mode == "cluster":
+        cluster_comp = ClusterCoverageComputer(
+            model, top_neurons, device=device,
+            method="KMeans", use_silhouette=True, k_max=5,
+        )
+        print("Fitting clusters on calibration images...")
+        cluster_comp.fit(calib_imgs, batch_size=batch_size)
+        print(f"Clusters fitted: {len(cluster_comp.cluster_sizes)} neurons")
+    else:
+        thresholds = calibrate_thresholds(model, top_neurons, calib_imgs, device, percentile=50.0)
 
     collector = ActivationCollector(model, top_neurons, device)
     collector.attach()
+
+    def _compute_coverage_for_images(imgs):
+        """Helper: compute coverage for a set of images using the chosen mode."""
+        if coverage_mode == "cluster":
+            return cluster_comp.coverage(imgs, batch_size=batch_size)
+        else:
+            covs = []
+            for i in range(0, len(imgs), batch_size):
+                acts = collector.collect(imgs[i:i+batch_size])
+                covs.append(compute_stratified_coverage(acts, thresholds, top_neurons))
+            return {k: np.mean([c[k] for c in covs]) for k in covs[0]}
 
     ATTACKS = {
         "FGSM_0.1": lambda imgs: fgsm_strong(wrapper, imgs, device, eps=0.1, batch_size=batch_size),
@@ -183,12 +210,7 @@ def run_rq3_opt(
             sample = all_images[:n]
             adv_sample = adv_all[:n]
 
-            # Clean coverage (batched)
-            clean_covs = []
-            for i in range(0, n, batch_size):
-                acts = collector.collect(sample[i:i+batch_size])
-                clean_covs.append(compute_stratified_coverage(acts, thresholds, top_neurons))
-            clean_cov = {k: np.mean([c[k] for c in clean_covs]) for k in clean_covs[0]}
+            clean_cov = _compute_coverage_for_images(sample)
 
             for er in ERROR_RATES:
                 n_adv = max(1, int(n * er))
@@ -197,13 +219,10 @@ def run_rq3_opt(
                 for j in range(n_adv):
                     mixed[perm[j]] = adv_sample[perm[j]]
 
-                mixed_covs = []
-                for i in range(0, n, batch_size):
-                    acts = collector.collect(mixed[i:i+batch_size])
-                    mixed_covs.append(compute_stratified_coverage(acts, thresholds, top_neurons))
-                mixed_cov = {k: np.mean([c[k] for c in mixed_covs]) for k in mixed_covs[0]}
+                mixed_cov = _compute_coverage_for_images(mixed)
 
-                row = {"attack": attack_name, "sample_size": n, "error_rate": er}
+                row = {"attack": attack_name, "sample_size": n, "error_rate": er,
+                       "coverage_mode": coverage_mode}
                 for k in ("early", "middle", "late", "overall", "variability"):
                     row[f"clean_{k}"] = clean_cov[k]
                     row[f"mixed_{k}"] = mixed_cov[k]
@@ -269,5 +288,6 @@ if __name__ == "__main__":
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--out-prefix", default="results/rq3_opt")
     p.add_argument("--per-layer-k", type=int, default=5)
+    p.add_argument("--coverage-mode", choices=["plain", "cluster"], default="plain")
     a = p.parse_args()
     run_rq3_opt(**vars(a))

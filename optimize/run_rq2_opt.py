@@ -32,6 +32,7 @@ from optimize.coverage_utils import (
     load_layerwise_top_neurons,
     ActivationCollector, calibrate_thresholds,
     compute_stratified_coverage, compute_magnitude_change,
+    ClusterCoverageComputer,
 )
 from torch.utils.data import DataLoader
 
@@ -82,7 +83,7 @@ def run_rq2_opt(
     weights, img_dir, csv_file, num_images=200,
     batch_size=2, imgsz=320, device="cuda:0",
     out_prefix="results/rq2_opt", per_layer_k=5,
-    num_iters=3,
+    num_iters=3, coverage_mode="plain",
 ):
     from ultralytics import YOLO
     yolo = YOLO(weights)
@@ -91,13 +92,28 @@ def run_rq2_opt(
     top_neurons = load_layerwise_top_neurons(csv_file, per_layer_k=per_layer_k)
     total_n = sum(len(v) for v in top_neurons.values())
     print(f"Monitoring {total_n} neurons across {len(top_neurons)} layers")
+    print(f"Coverage mode: {coverage_mode}")
 
     ds = COCOImageDataset(img_dir, max_images=num_images, imgsz=imgsz)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=_collate)
 
     calib_imgs = torch.stack([ds[i][0] for i in range(min(50, len(ds)))])
-    thresholds = calibrate_thresholds(model, top_neurons, calib_imgs, device, percentile=50.0)
-    print("Thresholds calibrated (p50)")
+
+    # Setup coverage computer based on mode
+    cluster_comp = None
+    thresholds = None
+    if coverage_mode == "cluster":
+        cluster_comp = ClusterCoverageComputer(
+            model, top_neurons, device=device,
+            method="KMeans", use_silhouette=True, k_max=5,
+        )
+        print("Fitting clusters on calibration images...")
+        cluster_comp.fit(calib_imgs, batch_size=batch_size)
+        print(f"Clusters fitted: {len(cluster_comp.cluster_sizes)} neurons, "
+              f"total combos = {np.prod(list(cluster_comp.cluster_sizes.values())):.2e}")
+    else:
+        thresholds = calibrate_thresholds(model, top_neurons, calib_imgs, device, percentile=50.0)
+        print("Thresholds calibrated (p50)")
 
     collector = ActivationCollector(model, top_neurons, device)
     collector.attach()
@@ -114,37 +130,54 @@ def run_rq2_opt(
             obj_mask = get_object_mask(model, images, device, imgsz=imgsz)
             bg_mask = 1.0 - obj_mask
 
-            # Fraction of image covered by objects
             frac = obj_mask.mean(dim=[1, 2, 3]).cpu().numpy()
             obj_fracs.extend(frac.tolist())
 
-            # Clean baseline
-            acts_clean = collector.collect(images)
-            cov_clean = compute_stratified_coverage(acts_clean, thresholds, top_neurons)
             conf_clean = detection_confidence(model, images, device)
 
-            # Object-region perturbation
-            u_obj = perturb_region(images, obj_mask, NOISE_STD)
-            acts_obj = collector.collect(u_obj)
-            cov_obj = compute_stratified_coverage(acts_obj, thresholds, top_neurons)
-            mag_obj = compute_magnitude_change(acts_clean, acts_obj, top_neurons)
+            if coverage_mode == "cluster":
+                # Cluster-based combinatorial coverage
+                u_obj = perturb_region(images, obj_mask, NOISE_STD)
+                u_bg = perturb_region(images, bg_mask, NOISE_STD)
+
+                delta_obj = cluster_comp.coverage_delta(images, u_obj, batch_size=batch_size)
+                delta_bg = cluster_comp.coverage_delta(images, u_bg, batch_size=batch_size)
+
+                all_obj_cov.append({k: delta_obj[f"delta_{k}"] for k in ("early", "middle", "late", "overall", "variability")})
+                all_bg_cov.append({k: delta_bg[f"delta_{k}"] for k in ("early", "middle", "late", "overall", "variability")})
+
+                # Also collect magnitude change
+                acts_clean = collector.collect(images)
+                acts_obj = collector.collect(u_obj)
+                acts_bg = collector.collect(u_bg)
+                all_obj_mag.append(compute_magnitude_change(acts_clean, acts_obj, top_neurons))
+                all_bg_mag.append(compute_magnitude_change(acts_clean, acts_bg, top_neurons))
+            else:
+                # Plain threshold-based coverage
+                acts_clean = collector.collect(images)
+                cov_clean = compute_stratified_coverage(acts_clean, thresholds, top_neurons)
+
+                u_obj = perturb_region(images, obj_mask, NOISE_STD)
+                acts_obj = collector.collect(u_obj)
+                cov_obj = compute_stratified_coverage(acts_obj, thresholds, top_neurons)
+                mag_obj = compute_magnitude_change(acts_clean, acts_obj, top_neurons)
+
+                u_bg = perturb_region(images, bg_mask, NOISE_STD)
+                acts_bg = collector.collect(u_bg)
+                cov_bg = compute_stratified_coverage(acts_bg, thresholds, top_neurons)
+                mag_bg = compute_magnitude_change(acts_clean, acts_bg, top_neurons)
+
+                all_obj_cov.append({k: abs(cov_obj[k] - cov_clean[k]) for k in cov_clean})
+                all_bg_cov.append({k: abs(cov_bg[k] - cov_clean[k]) for k in cov_clean})
+                all_obj_mag.append(mag_obj)
+                all_bg_mag.append(mag_bg)
+
             conf_obj = detection_confidence(model, u_obj, device)
-
-            # Background-region perturbation
-            u_bg = perturb_region(images, bg_mask, NOISE_STD)
-            acts_bg = collector.collect(u_bg)
-            cov_bg = compute_stratified_coverage(acts_bg, thresholds, top_neurons)
-            mag_bg = compute_magnitude_change(acts_clean, acts_bg, top_neurons)
             conf_bg = detection_confidence(model, u_bg, device)
-
-            all_obj_cov.append({k: abs(cov_obj[k] - cov_clean[k]) for k in cov_clean})
-            all_bg_cov.append({k: abs(cov_bg[k] - cov_clean[k]) for k in cov_clean})
-            all_obj_mag.append(mag_obj)
-            all_bg_mag.append(mag_bg)
             conf_drops_obj.extend((conf_clean - conf_obj).tolist())
             conf_drops_bg.extend((conf_clean - conf_bg).tolist())
 
-        row = {"iteration": it}
+        row = {"iteration": it, "coverage_mode": coverage_mode}
         for k in ("early", "middle", "late", "overall", "variability"):
             row[f"obj_cov_{k}"] = float(np.mean([d[k] for d in all_obj_cov]))
             row[f"bg_cov_{k}"] = float(np.mean([d[k] for d in all_bg_cov]))
@@ -155,14 +188,14 @@ def run_rq2_opt(
         row["mean_obj_frac"] = float(np.mean(obj_fracs))
         records.append(row)
 
-        # Per-pixel normalised ratio: magnitude per perturbed pixel
         of = max(row["mean_obj_frac"], 1e-3)
         bf = max(1.0 - of, 1e-3)
         norm_obj = row["obj_mag_overall"] / of
         norm_bg = row["bg_mag_overall"] / bf
         r_norm = norm_obj / max(norm_bg, 1e-8)
-        print(f"  Iter {it}: ObjMag={row['obj_mag_overall']:.4f} BgMag={row['bg_mag_overall']:.4f} "
-              f"ObjFrac={of:.2f} NormRatio={r_norm:.3f} "
+        print(f"  Iter {it}: ObjCov={row['obj_cov_overall']:.4f} BgCov={row['bg_cov_overall']:.4f} "
+              f"CovRatio={row['obj_cov_overall']/max(row['bg_cov_overall'],1e-8):.3f} "
+              f"MagRatio={r_norm:.3f} "
               f"ConfDrop: obj={row['conf_drop_obj']:.4f} bg={row['conf_drop_bg']:.4f}")
 
     collector.detach()
@@ -242,5 +275,6 @@ if __name__ == "__main__":
     p.add_argument("--out-prefix", default="results/rq2_opt")
     p.add_argument("--per-layer-k", type=int, default=5)
     p.add_argument("--num-iters", type=int, default=3)
+    p.add_argument("--coverage-mode", choices=["plain", "cluster"], default="plain")
     a = p.parse_args()
     run_rq2_opt(**vars(a))
