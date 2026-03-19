@@ -47,6 +47,7 @@ sys.path.insert(0, str(ROOT))
 from wisdom_yolo_train import COCOImageDataset, _collate
 from optimize.coverage_utils import (
     load_layerwise_top_neurons,
+    load_groupwise_top_neurons,
     ActivationCollector,
     calibrate_thresholds,
     compute_magnitude_change,
@@ -255,15 +256,20 @@ def run_rq2_opt(
     noise_std=NOISE_STD,
     importance="wisdom",
     n_clusters=3,
+    neuron_select="per-layer",
 ):
     from ultralytics import YOLO
 
     yolo = YOLO(weights)
     model = yolo.model.eval().to(device)
 
-    top_neurons = load_layerwise_top_neurons(csv_file, per_layer_k=per_layer_k)
+    if neuron_select == "per-group":
+        top_neurons = load_groupwise_top_neurons(csv_file, per_group_k=per_layer_k)
+    else:
+        top_neurons = load_layerwise_top_neurons(csv_file, per_layer_k=per_layer_k)
     total_n = sum(len(v) for v in top_neurons.values())
     print(f"Monitoring {total_n} neurons across {len(top_neurons)} layers")
+    print(f"Neuron selection: {neuron_select}")
     print(f"Coverage mode: {coverage_mode}")
     print(f"Perturbation: {pixel_frac*100:.1f}% pixels, noise std={noise_std}")
     print(f"Importance mode: {importance}")
@@ -285,6 +291,7 @@ def run_rq2_opt(
             model, top_neurons, device=device,
             method="KMeans", use_silhouette=use_sil,
             k_max=max(nc + 2, 5), n_clusters=nc,
+            combo_mode=neuron_select,
         )
         print(f"Fitting clusters (n_clusters={nc}, silhouette={'on' if use_sil else 'off'})...")
         cluster_comp.fit(calib_imgs, batch_size=batch_size)
@@ -566,5 +573,12 @@ if __name__ == "__main__":
                    help="Number of KMeans clusters per neuron (default: 3). "
                         "Controls the combinatorial space: with k neurons per "
                         "layer, total combinations = n_clusters^k.")
+    p.add_argument("--neuron-select", choices=["per-layer", "per-group"],
+                   default="per-layer",
+                   help="Neuron selection mode: 'per-layer' selects top-k "
+                        "from each Conv2d layer independently (~60 tiny combo "
+                        "spaces). 'per-group' selects top-k from each layer "
+                        "group (early/middle/late), yielding 3 larger cross-"
+                        "layer combo spaces — more faithful to WISDOM IDC.")
     a = p.parse_args()
     run_rq2_opt(**vars(a))

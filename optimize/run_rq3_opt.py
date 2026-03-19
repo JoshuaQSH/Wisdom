@@ -26,6 +26,7 @@ from wisdom_yolo_train import COCOImageDataset, _collate
 from wisdom.utils.yolo_wrapper import YOLOWrapper
 from optimize.coverage_utils import (
     load_layerwise_top_neurons,
+    load_groupwise_top_neurons,
     ActivationCollector, calibrate_thresholds,
     compute_stratified_coverage,
     ClusterCoverageComputer,
@@ -147,16 +148,20 @@ def run_rq3_opt(
     weights, img_dir, csv_file, num_images=200,
     batch_size=4, imgsz=320, device="cuda:0",
     out_prefix="results/rq3_opt", per_layer_k=5,
-    coverage_mode="plain",
+    coverage_mode="plain", neuron_select="per-layer",
 ):
     from ultralytics import YOLO
     yolo = YOLO(weights)
     model = yolo.model.eval().to(device)
     wrapper = YOLOWrapper(model, num_classes=80).eval().to(device)
 
-    top_neurons = load_layerwise_top_neurons(csv_file, per_layer_k=per_layer_k)
+    if neuron_select == "per-group":
+        top_neurons = load_groupwise_top_neurons(csv_file, per_group_k=per_layer_k)
+    else:
+        top_neurons = load_layerwise_top_neurons(csv_file, per_layer_k=per_layer_k)
     total_n = sum(len(v) for v in top_neurons.values())
     print(f"Monitoring {total_n} neurons across {len(top_neurons)} layers")
+    print(f"Neuron selection: {neuron_select}")
     print(f"Coverage mode: {coverage_mode}")
 
     ds = COCOImageDataset(img_dir, max_images=num_images, imgsz=imgsz)
@@ -171,6 +176,7 @@ def run_rq3_opt(
         cluster_comp = ClusterCoverageComputer(
             model, top_neurons, device=device,
             method="KMeans", use_silhouette=True, k_max=5,
+            combo_mode=neuron_select,
         )
         print("Fitting clusters on calibration images...")
         cluster_comp.fit(calib_imgs, batch_size=batch_size)
@@ -289,5 +295,9 @@ if __name__ == "__main__":
     p.add_argument("--out-prefix", default="results/rq3_opt")
     p.add_argument("--per-layer-k", type=int, default=5)
     p.add_argument("--coverage-mode", choices=["plain", "cluster"], default="plain")
+    p.add_argument("--neuron-select", choices=["per-layer", "per-group"],
+                   default="per-layer",
+                   help="'per-layer': top-k from each layer. "
+                        "'per-group': top-k from each group (early/middle/late).")
     a = p.parse_args()
     run_rq3_opt(**vars(a))

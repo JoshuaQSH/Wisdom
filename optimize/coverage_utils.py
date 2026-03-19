@@ -96,6 +96,43 @@ def load_layerwise_top_neurons(
     return neurons
 
 
+def load_groupwise_top_neurons(
+    csv_path: str,
+    per_group_k: int = 5,
+    strip_prefix: str = "yolo_model.",
+) -> Dict[str, List[int]]:
+    """
+    Load top-K neurons **per layer group** (early/middle/late).
+
+    Unlike per-layer selection (which picks k neurons from each of ~60
+    layers), this picks the k BEST neurons across all layers within each
+    group.  This means the selected neurons may span multiple layers
+    within a group, and the combinatorial coverage is computed over
+    cross-layer neuron interactions — more faithful to the original
+    WISDOM IDC methodology.
+
+    Returns {raw_layer_name: [neuron_indices]}.
+    """
+    df = pd.read_csv(csv_path)
+    grouped: Dict[str, list] = {"early": [], "middle": [], "late": []}
+
+    for _, row in df.iterrows():
+        lname = row["LayerName"]
+        raw = lname.replace(strip_prefix, "") if strip_prefix else lname
+        grp = _layer_group(raw)
+        score = float(row["Score"])
+        if score > 0:
+            grouped[grp].append((raw, int(row["NeuronIndex"]), score))
+
+    neurons: Dict[str, List[int]] = {}
+    for g in ("early", "middle", "late"):
+        top = sorted(grouped[g], key=lambda x: x[2], reverse=True)[:per_group_k]
+        for lname, idx, _ in top:
+            neurons.setdefault(lname, []).append(idx)
+
+    return {l: sorted(idxs) for l, idxs in neurons.items()}
+
+
 # ── Activation collection ───────────────────────────────────────────
 
 class ActivationCollector:
@@ -311,6 +348,7 @@ class ClusterCoverageComputer:
         use_silhouette: bool = True,
         k_max: int = 5,
         n_clusters: int = 3,
+        combo_mode: str = "per-layer",
     ):
         self.model = model
         self.target_neurons = target_neurons
@@ -319,6 +357,7 @@ class ClusterCoverageComputer:
         self.use_silhouette = use_silhouette
         self.k_max = k_max
         self.n_clusters = n_clusters
+        self.combo_mode = combo_mode  # "per-layer" or "per-group"
 
         # Populated by fit()
         self.groups: Dict[str, Dict[int, dict]] = {}
@@ -434,7 +473,20 @@ class ClusterCoverageComputer:
         layer_assignments: Dict[str, list],
         layer_sizes: Dict[str, Dict[str, int]],
     ) -> Dict[str, float]:
-        """Compute stratified coverage from pre-collected per-layer assignments."""
+        """Compute stratified coverage from pre-collected per-layer assignments.
+
+        Dispatches to per-layer or per-group mode based on ``self.combo_mode``.
+        """
+        if self.combo_mode == "per-group":
+            return self._coverage_per_group(layer_assignments, layer_sizes)
+        return self._coverage_per_layer(layer_assignments, layer_sizes)
+
+    def _coverage_per_layer(
+        self,
+        layer_assignments: Dict[str, list],
+        layer_sizes: Dict[str, Dict[str, int]],
+    ) -> Dict[str, float]:
+        """Original per-layer combinatorial coverage (one combo space per layer)."""
         from wisdom.core.compute import combinations_coverage
 
         layer_covs: Dict[str, float] = {}
@@ -458,6 +510,86 @@ class ClusterCoverageComputer:
             if group_covs[g]:
                 coverages[g] = float(np.mean(group_covs[g]))
                 all_covs.extend(group_covs[g])
+            else:
+                coverages[g] = 0.0
+
+        coverages["overall"] = float(np.mean(all_covs)) if all_covs else 0.0
+        grp_vals = [coverages[g] for g in ("early", "middle", "late") if coverages[g] > 0]
+        coverages["variability"] = float(np.std(grp_vals)) if len(grp_vals) > 1 else 0.0
+        return coverages
+
+    def _coverage_per_group(
+        self,
+        layer_assignments: Dict[str, list],
+        layer_sizes: Dict[str, Dict[str, int]],
+    ) -> Dict[str, float]:
+        """Per-group combinatorial coverage — one combo space per group.
+
+        Merges all neuron assignments within a group (early/middle/late)
+        into a single combinatorial space, so coverage captures cross-layer
+        interactions.  E.g., with 5 neurons × 3 clusters per group, the
+        total combinations = 3^5 = 243 per group.
+        """
+        from wisdom.core.compute import combinations_coverage
+
+        # Partition neuron keys by group
+        group_keys: Dict[str, List[str]] = {"early": [], "middle": [], "late": []}
+        all_keys_flat: Dict[str, str] = {}  # "layer:idx" -> group
+        for lname in self.target_neurons:
+            grp = _layer_group(lname)
+            for idx in self.target_neurons[lname]:
+                key = f"{lname}:{idx}"
+                group_keys[grp].append(key)
+                all_keys_flat[key] = grp
+
+        # Determine number of images from any layer's assignment list
+        n_images = 0
+        for lname in layer_assignments:
+            if layer_assignments[lname]:
+                n_images = len(layer_assignments[lname])
+                break
+
+        # Build per-group merged assignments
+        # Each element is a dict {neuron_key: cluster_id} across all layers in group
+        group_assignments: Dict[str, List[Dict[str, int]]] = {
+            g: [] for g in ("early", "middle", "late")
+        }
+        group_sizes: Dict[str, Dict[str, int]] = {
+            g: {} for g in ("early", "middle", "late")
+        }
+
+        # Collect sizes
+        for lname in layer_sizes:
+            grp = _layer_group(lname)
+            for key, sz in layer_sizes[lname].items():
+                nkey_grp = all_keys_flat.get(key)
+                if nkey_grp:
+                    group_sizes[nkey_grp][key] = sz
+
+        # Merge assignments across layers within each group
+        for img_i in range(n_images):
+            merged: Dict[str, Dict[str, int]] = {
+                g: {} for g in ("early", "middle", "late")
+            }
+            for lname in self.target_neurons:
+                grp = _layer_group(lname)
+                if img_i < len(layer_assignments.get(lname, [])):
+                    per_layer_dict = layer_assignments[lname][img_i]
+                    for key, cid in per_layer_dict.items():
+                        if key in all_keys_flat:
+                            merged[grp][key] = cid
+            for g in ("early", "middle", "late"):
+                group_assignments[g].append(merged[g])
+
+        coverages: Dict[str, float] = {}
+        all_covs = []
+        for g in ("early", "middle", "late"):
+            if group_assignments[g] and group_sizes[g]:
+                r, t, _ = combinations_coverage(
+                    group_assignments[g], group_sizes[g]
+                )
+                coverages[g] = r
+                all_covs.append(r)
             else:
                 coverages[g] = 0.0
 
