@@ -381,69 +381,65 @@ class ClusterCoverageComputer:
         assn = assign_clusters(self.groups, sample_acts)
         return {f"{l}:{i}": assn[l][i] for l in assn for i in assn[l]}
 
-    def coverage(
-        self, test_images: torch.Tensor, batch_size: int = 4
-    ) -> Dict[str, float]:
-        """
-        Compute per-layer combinatorial cluster coverage, then aggregate.
+    def _process_activations_to_assignments(
+        self,
+        activations: Dict[str, torch.Tensor],
+        layer_assignments: Dict[str, list],
+        layer_sizes: Dict[str, Dict[str, int]],
+    ) -> None:
+        """Convert batch activations to per-layer cluster assignments (in-place)."""
+        B = next(iter(activations.values())).shape[0] if activations else 0
+        for b in range(B):
+            sample_acts: Dict[str, Dict[int, float]] = {}
+            for lname in self.target_neurons:
+                if lname not in activations:
+                    continue
+                sample_acts[lname] = {}
+                for col, idx in enumerate(self.target_neurons[lname]):
+                    sample_acts[lname][idx] = float(activations[lname][b, col].item())
 
-        With per_layer_k=5 neurons and ~3 clusters each, each layer has
-        3^5 = 243 possible combinations — tractable and discriminating.
-        We compute coverage per layer, then average within each group
-        (early/middle/late) and overall.
+            flat = self._assign_single(sample_acts)
 
-        Returns dict with 'early', 'middle', 'late', 'overall',
-        'variability'.
-        """
-        assert self._fitted, "Call fit() before coverage()"
-        from wisdom.core.compute import combinations_coverage
+            layer_dicts: Dict[str, Dict[str, int]] = {l: {} for l in self.target_neurons}
+            for key, cluster_id in flat.items():
+                lname = key.rsplit(":", 1)[0]
+                if lname in layer_dicts:
+                    layer_dicts[lname][key] = cluster_id
+                    layer_sizes[lname][key] = self.cluster_sizes[key]
 
+            for lname in self.target_neurons:
+                if layer_dicts[lname]:
+                    layer_assignments[lname].append(layer_dicts[lname])
+
+    def collect_assignments(
+        self, images: torch.Tensor, batch_size: int = 4
+    ) -> Tuple[Dict[str, list], Dict[str, Dict[str, int]]]:
+        """Collect per-layer cluster assignments for a set of images."""
         collector = ActivationCollector(self.model, self.target_neurons, self.device)
         collector.attach()
 
-        # Collect per-sample, per-layer assignments
-        # layer_assignments[layer_name] = list of dicts, one per image
         layer_assignments: Dict[str, list] = {l: [] for l in self.target_neurons}
         layer_sizes: Dict[str, Dict[str, int]] = {l: {} for l in self.target_neurons}
 
-        for i in range(0, len(test_images), batch_size):
-            batch = test_images[i:i + batch_size]
+        for i in range(0, len(images), batch_size):
+            batch = images[i:i + batch_size]
             acts = collector.collect(batch)
-            B = batch.shape[0]
-            for b in range(B):
-                sample_acts: Dict[str, Dict[int, float]] = {}
-                for lname in self.target_neurons:
-                    if lname not in acts:
-                        continue
-                    sample_acts[lname] = {}
-                    for col, idx in enumerate(self.target_neurons[lname]):
-                        sample_acts[lname][idx] = float(acts[lname][b, col].item())
-
-                flat = self._assign_single(sample_acts)
-
-                # Split assignments by layer
-                for key, cluster_id in flat.items():
-                    lname = key.rsplit(":", 1)[0]
-                    if lname not in layer_assignments:
-                        continue
-                    # Lazy-init per-image dict for this layer
-                layer_dicts: Dict[str, Dict[str, int]] = {l: {} for l in self.target_neurons}
-                for key, cluster_id in flat.items():
-                    lname = key.rsplit(":", 1)[0]
-                    if lname in layer_dicts:
-                        layer_dicts[lname][key] = cluster_id
-                        layer_sizes[lname][key] = self.cluster_sizes[key]
-
-                for lname in self.target_neurons:
-                    if layer_dicts[lname]:
-                        layer_assignments[lname].append(layer_dicts[lname])
+            self._process_activations_to_assignments(acts, layer_assignments, layer_sizes)
 
         collector.detach()
+        return layer_assignments, layer_sizes
 
-        # Compute per-layer combinatorial coverage
+    def coverage_from_assignments(
+        self,
+        layer_assignments: Dict[str, list],
+        layer_sizes: Dict[str, Dict[str, int]],
+    ) -> Dict[str, float]:
+        """Compute stratified coverage from pre-collected per-layer assignments."""
+        from wisdom.core.compute import combinations_coverage
+
         layer_covs: Dict[str, float] = {}
         for lname in self.target_neurons:
-            if layer_assignments[lname] and layer_sizes[lname]:
+            if layer_assignments.get(lname) and layer_sizes.get(lname):
                 r, t, _ = combinations_coverage(
                     layer_assignments[lname], layer_sizes[lname]
                 )
@@ -451,7 +447,6 @@ class ClusterCoverageComputer:
             else:
                 layer_covs[lname] = 0.0
 
-        # Aggregate by group (early / middle / late)
         group_covs: Dict[str, list] = {"early": [], "middle": [], "late": []}
         for lname, cov in layer_covs.items():
             grp = _layer_group(lname)
@@ -470,6 +465,18 @@ class ClusterCoverageComputer:
         grp_vals = [coverages[g] for g in ("early", "middle", "late") if coverages[g] > 0]
         coverages["variability"] = float(np.std(grp_vals)) if len(grp_vals) > 1 else 0.0
         return coverages
+
+    def coverage(
+        self, test_images: torch.Tensor, batch_size: int = 4
+    ) -> Dict[str, float]:
+        """
+        Compute per-layer combinatorial cluster coverage, then aggregate.
+
+        Returns dict with 'early', 'middle', 'late', 'overall', 'variability'.
+        """
+        assert self._fitted, "Call fit() before coverage()"
+        assignments, sizes = self.collect_assignments(test_images, batch_size)
+        return self.coverage_from_assignments(assignments, sizes)
 
     def coverage_delta(
         self,
@@ -491,3 +498,136 @@ class ClusterCoverageComputer:
             delta[f"pert_{k}"] = cov_pert[k]
             delta[f"delta_{k}"] = abs(cov_pert[k] - cov_clean[k])
         return delta
+
+
+# ── Union coverage trackers (for RQ2 set-union methodology) ─────────
+
+class UnionCoverageTracker:
+    """
+    Incrementally track union (set-union) threshold coverage.
+
+    A neuron is "covered" if its activation exceeds the calibrated threshold
+    in ANY image across all updates.  This implements the original WISDOM
+    C(D_O ∪ D_I) methodology for plain threshold coverage.
+
+    Usage::
+
+        tracker = UnionCoverageTracker(thresholds, top_neurons)
+        for batch_acts in clean_activations:
+            tracker.update(batch_acts)
+        # fork for a perturbation variant
+        variant = tracker.clone()
+        for batch_acts in perturbed_activations:
+            variant.update(batch_acts)
+        C_union = variant.coverage()
+    """
+
+    def __init__(
+        self,
+        thresholds: Dict[str, torch.Tensor],
+        target_neurons: Dict[str, List[int]],
+    ):
+        self.thresholds = thresholds
+        self.target_neurons = target_neurons
+        self.max_acts: Dict[str, torch.Tensor] = {
+            l: torch.full((len(idxs),), float("-inf"))
+            for l, idxs in target_neurons.items()
+        }
+
+    def update(self, activations: Dict[str, torch.Tensor]) -> None:
+        """Update with activations {layer: (B, n_neurons)} from a batch."""
+        for l in self.target_neurons:
+            if l in activations:
+                batch_max = activations[l].float().abs().max(dim=0).values.cpu()
+                self.max_acts[l] = torch.max(self.max_acts[l], batch_max)
+
+    def coverage(self) -> Dict[str, float]:
+        """Compute stratified union coverage from accumulated max activations."""
+        group_active: Dict[str, int] = {"early": 0, "middle": 0, "late": 0}
+        group_total: Dict[str, int] = {"early": 0, "middle": 0, "late": 0}
+        for l in self.target_neurons:
+            thr = self.thresholds.get(l, torch.zeros(len(self.target_neurons[l])))
+            active = (self.max_acts[l] > thr).sum().item()
+            total = len(self.target_neurons[l])
+            grp = _layer_group(l)
+            group_active[grp] += active
+            group_total[grp] += total
+        result: Dict[str, float] = {}
+        for g in ("early", "middle", "late"):
+            result[g] = group_active[g] / max(group_total[g], 1)
+        result["overall"] = sum(group_active.values()) / max(sum(group_total.values()), 1)
+        grp_vals = [result[g] for g in ("early", "middle", "late") if group_total[g] > 0]
+        result["variability"] = float(np.std(grp_vals)) if len(grp_vals) > 1 else 0.0
+        return result
+
+    def clone(self) -> "UnionCoverageTracker":
+        """Return a deep copy for forking baseline state."""
+        new = UnionCoverageTracker.__new__(UnionCoverageTracker)
+        new.thresholds = self.thresholds
+        new.target_neurons = self.target_neurons
+        new.max_acts = {l: t.clone() for l, t in self.max_acts.items()}
+        return new
+
+    def reset(self) -> None:
+        for l in self.target_neurons:
+            self.max_acts[l].fill_(float("-inf"))
+
+
+class ClusterUnionTracker:
+    """
+    Incrementally track union combinatorial cluster coverage.
+
+    Collects cluster-state tuples from each image and computes coverage
+    as |unique tuples| / |total possible tuples|, pooled across all
+    images ever passed through ``update`` / ``update_from_activations``.
+
+    Usage::
+
+        tracker = ClusterUnionTracker(cluster_comp)
+        tracker.update(clean_images)        # or update_from_activations()
+        variant = tracker.clone()
+        variant.update(perturbed_images)
+        C_union = variant.coverage()
+    """
+
+    def __init__(self, cluster_comp: ClusterCoverageComputer):
+        self.comp = cluster_comp
+        self.layer_assignments: Dict[str, list] = {
+            l: [] for l in cluster_comp.target_neurons
+        }
+        self.layer_sizes: Dict[str, Dict[str, int]] = {
+            l: {} for l in cluster_comp.target_neurons
+        }
+
+    def update_from_activations(self, activations: Dict[str, torch.Tensor]) -> None:
+        """Update from pre-collected {layer: (B, n_neurons)} activations."""
+        self.comp._process_activations_to_assignments(
+            activations, self.layer_assignments, self.layer_sizes
+        )
+
+    def update(self, images: torch.Tensor, batch_size: int = 4) -> None:
+        """Process images end-to-end (forward pass → cluster assignment)."""
+        assignments, sizes = self.comp.collect_assignments(images, batch_size)
+        for l in self.layer_assignments:
+            self.layer_assignments[l].extend(assignments.get(l, []))
+            self.layer_sizes[l].update(sizes.get(l, {}))
+
+    def coverage(self) -> Dict[str, float]:
+        return self.comp.coverage_from_assignments(
+            self.layer_assignments, self.layer_sizes
+        )
+
+    def clone(self) -> "ClusterUnionTracker":
+        """Return a deep copy for forking baseline state."""
+        new = ClusterUnionTracker.__new__(ClusterUnionTracker)
+        new.comp = self.comp
+        new.layer_assignments = {
+            l: list(v) for l, v in self.layer_assignments.items()
+        }
+        new.layer_sizes = {l: dict(v) for l, v in self.layer_sizes.items()}
+        return new
+
+    def reset(self) -> None:
+        for l in self.comp.target_neurons:
+            self.layer_assignments[l] = []
+            self.layer_sizes[l] = {}
