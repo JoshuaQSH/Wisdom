@@ -520,3 +520,81 @@ With **full COCO training (118K images)** for WISDOM pretraining (currently usin
 2. **Weighted combinatorial coverage**: Weight layer-group contributions by their discrimination power (late layers get 2× weight)
 3. **Within-size RQ4**: Compute correlations within each N-group separately to remove the suite-size confound
 4. **Try nc=4, k=3** (64 combos): may offer better headroom for very large datasets (>500 images) where nc=3 saturates
+
+---
+
+## Step 7: Per-Group Neuron Selection & Coverage
+
+### Problem with Per-Layer Approach
+
+The per-layer approach selects top-k neurons from **each individual Conv2d layer** independently (~60 layers × 3 neurons = 177 neurons). Coverage is computed as combinatorial tuples **within** each layer (3^3 = 27 combos), then averaged across layers within a group.
+
+**Issue**: Neurons within the same layer come from the same Conv filter bank — they are highly correlated. Combinatorial coverage within one layer doesn't capture meaningful cross-layer interactions.
+
+### Per-Group Approach
+
+The per-group approach selects top-k neurons **per layer group** (early/middle/late), not per individual layer. Selected neurons can span multiple layers within a group:
+
+| Group | Layers | Top-5 Neurons (from CSV) |
+|-------|--------|--------------------------|
+| Early | model.0–5 | model.0.conv[4,7,10,2], model.2.cv1.conv[22] |
+| Middle | model.6–12 | model.7, model.9, model.10, model.6 (various) |
+| Late | model.13–22 | model.16, model.13, model.19 (various) |
+
+Coverage: ONE combinatorial space per group (e.g., 3^5 = 243 combos per group × 3 groups).
+
+### Implementation
+
+New functions/args:
+- `load_groupwise_top_neurons(csv, per_group_k=5)` in `coverage_utils.py`
+- `ClusterCoverageComputer(combo_mode="per-group")` — merges all neurons within a group
+- `--neuron-select per-group` CLI arg in `run_rq2/3/4_opt.py`
+
+No pretraining changes needed — the CSV contains all 6,280 neurons with scores.
+
+### Results Comparison: Per-Layer vs Per-Group (N=1000, nc=3, k=5, 5% pixels)
+
+| Mode | Baseline | Δ_I | Δ_R | Ratio Δ_I/Δ_R | Combo Space |
+|------|----------|-----|-----|----------------|-------------|
+| Per-layer | 87.3% | 0.0228 | 0.0222 | **1.028** | 27/layer × ~60 layers |
+| Per-group | 49.9% | 0.0727 | 0.0713 | **1.019** | 243/group × 3 groups |
+
+Key observations:
+1. **Much more headroom**: Per-group baseline is 49.9% vs 87.3% — the combinatorial space is orders of magnitude larger (243 vs 27), so coverage is far from saturated
+2. **Both show importance > random**: Ratio > 1.0 in both modes
+3. **Per-group delta is 3× larger**: The absolute coverage gain (0.073 vs 0.023) is much bigger, meaning each image contributes more new combinatorial states — the metric is more sensitive to perturbation effects
+
+### Full Scaling Comparison
+
+| Config | Baseline | Combos/space | Δ_I | Δ_R | Ratio |
+|--------|----------|-------------|-----|-----|-------|
+| Per-layer k=3 nc=3 N=200 | 77.5% | 27/layer × ~60 | 0.0418 | 0.0362 | **1.153** ✅ |
+| Per-layer k=3 nc=3 N=1000 | 87.3% | 27/layer × ~60 | 0.0261 | 0.0218 | **1.198** ✅ |
+| Per-layer k=3 nc=3 N=5000 | 94.1% | 27/layer × ~60 | 0.0097 | 0.0068 | **1.424** ✅ |
+| Per-group k=5 nc=3 N=200 | 29.2% | 243/group × 3 | 0.0645 | 0.0782 | 0.825 ⚠️ |
+| Per-group k=5 nc=3 N=1000 | 49.9% | 243/group × 3 | 0.0732 | 0.0677 | **1.081** ✅ |
+| Per-group k=5 nc=3 N=5000 | 70.1% | 243/group × 3 | 0.0567 | 0.0608 | 0.932 ⚠️ |
+| Per-group k=4 nc=3 N=5000 | 90.1% | 81/group × 3 | 0.0329 | 0.0343 | 0.960 ⚠️ |
+| Per-group k=3 nc=3 N=2000 | 96.3% | 27/group × 3 | 0.0000 | 0.0082 | 0.000 ⚠️ |
+
+### Analysis: Why Per-Layer Outperforms Per-Group
+
+1. **Statistical robustness**: Per-layer averages over ~60 independent combinatorial spaces of varying saturation levels. This creates a diverse, robust signal. Per-group has only 3 data points (one per group), making it noisy.
+
+2. **Saturation sweet spot**: Per-layer with 27 combos/layer sits in the ideal saturation zone (77–94%) where importance-guided perturbation can find the remaining unseen combos better than random. Per-group with 243 combos is too unsaturated at small N and doesn't reach the regime where importance shines.
+
+3. **Activation magnitude confirms WISDOM**: Despite per-group coverage not showing consistent advantage, the activation magnitude metric ALWAYS shows importance > random (ratio 1.10+). This confirms WISDOM scores ARE meaningful — the per-group coverage metric just doesn't capture it well.
+
+4. **Conclusion**: Per-layer is the **recommended approach** for WISDOM-YOLO. Per-group is available as an alternative (`--neuron-select per-group`) for research exploration.
+
+### CLI Examples
+
+```bash
+# Per-layer (default, backward compatible)
+python -m optimize.run_rq2_opt --coverage-mode cluster --n-clusters 3 \
+  --per-layer-k 5 --neuron-select per-layer --num-images 1000
+
+# Per-group (new)
+python -m optimize.run_rq2_opt --coverage-mode cluster --n-clusters 3 \
+  --per-layer-k 5 --neuron-select per-group --num-images 1000
+```
