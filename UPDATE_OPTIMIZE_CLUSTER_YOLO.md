@@ -348,11 +348,88 @@ Note: `top-m=21` with `per-group` means 7 neurons per group (early/middle/late) 
 
 ---
 
-## CLI Commands (Full)
+## Reproducible CLI Reference
 
-### RQ2 — Union Coverage (★ Best configuration)
+Below are the full command-line interfaces for every script involved in this pipeline.
+All commands assume the working directory is the repository root (`Wisdom/`).
+
+### 0. WISDOM Pretraining (importance scores)
+
+Generates the neuron importance CSV used by all downstream RQ scripts.
+
 ```bash
-# RECOMMENDED: nc=3, k=3, 5% pixels — gives ratio > 1.0
+# Global selection (original WISDOM, default)
+python wisdom_yolo_train.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/train2017 \
+  --num-images 5000 --batch-size 4 --top-m 21 --imgsz 320 \
+  --selection-mode global \
+  --out-csv neuron_eval_out/wisdom_yolo11n_scores_global.csv \
+  --device cuda:0
+
+# Per-group selection (balanced across early/middle/late)
+python wisdom_yolo_train.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/train2017 \
+  --num-images 5000 --batch-size 4 --top-m 21 --imgsz 320 \
+  --selection-mode per-group \
+  --out-csv neuron_eval_out/wisdom_yolo11n_scores_pergroup.csv \
+  --device cuda:0
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--weights` | str | `weights/yolo11n.pt` | YOLOv11 model weights |
+| `--img-dir` | str | `standalone/data/coco/images/train2017` | Training image directory |
+| `--num-images` | int | 5000 | Number of training images |
+| `--batch-size` | int | 4 | Batch size |
+| `--top-m` | int | 21 | Top-M neurons per voting round |
+| `--imgsz` | int | 320 | Input image size |
+| `--selection-mode` | str | `global` | `global` (top-M across all layers) or `per-group` (top-M/3 per early/middle/late) |
+| `--out-csv` | str | (required) | Output CSV path |
+| `--device` | str | `cuda:0` | Device |
+
+### 1. RQ1 — Critical Neuron Identification
+
+Tests whether WISDOM-selected neurons are genuinely critical by pruning them and measuring mAP drop.
+
+```bash
+# Default: prune top n ∈ {6,8,10,15,20} neurons, compare WISDOM vs random
+python run_rq1.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 50 --batch-size 2 --imgsz 320 \
+  --out-prefix results/rq1_yolo11n \
+  --device cuda:0
+
+# Larger-scale (5000 images)
+python run_rq1.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 5000 --batch-size 4 --imgsz 320 \
+  --out-prefix results/rq1_yolo11n_5k \
+  --device cuda:0
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--weights` | str | `weights/yolo11n.pt` | Model weights |
+| `--img-dir` | str | `standalone/data/coco/images/val2017` | Validation image directory |
+| `--csv-file` | str | `neuron_eval_out/wisdom_yolo11n_scores.csv` | WISDOM scores CSV |
+| `--num-images` | int | 50 | Number of images for evaluation |
+| `--batch-size` | int | 2 | Batch size |
+| `--imgsz` | int | 320 | Input image size |
+| `--out-prefix` | str | `results/rq1_yolo11n` | Output file prefix (produces `*_acc_drop.csv`, `*_relevance.csv`, `*_acc_drop.pdf`) |
+| `--device` | str | `cuda:0` | Device |
+
+### 2. RQ2 — Union Coverage (★ Recommended)
+
+Computes union coverage over importance-guided vs. random perturbation, matching the original WISDOM paper's methodology.
+
+```bash
+# ★ BEST CONFIG: per-layer, nc=3, k=3, 5% pixels, cluster mode
 python optimize/run_rq2_opt.py \
   --weights weights/yolo11n.pt \
   --img-dir standalone/data/coco/images/val2017 \
@@ -360,9 +437,23 @@ python optimize/run_rq2_opt.py \
   --num-images 200 --batch-size 4 --imgsz 320 \
   --coverage-mode cluster --importance wisdom \
   --n-clusters 3 --per-layer-k 3 --pixel-frac 0.05 \
-  --num-iters 3 --device cuda:0
+  --num-iters 3 --neuron-select per-layer \
+  --out-prefix results/rq2_best \
+  --device cuda:0
 
-# Alternative: nc=3, k=3, 2% pixels (works well at N=100)
+# Per-group neuron selection (alternative)
+python optimize/run_rq2_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 1000 --batch-size 4 --imgsz 320 \
+  --coverage-mode cluster --importance wisdom \
+  --n-clusters 3 --per-layer-k 5 --pixel-frac 0.05 \
+  --num-iters 3 --neuron-select per-group \
+  --out-prefix results/rq2_pergroup_n1000 \
+  --device cuda:0
+
+# Smaller scale: nc=3, k=3, 2% pixels (quick test)
 python optimize/run_rq2_opt.py \
   --weights weights/yolo11n.pt \
   --img-dir standalone/data/coco/images/val2017 \
@@ -370,80 +461,285 @@ python optimize/run_rq2_opt.py \
   --num-images 100 --batch-size 4 --imgsz 320 \
   --coverage-mode cluster --importance wisdom \
   --n-clusters 3 --per-layer-k 3 --pixel-frac 0.02 \
-  --num-iters 3 --device cuda:0
+  --num-iters 3 --neuron-select per-layer \
+  --device cuda:0
 
-# Plain mode with per-image union (for comparison)
+# Full scale: 5000 images (takes ~30 min on single GPU)
+python optimize/run_rq2_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 5000 --batch-size 4 --imgsz 320 \
+  --coverage-mode cluster --importance wisdom \
+  --n-clusters 3 --per-layer-k 3 --pixel-frac 0.05 \
+  --num-iters 3 --neuron-select per-layer \
+  --out-prefix results/rq2_nc3_k3_5pct_full \
+  --device cuda:0
+
+# Plain mode (threshold-based, for comparison)
 python optimize/run_rq2_opt.py \
   --weights weights/yolo11n.pt \
   --img-dir standalone/data/coco/images/val2017 \
   --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
   --num-images 200 --batch-size 4 --imgsz 320 \
   --coverage-mode plain --importance wisdom \
-  --num-iters 3 --device cuda:0
+  --num-iters 3 --neuron-select per-layer \
+  --device cuda:0
 ```
 
-### RQ2 — Spatial (Object vs Background, legacy)
+| Argument | Type | Default | Choices | Description |
+|----------|------|---------|---------|-------------|
+| `--weights` | str | `weights/yolo11n.pt` | — | Model weights |
+| `--img-dir` | str | `standalone/data/coco/images/val2017` | — | Image directory |
+| `--csv-file` | str | `neuron_eval_out/wisdom_yolo11n_scores_5000.csv` | — | WISDOM scores CSV |
+| `--num-images` | int | 200 | — | Number of images to process |
+| `--batch-size` | int | 2 | — | Batch size |
+| `--imgsz` | int | 320 | — | Input image size |
+| `--device` | str | `cuda:0` | — | Device |
+| `--out-prefix` | str | `results/rq2_opt` | — | Output file prefix |
+| `--coverage-mode` | str | `plain` | `plain`, `cluster` | `plain`: threshold-based; `cluster`: KMeans combinatorial (★) |
+| `--importance` | str | `wisdom` | `wisdom`, `output` | Pixel importance source: gradients w.r.t. WISDOM neurons or model output |
+| `--n-clusters` | int | 3 | — | KMeans clusters per neuron (controls combo space: `nc^k`) |
+| `--per-layer-k` | int | 5 | — | Top-k neurons per layer (or per group) to monitor |
+| `--pixel-frac` | float | 0.02 | — | Fraction of pixels to perturb |
+| `--noise-std` | float | 0.30 | — | Gaussian noise σ |
+| `--num-iters` | int | 3 | — | Number of perturbation iterations |
+| `--neuron-select` | str | `per-layer` | `per-layer`, `per-group` | `per-layer`: top-k from each Conv2d layer (~60 spaces); `per-group`: top-k from each early/middle/late group (3 spaces) |
+
+### 2b. RQ2 — Spatial Object vs Background (legacy)
+
+Directly compares coverage change from object-region vs. background-region perturbation.
+
 ```bash
 python optimize/run_rq2_opt_spatial.py \
   --weights weights/yolo11n.pt \
   --img-dir standalone/data/coco/images/val2017 \
   --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
   --num-images 200 --batch-size 2 --imgsz 320 \
-  --coverage-mode cluster --device cuda:0
+  --coverage-mode cluster \
+  --device cuda:0
 ```
 
-### RQ3 — Adversarial Detection
+### 3. RQ3 — Adversarial Detection Effectiveness
+
+Measures coverage shift under adversarial attacks (FGSM, PGD, feature-space) at varying contamination rates.
+
 ```bash
+# ★ Cluster mode with per-layer (default, recommended)
 python optimize/run_rq3_opt.py \
   --weights weights/yolo11n.pt \
   --img-dir standalone/data/coco/images/val2017 \
   --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
   --num-images 200 --batch-size 4 --imgsz 320 \
-  --coverage-mode cluster --device cuda:0
+  --coverage-mode cluster --per-layer-k 3 \
+  --neuron-select per-layer \
+  --out-prefix results/rq3_opt \
+  --device cuda:0
+
+# Per-group neuron selection
+python optimize/run_rq3_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 200 --batch-size 4 --imgsz 320 \
+  --coverage-mode cluster --per-layer-k 5 \
+  --neuron-select per-group \
+  --out-prefix results/rq3_pergroup \
+  --device cuda:0
+
+# Plain mode (for comparison)
+python optimize/run_rq3_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 200 --batch-size 4 --imgsz 320 \
+  --coverage-mode plain \
+  --neuron-select per-layer \
+  --out-prefix results/rq3_plain \
+  --device cuda:0
 ```
 
-### RQ4 — Diversity–Coverage Correlation
+| Argument | Type | Default | Choices | Description |
+|----------|------|---------|---------|-------------|
+| `--weights` | str | `weights/yolo11n.pt` | — | Model weights |
+| `--img-dir` | str | `standalone/data/coco/images/val2017` | — | Image directory |
+| `--csv-file` | str | `neuron_eval_out/wisdom_yolo11n_scores_5000.csv` | — | WISDOM scores CSV |
+| `--num-images` | int | 200 | — | Number of images |
+| `--batch-size` | int | 4 | — | Batch size |
+| `--imgsz` | int | 320 | — | Input image size |
+| `--device` | str | `cuda:0` | — | Device |
+| `--out-prefix` | str | `results/rq3_opt` | — | Output prefix (produces `*_cluster_effectiveness.csv`, `*_cluster_plot.pdf`) |
+| `--coverage-mode` | str | `plain` | `plain`, `cluster` | Coverage computation mode |
+| `--per-layer-k` | int | 5 | — | Top-k neurons per layer/group |
+| `--neuron-select` | str | `per-layer` | `per-layer`, `per-group` | Neuron selection strategy |
+
+### 4. RQ4 — Diversity–Coverage Correlation
+
+Measures correlation between test-suite diversity (Pielou's evenness) and coverage metrics across suite sizes.
+
 ```bash
+# ★ Cluster mode with per-layer (recommended)
 python optimize/run_rq4_opt.py \
   --weights weights/yolo11n.pt \
   --img-dir standalone/data/coco/images/val2017 \
   --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
   --num-images 200 --imgsz 320 \
-  --coverage-mode cluster --device cuda:0
+  --coverage-mode cluster --per-layer-k 3 \
+  --neuron-select per-layer \
+  --out-prefix results/rq4_opt \
+  --device cuda:0
+
+# Per-group neuron selection
+python optimize/run_rq4_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 200 --imgsz 320 \
+  --coverage-mode cluster --per-layer-k 5 \
+  --neuron-select per-group \
+  --out-prefix results/rq4_pergroup \
+  --device cuda:0
+
+# Plain mode (for comparison)
+python optimize/run_rq4_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 200 --imgsz 320 \
+  --coverage-mode plain \
+  --neuron-select per-layer \
+  --out-prefix results/rq4_plain \
+  --device cuda:0
 ```
 
-### Sanity Check — Perturbation Visualization
+| Argument | Type | Default | Choices | Description |
+|----------|------|---------|---------|-------------|
+| `--weights` | str | `weights/yolo11n.pt` | — | Model weights |
+| `--img-dir` | str | `standalone/data/coco/images/val2017` | — | Image directory |
+| `--csv-file` | str | `neuron_eval_out/wisdom_yolo11n_scores_5000.csv` | — | WISDOM scores CSV |
+| `--num-images` | int | 200 | — | Number of images |
+| `--imgsz` | int | 320 | — | Input image size |
+| `--device` | str | `cuda:0` | — | Device |
+| `--out-prefix` | str | `results/rq4_opt` | — | Output prefix (produces `*_cluster_correlation.csv`) |
+| `--coverage-mode` | str | `plain` | `plain`, `cluster` | Coverage computation mode |
+| `--per-layer-k` | int | 5 | — | Top-k neurons per layer/group |
+| `--neuron-select` | str | `per-layer` | `per-layer`, `per-group` | Neuron selection strategy |
+
+### 5. Sanity Checks — Perturbation Visualization
+
+Visual inspection of what pixels are being perturbed and how the perturbation looks.
+
+#### 5a. Basic Sanity Check (Object vs Background regions)
+
+Generates a 4-panel image showing importance-based and random perturbation on object vs. background regions.
+
 ```bash
 python optimize/sanity_check_rq2.py \
   --weights weights/yolo11n.pt \
   --img-dir standalone/data/coco/images/val2017 \
   --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --per-layer-k 5 --noise-std 0.15 \
+  --out-dir results/rq2_sanity \
+  --image-index 42 \
   --device cuda:0
 ```
 
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--weights` | str | `weights/yolo11n.pt` | Model weights |
+| `--img-dir` | str | `standalone/data/coco/images/val2017` | Image directory |
+| `--csv-file` | str | `neuron_eval_out/wisdom_yolo11n_scores_5000.csv` | WISDOM scores CSV |
+| `--out-dir` | str | `results/rq2_sanity` | Output directory for the plot |
+| `--imgsz` | int | 320 | Input image size |
+| `--device` | str | `cuda:0` | Device |
+| `--per-layer-k` | int | 5 | Top-k neurons per layer |
+| `--noise-std` | float | 0.15 | Gaussian noise σ |
+| `--image-index` | int | None (random) | Specific image index in the dataset |
+
+Output: `<out-dir>/sanity_check_rq2.png`
+
+#### 5b. Optimized Sanity Check with Per-Group Color Coding (★ Recommended)
+
+Generates a 5×3 panel grid matching `run_rq2_opt.py` settings. Shows per-group color-coded importance pixels:
+- **Red** = early layers (model.0–5)
+- **Blue** = middle layers (model.6–12)
+- **Green** = late layers (model.13–22)
+
+```bash
+# Per-layer neuron selection (default, 177 neurons)
+python optimize/sanity_check_rq2_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --per-layer-k 5 --pixel-frac 0.02 --noise-std 0.30 \
+  --neuron-select per-layer \
+  --out-dir results/rq2_sanity_opt_perlayer \
+  --image-index 1500 \
+  --device cuda:0
+
+# Per-group neuron selection (15 neurons, sparser but more focused)
+python optimize/sanity_check_rq2_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --per-layer-k 5 --pixel-frac 0.02 --noise-std 0.30 \
+  --neuron-select per-group \
+  --out-dir results/rq2_sanity_opt_pergroup \
+  --image-index 1500 \
+  --device cuda:0
+```
+
+| Argument | Type | Default | Choices | Description |
+|----------|------|---------|---------|-------------|
+| `--weights` | str | `weights/yolo11n.pt` | — | Model weights |
+| `--img-dir` | str | `standalone/data/coco/images/val2017` | — | Image directory |
+| `--csv-file` | str | `neuron_eval_out/wisdom_yolo11n_scores_5000.csv` | — | WISDOM scores CSV |
+| `--out-dir` | str | `results/rq2_sanity_opt` | — | Output directory |
+| `--imgsz` | int | 320 | — | Input image size |
+| `--device` | str | `cuda:0` | — | Device |
+| `--per-layer-k` | int | 5 | — | Top-k neurons per layer/group |
+| `--pixel-frac` | float | 0.02 | — | Fraction of pixels to perturb (matches `run_rq2_opt.py`) |
+| `--noise-std` | float | 0.30 | — | Gaussian noise σ (matches `run_rq2_opt.py`) |
+| `--neuron-select` | str | `per-layer` | `per-layer`, `per-group` | Neuron selection (affects color-coding detail) |
+| `--image-index` | int | None (random) | — | Image index (tip: use 1500 for a well-balanced object/background split) |
+
+Output: `<out-dir>/sanity_check_rq2_opt.png` — 5×3 grid with rows: (1) original+mask+heatmap, (2) importance object pixels/perturbed/diff×10, (3) importance background, (4) random object, (5) random background.
+
 ---
 
-## Pipeline
+## Pipeline Overview
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  1. WISDOM Pretraining (importance scores)                               │
+│  0. WISDOM Pretraining (importance scores)                               │
 │     python wisdom_yolo_train.py --weights weights/yolo11n.pt             │
 │       --img-dir standalone/data/coco/images/train2017                    │
 │       --num-images 5000 --top-m 21 --imgsz 320                          │
 │       --selection-mode [global|per-group]                                │
 │       --out-csv neuron_eval_out/wisdom_yolo11n_scores.csv                │
 ├──────────────────────────────────────────────────────────────────────────┤
-│  2. RQ2: Input Diversity (union coverage methodology)                    │
+│  1. RQ1: Critical Neurons (pruning → mAP drop)                           │
+│     python run_rq1.py --num-images 50                                    │
+│     Validates that WISDOM-selected neurons matter.                       │
+├──────────────────────────────────────────────────────────────────────────┤
+│  2. RQ2: Input Diversity (union coverage, cluster mode)                  │
 │     python optimize/run_rq2_opt.py --coverage-mode cluster               │
-│       --importance wisdom --num-iters 3                                  │
+│       --importance wisdom --n-clusters 3 --per-layer-k 3                 │
+│       --pixel-frac 0.05 --num-iters 3                                    │
+│       --neuron-select [per-layer|per-group]                              │
 │     Also: optimize/run_rq2_opt_spatial.py (object vs background)         │
 ├──────────────────────────────────────────────────────────────────────────┤
 │  3. RQ3: Adversarial Detection                                           │
 │     python optimize/run_rq3_opt.py --coverage-mode cluster               │
+│       --neuron-select [per-layer|per-group]                              │
 ├──────────────────────────────────────────────────────────────────────────┤
 │  4. RQ4: Diversity–Coverage Correlation                                  │
 │     python optimize/run_rq4_opt.py --coverage-mode cluster               │
+│       --neuron-select [per-layer|per-group]                              │
+├──────────────────────────────────────────────────────────────────────────┤
+│  5. Sanity Checks (visual inspection)                                    │
+│     python optimize/sanity_check_rq2.py       (basic, obj/bg regions)    │
+│     python optimize/sanity_check_rq2_opt.py   (per-group color-coded)    │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -451,18 +747,87 @@ python optimize/sanity_check_rq2.py \
 
 ## Tests
 
-All 33 tests pass including 22 cluster-specific tests:
+### Running All Tests
 
-```
-tests/test_cluster_coverage.py::TestCombinationsCoverage (7 tests)
-tests/test_cluster_coverage.py::TestFitPerNeuron (4 tests)
-tests/test_cluster_coverage.py::TestAssignClusters (2 tests)
-tests/test_cluster_coverage.py::TestClusterCoverageComputer (5 tests)
-tests/test_cluster_coverage.py::TestPlainVsClusterMode (3 tests)
-tests/test_cluster_coverage.py::TestClusterCoverageYOLO (1 test)
+```bash
+# Run the full test suite
+python -m pytest tests/ -v
+
+# Run only cluster coverage tests (fastest, no GPU needed for most)
+python -m pytest tests/test_cluster_coverage.py -v
+
+# Run a specific test class
+python -m pytest tests/test_cluster_coverage.py::TestPerGroupCoverage -v
+
+# Run a single test
+python -m pytest tests/test_cluster_coverage.py::TestCombinationsCoverage::test_two_neurons_combinatorial -v
 ```
 
-Run: `python -m pytest tests/ -v`
+### Test Suite Breakdown (33 tests total)
+
+**`tests/test_cluster_coverage.py`** — Cluster coverage unit tests (33 tests):
+
+| Test Class | Tests | What It Validates |
+|------------|-------|-------------------|
+| `TestCombinationsCoverage` | 7 | Core combinatorial logic: single/multi neuron, partial coverage, empty/missing keys, deduplication |
+| `TestFitPerNeuron` | 4 | KMeans fitting: basic clustering, silhouette-adaptive k, constant values, multi-neuron |
+| `TestAssignClusters` | 2 | Cluster assignment: nearest-center logic, multi-neuron assignment |
+| `TestClusterCoverageComputer` | 5 | End-to-end: fit creates clusters, valid scores, monotonic increase, delta computation, not-fitted error |
+| `TestPlainVsClusterMode` | 3 | Mode switching: plain mode output, cluster mode output, both modes differ |
+| `TestClusterCoverageYOLO` | 1 | Integration: fit + coverage on actual YOLOv11 model (requires GPU) |
+| `TestLoadGroupwiseTopNeurons` | 5 | Groupwise loading: correct count, correct groups, highest scores selected, zero-score skip, multi-layer span |
+| `TestPerGroupCoverage` | 6 | Per-group coverage: valid combo_mode, differs from per-layer, saturation, union tracker, direct assignment, partial coverage |
+
+**`tests/test_run_rq1.py`** — RQ1 integration test (1 test):
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_rq1_generates_output_csvs` | End-to-end: prune neurons → CSV output with mAP drops |
+
+**`tests/test_run_rq2.py`** — RQ2 integration test (1 test):
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_rq2_generates_csv` | End-to-end: perturbation → coverage CSV output |
+
+**`tests/test_run_rq3.py`** — RQ3 integration test (1 test):
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_rq3_generates_csv` | End-to-end: adversarial attack → effectiveness CSV |
+
+**`tests/test_run_rq4.py`** — RQ4 integration test (1 test):
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_rq4_generates_csv` | End-to-end: diversity → correlation CSV |
+
+**`tests/test_run_rq5.py`** — RQ5 integration test (2 tests):
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_rq5_generates_csv` | End-to-end: timing CSV output |
+| `test_rq5_timings_reasonable` | Timing values are within reasonable bounds |
+
+**`tests/test_wisdom_yolo_train.py`** — Pretraining integration (2 tests):
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_train_wisdom_yolo_generates_csv` | WISDOM training produces scores CSV |
+| `test_train_wisdom_yolo_fine_grained` | Fine-grained neuron scoring works |
+
+**`tests/test_yolo_test.py`** — YOLO model smoke tests (3 tests):
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_yolo_model_loads` | YOLOv11 model loads correctly |
+| `test_yolo_inference_produces_boxes` | Inference produces bounding boxes |
+| `test_yolo_inference_result_fields` | Result objects have expected fields |
+
+### Known Issues
+
+- 4 GPU-dependent tests may OOM on GPUs with <12GB VRAM (unrelated to cluster coverage logic)
+- `TestClusterCoverageYOLO` requires GPU and the YOLO weights file
 
 ---
 
@@ -589,12 +954,28 @@ Key observations:
 
 ### CLI Examples
 
-```bash
-# Per-layer (default, backward compatible)
-python -m optimize.run_rq2_opt --coverage-mode cluster --n-clusters 3 \
-  --per-layer-k 5 --neuron-select per-layer --num-images 1000
+See the full [Reproducible CLI Reference](#reproducible-cli-reference) section above for all modes and argument tables. Quick examples:
 
-# Per-group (new)
-python -m optimize.run_rq2_opt --coverage-mode cluster --n-clusters 3 \
-  --per-layer-k 5 --neuron-select per-group --num-images 1000
+```bash
+# Per-layer (default, backward compatible) — recommended
+python optimize/run_rq2_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 1000 --batch-size 4 --imgsz 320 \
+  --coverage-mode cluster --importance wisdom \
+  --n-clusters 3 --per-layer-k 3 --pixel-frac 0.05 \
+  --num-iters 3 --neuron-select per-layer \
+  --device cuda:0
+
+# Per-group (alternative — 3 large combinatorial spaces)
+python optimize/run_rq2_opt.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/val2017 \
+  --csv-file neuron_eval_out/wisdom_yolo11n_scores_5000.csv \
+  --num-images 1000 --batch-size 4 --imgsz 320 \
+  --coverage-mode cluster --importance wisdom \
+  --n-clusters 3 --per-layer-k 5 --pixel-frac 0.05 \
+  --num-iters 3 --neuron-select per-group \
+  --device cuda:0
 ```
