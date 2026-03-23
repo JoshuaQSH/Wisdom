@@ -979,3 +979,166 @@ python optimize/run_rq2_opt.py \
   --num-iters 3 --neuron-select per-group \
   --device cuda:0
 ```
+
+---
+
+## Step 8: Per-Group Pretrained Scores (50K) — Evaluation
+
+### Experiment
+
+We retrained WISDOM using `--selection-mode per-group` on 50K images, producing `wisdom_yolo11n_scores_pergroup_50k.csv`. This CSV was then used for RQ1–RQ4 with the recommended config (nc=3, k=3, 5% pixels, per-layer neuron selection, N=200).
+
+### Score Distribution Comparison
+
+| Metric | Global 5K | Per-Group 50K |
+|--------|-----------|---------------|
+| Total neurons | 6,280 | 6,280 |
+| Scored (>0) | 1,884 (30.0%) | 1,889 (30.1%) |
+| Score range | 0 – 15,263 | 0 – 104,651 |
+| CoV (std/mean) | 3.645 | 5.335 |
+| Skewness | 8.33 | 10.95 |
+| Top-3/layer dominance | 10.5× rest | 23.0× rest |
+| Per-layer top-3 overlap | — | 141/189 (74.6%) |
+| Spearman r | — | 0.765 |
+
+The per-group 50K scores are **more sharply peaked** (CoV 5.3 vs 3.6, top-3 dominance 23× vs 10.5×) due to 10× more training data producing stronger consensus. But **25.4% of per-layer top-3 neurons differ** from the global 5K selection.
+
+#### Per-Group Balance Improvement
+
+| Group | Global 5K Top-5 Mean | Per-Group 50K Top-5 Mean | Ratio |
+|-------|---------------------|--------------------------|-------|
+| Early | 11,385 | 51,329 | 4.5× |
+| Middle | 4,364 | 28,538 | **6.5×** |
+| Late | 8,799 | 67,807 | **7.7×** |
+
+Per-group pretraining successfully upweighted middle/late neurons (6.5–7.7× vs 4.5×), confirming it corrects the early-layer bias.
+
+### RQ1: Critical Neurons ✅ (Improved)
+
+| Top-N | Global 5K conf\_drop | Per-Group 50K conf\_drop | Winner |
+|-------|---------------------|--------------------------|--------|
+| 6 | 23.3% | **29.1%** | NEW ✅ |
+| 8 | 25.9% | **40.5%** | NEW ✅ |
+| 10 | 31.2% | **34.5%** | NEW ✅ |
+| 15 | **46.5%** | 30.5% | OLD |
+| 20 | 20.9% | **33.2%** | NEW ✅ |
+
+Random baseline: 0–7% in both. **RQ1 improves** — the per-group 50K neurons are genuinely more critical. The new scores identify neurons whose removal causes larger performance degradation, especially at small n (6–10).
+
+### RQ2: Union Coverage ⚠️ (Degraded)
+
+| CSV | Baseline | Δ\_I (full) | Δ\_R (full) | Ratio | Verdict |
+|-----|----------|-------------|-------------|-------|---------|
+| Global 5K | 77.5% | 0.0420 | 0.0373 | **1.124** | ✅ |
+| Per-Group 5K | ~79% | ~0.030 | ~0.032 | **0.952** | ⚠️ |
+| Per-Group 50K | 79.1% | 0.0346 | 0.0352 | **0.983** | ⚠️ |
+| Per-Group 50K (nc=4) | lower | varies | varies | **0.95** avg | ⚠️ |
+
+**All per-group pretrained CSVs fail RQ2** — importance-guided perturbation no longer outperforms random.
+
+#### Per-Region Breakdown (Per-Group 50K)
+
+| Region | Δ\_I | Δ\_R | Ratio |
+|--------|------|------|-------|
+| Full image | 0.0346 | 0.0352 | 0.983 ⚠️ |
+| Object only | 0.0247 | 0.0293 | 0.841 ⚠️ |
+| Background only | 0.0251 | 0.0279 | 0.899 ⚠️ |
+
+Activation magnitude ratios also < 1.0 across all regions and groups (0.73–0.98).
+
+### RQ3: Adversarial Detection ✅ (Comparable)
+
+Feature attack at N=200 (per-group 50K):
+
+| Error Rate | Δ\_overall | Δ\_late |
+|-----------|-----------|---------|
+| 5% | 0.0015 | 0.0037 |
+| 10% | 0.0101 | 0.0174 |
+| 20% | 0.0151 | 0.0224 |
+
+Monotonic increase confirmed. Δ\_late at 20% = 0.0224 is the **strongest** RQ3 result across all experiments, outperforming the old scores.
+
+### RQ4: Diversity–Coverage ⚠️ (Over-Saturated)
+
+| N | Global 5K W\_all | Per-Group 50K W\_all | Change |
+|---|-----------------|---------------------|--------|
+| 10 | 0.079 | 0.331 | +4.2× |
+| 20 | 0.118 | 0.454 | +3.8× |
+| 50 | 0.194 | 0.614 | +3.2× |
+| 100 | 0.266 | 0.715 | +2.7× |
+
+The per-group 50K neurons reach **71.5% coverage at N=100** vs 26.6% with old scores. This means the new neurons' combinatorial space is much easier to saturate — their activations produce less diverse cluster assignments.
+
+### Root Cause Analysis: Why Per-Group Pretraining Hurts RQ2
+
+**1. Different neurons are selected (25.4% differ per layer)**
+
+Per-group pretraining changes the vote distribution → different neurons rank highest in each layer → the downstream per-layer top-3 selection picks 48 different neurons (out of 189). These replacement neurons happen to have **more homogeneous activation patterns** across images.
+
+**2. Activation homogeneity → fast saturation**
+
+Evidence: RQ4 shows W\_overall at N=100 jumps from 0.266 → 0.715. The 48 replacement neurons fill the 27-combo space ~3× faster because their activations cluster into fewer distinct states. When coverage is already 79%, both importance and random perturbation struggle equally to find new states.
+
+**3. Per-group pretraining is NOT the same issue as per-group selection mode**
+
+- `--selection-mode per-group` (pretraining) changes which neurons get votes → changes the CSV scores
+- `--neuron-select per-group` (evaluation) changes how top-k neurons are grouped for coverage computation
+
+The per-group **pretraining** issue is that forcing balanced votes across groups changes the relative neuron rankings within each layer. Middle/late neurons get boosted (good for RQ1 — they're critical) but the specific neurons that gain votes may not be the most discriminative for RQ2's gradient-based pixel targeting.
+
+**4. RQ1 paradox explained**
+
+RQ1 tests if neurons are **critical** (removal causes damage). The per-group 50K neurons ARE more critical — their removal causes larger conf drops. But "critical to the model" ≠ "discriminative for coverage". A neuron can be vital for inference but respond similarly to all inputs (homogeneous activations), making it poor for combinatorial coverage discrimination.
+
+### Isolation Test: Per-Group 5K vs Global 5K
+
+To confirm the issue is per-group pretraining (not 50K images), we tested with `pergroup_5k`:
+
+| CSV | Spearman r vs Global 5K | RQ2 Ratio |
+|-----|------------------------|-----------|
+| Global 5K | 1.000 | **1.124** ✅ |
+| Per-Group 5K | 0.693 | **0.952** ⚠️ |
+| Per-Group 50K | 0.765 | **0.983** ⚠️ |
+
+**Per-group 5K also fails** → confirms the per-group selection mode is the root cause, not the additional training data.
+
+### Recommendations for Retraining
+
+**Option A: Keep global pretraining (Recommended)**
+
+The global 5K scores already work well for all RQs. To improve, retrain with **global selection on 50K images**:
+
+```bash
+python wisdom_yolo_train.py \
+  --weights weights/yolo11n.pt \
+  --img-dir standalone/data/coco/images/train2017 \
+  --num-images 50000 --batch-size 4 --top-m 21 --imgsz 320 \
+  --selection-mode global \
+  --out-csv neuron_eval_out/wisdom_yolo11n_scores_global_50k.csv \
+  --device cuda:0
+```
+
+This gives the benefit of more training data (10× → more stable consensus) without changing the neuron selection dynamics. Expected: RQ1 stays strong, RQ2 ratio may improve due to more refined importance scores.
+
+**Option B: Hybrid pretraining**
+
+Use global selection but with a weighted vote scheme that gives middle/late neurons a mild boost (e.g., 1.5× weight) without completely overriding the global ranking:
+
+- Modify `wisdom_train.py` to add a `--group-weight` parameter
+- Early: 1.0×, Middle: 1.5×, Late: 1.5×
+- This partially corrects the early-bias while preserving the neurons' natural discrimination properties
+
+**Option C: Per-group pretraining with nc=5+ compensation**
+
+If per-group pretraining is required, increase `n-clusters` to 5+ to create a larger combinatorial space (5^3 = 125 combos/layer) that doesn't saturate as quickly with the more homogeneous neurons. This was not tested but is theoretically sound.
+
+### Summary
+
+| RQ | Global 5K | Per-Group 50K | Better? |
+|----|-----------|---------------|---------|
+| RQ1 | ✅ Good | ✅ **Better** | NEW |
+| RQ2 | ✅ 1.124 | ⚠️ 0.983 | OLD |
+| RQ3 | ✅ Monotonic | ✅ **Stronger** Δ\_late | NEW |
+| RQ4 | ⚠️ Confounded | ⚠️ Over-saturated | Neither |
+
+**Verdict**: Per-group pretraining identifies more critical neurons (RQ1 ✅) and detects adversarial attacks better (RQ3 ✅), but those neurons have homogeneous activations that undermine the RQ2 coverage discrimination. **Stick with global pretraining** for the full pipeline, or retrain global with 50K images for the best of both worlds.
