@@ -24,34 +24,67 @@ Key improvements over the original RQ scripts:
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import torch
 import torch.nn as nn
 import numpy as np
 
+logger = logging.getLogger("wisdom_opt")
+
 
 # ── Layer grouping ──────────────────────────────────────────────────
 # YOLO11n backbone layers numbered model.0 … model.22
-# We split by depth index:
+# Default 3-group split:
 #   early  = model.0 – model.5   (low-level: edges, colours, textures)
 #   middle = model.6 – model.12  (mid-level: parts, motifs)
 #   late   = model.13 – model.22 (high-level: objects, context, neck)
 
-# For YOLOb11n so far
+_GROUP_PRESETS: Dict[int, Dict[str, Tuple[int, int]]] = {
+    2: {"front": (0, 11), "back": (12, 22)},
+    3: {"early": (0, 5), "middle": (6, 12), "late": (13, 22)},
+    4: {"early": (0, 4), "mid_early": (5, 9), "mid_late": (10, 15), "late": (16, 22)},
+    5: {"early": (0, 3), "mid_early": (4, 7), "middle": (8, 12), "mid_late": (13, 17), "late": (18, 22)},
+}
+
+_ACTIVE_GROUPS: Dict[str, Tuple[int, int]] = dict(_GROUP_PRESETS[3])
+
+
+def set_n_groups(n: int) -> None:
+    """Switch the layer-grouping scheme. *n* must be 2, 3, 4 or 5."""
+    global _ACTIVE_GROUPS
+    if n not in _GROUP_PRESETS:
+        raise ValueError(f"n_groups must be one of {sorted(_GROUP_PRESETS)}, got {n}")
+    _ACTIVE_GROUPS = dict(_GROUP_PRESETS[n])
+
+
+def set_custom_groups(groups: Dict[str, Tuple[int, int]]) -> None:
+    """Set custom (asymmetric) layer group boundaries.
+
+    *groups* maps group name → (lo_model_idx, hi_model_idx) inclusive.
+    Example: ``{"early": (0, 3), "middle": (4, 15), "late": (16, 22)}``
+    """
+    global _ACTIVE_GROUPS
+    _ACTIVE_GROUPS = dict(groups)
+
+
+def get_group_names() -> Tuple[str, ...]:
+    """Return the currently active group names in order."""
+    return tuple(_ACTIVE_GROUPS.keys())
+
+
 def _layer_group(layer_name: str) -> str:
-    """Return 'early', 'middle', 'late' based on the model.X index."""
+    """Return the group name for *layer_name* based on its model.X index."""
     import re
     m = re.search(r"model\.(\d+)", layer_name)
     if m is None:
-        return "late"
+        return list(_ACTIVE_GROUPS.keys())[-1]
     idx = int(m.group(1))
-    if idx <= 5:
-        return "early"
-    elif idx <= 12:
-        return "middle"
-    else:
-        return "late"
+    for gname, (lo, hi) in _ACTIVE_GROUPS.items():
+        if lo <= idx <= hi:
+            return gname
+    return list(_ACTIVE_GROUPS.keys())[-1]
 
 
 def load_top_neurons(
@@ -114,7 +147,7 @@ def load_groupwise_top_neurons(
     Returns {raw_layer_name: [neuron_indices]}.
     """
     df = pd.read_csv(csv_path)
-    grouped: Dict[str, list] = {"early": [], "middle": [], "late": []}
+    grouped: Dict[str, list] = {g: [] for g in get_group_names()}
 
     for _, row in df.iterrows():
         lname = row["LayerName"]
@@ -125,12 +158,168 @@ def load_groupwise_top_neurons(
             grouped[grp].append((raw, int(row["NeuronIndex"]), score))
 
     neurons: Dict[str, List[int]] = {}
-    for g in ("early", "middle", "late"):
+    for g in get_group_names():
         top = sorted(grouped[g], key=lambda x: x[2], reverse=True)[:per_group_k]
         for lname, idx, _ in top:
             neurons.setdefault(lname, []).append(idx)
 
     return {l: sorted(idxs) for l, idxs in neurons.items()}
+
+
+def score_layers(
+    csv_path: str,
+    method: str = "mean_positive",
+    strip_prefix: str = "yolo_model.",
+) -> List[Tuple[str, float, int, int]]:
+    """
+    Score each layer by aggregate neuron importance.
+
+    Returns sorted list of (layer_name, score, n_positive, n_total)
+    in descending order of *score*.
+
+    *method* controls the aggregation:
+      - ``"mean_positive"``: mean of neuron scores where Score > 0
+      - ``"sum"``: sum of all neuron scores
+      - ``"max"``: max neuron score in the layer
+    """
+    df = pd.read_csv(csv_path)
+    results: List[Tuple[str, float, int, int]] = []
+    for lname, grp in df.groupby("LayerName"):
+        raw = lname.replace(strip_prefix, "") if strip_prefix else lname
+        scores = grp["Score"].values
+        positives = scores[scores > 0]
+        n_total = len(scores)
+        n_pos = len(positives)
+        if n_pos == 0:
+            results.append((raw, 0.0, 0, n_total))
+            continue
+        if method == "mean_positive":
+            agg = float(positives.mean())
+        elif method == "sum":
+            agg = float(scores.sum())
+        elif method == "max":
+            agg = float(scores.max())
+        else:
+            raise ValueError(f"Unknown layer scoring method: {method}")
+        results.append((raw, agg, n_pos, n_total))
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
+
+
+def load_important_layer_neurons(
+    csv_path: str,
+    top_layers: int = 10,
+    per_layer_k: int = 5,
+    layer_score_method: str = "mean_positive",
+    strip_prefix: str = "yolo_model.",
+) -> Dict[str, List[int]]:
+    """
+    Two-stage neuron selection: important layers first, then top neurons.
+
+    Stage 1: Score all layers by aggregate neuron importance, keep top-L.
+    Stage 2: From each selected layer, pick top-k neurons by score.
+
+    This concentrates monitoring on the layers where WISDOM importance
+    is highest, avoiding thin coverage spread across unimportant layers.
+    """
+    ranked = score_layers(csv_path, method=layer_score_method,
+                          strip_prefix=strip_prefix)
+
+    # Filter to layers with at least 1 positive-score neuron, take top-L
+    ranked_pos = [(l, s, np_, nt) for l, s, np_, nt in ranked if s > 0]
+    selected = ranked_pos[:top_layers]
+    selected_names = {l for l, _, _, _ in selected}
+
+    logger.info("")
+    logger.info("  ╔══════════════════════════════════════════════════════╗")
+    logger.info("  ║     LAYER IMPORTANCE SELECTION                      ║")
+    logger.info("  ║  Method: %-15s  Top-L: %-3d  k: %-3d     ║",
+                layer_score_method, top_layers, per_layer_k)
+    logger.info("  ╠══════════════════════════════════════════════════════╣")
+    logger.info("  ║  Rank  Layer                           Score  #pos  ║")
+    for i, (l, s, np_, nt) in enumerate(ranked_pos[:top_layers + 5]):
+        marker = " ✓" if l in selected_names else "  "
+        logger.info("  ║  %3d%s %-35s %8.1f %3d/%-3d ║",
+                     i + 1, marker, l[:35], s, np_, nt)
+    n_skipped = len(ranked) - len(ranked_pos)
+    if n_skipped > 0:
+        logger.info("  ║  ... %d layers with zero score (skipped)          ║",
+                     n_skipped)
+    logger.info("  ╚══════════════════════════════════════════════════════╝")
+
+    # Stage 2: top-k neurons per selected layer
+    df = pd.read_csv(csv_path)
+    neurons: Dict[str, List[int]] = {}
+    for lname, grp in df.groupby("LayerName"):
+        raw = lname.replace(strip_prefix, "") if strip_prefix else lname
+        if raw not in selected_names:
+            continue
+        top = grp.nlargest(per_layer_k, "Score")
+        top = top[top["Score"] > 0]
+        if len(top) > 0:
+            neurons[raw] = sorted(top["NeuronIndex"].tolist())
+
+    total = sum(len(v) for v in neurons.values())
+    logger.info("  Selected %d neurons across %d layers (from %d total layers)",
+                total, len(neurons), len(ranked))
+    return neurons
+
+
+def load_hybrid_layer_neurons(
+    layer_csv: str,
+    neuron_csv: str,
+    top_layers: int = 10,
+    per_layer_k: int = 5,
+    layer_score_method: str = "mean_positive",
+    strip_prefix: str = "yolo_model.",
+) -> Dict[str, List[int]]:
+    """
+    Hybrid two-stage selection: rank layers from one CSV, pick neurons from another.
+
+    Stage 1: Score layers using *layer_csv* (e.g. WISDOM consensus scores).
+    Stage 2: Pick top-k neurons per selected layer using *neuron_csv* (e.g. lgxa).
+
+    This combines WISDOM's layer-level judgment (consensus voting captures
+    which layers are structurally important) with lgxa's neuron-level ranking
+    (faster, potentially better within-layer discrimination).
+    """
+    ranked = score_layers(layer_csv, method=layer_score_method,
+                          strip_prefix=strip_prefix)
+    ranked_pos = [(l, s, np_, nt) for l, s, np_, nt in ranked if s > 0]
+    selected = ranked_pos[:top_layers]
+    selected_names = {l for l, _, _, _ in selected}
+
+    logger.info("")
+    logger.info("  ╔══════════════════════════════════════════════════════╗")
+    logger.info("  ║     HYBRID LAYER+NEURON SELECTION                   ║")
+    logger.info("  ║  Layer scoring: %-15s (from layer CSV)   ║", layer_score_method)
+    logger.info("  ║  Neuron scoring: from neuron CSV                    ║")
+    logger.info("  ║  Top-L: %-3d   k: %-3d                               ║",
+                top_layers, per_layer_k)
+    logger.info("  ╠══════════════════════════════════════════════════════╣")
+    logger.info("  ║  Rank  Layer                           Score  #pos  ║")
+    for i, (l, s, np_, nt) in enumerate(ranked_pos[:top_layers + 5]):
+        marker = " ✓" if l in selected_names else "  "
+        logger.info("  ║  %3d%s %-35s %8.1f %3d/%-3d ║",
+                     i + 1, marker, l[:35], s, np_, nt)
+    logger.info("  ╚══════════════════════════════════════════════════════╝")
+
+    # Stage 2: top-k neurons from neuron_csv within selected layers
+    df = pd.read_csv(neuron_csv)
+    neurons: Dict[str, List[int]] = {}
+    for lname, grp in df.groupby("LayerName"):
+        raw = lname.replace(strip_prefix, "") if strip_prefix else lname
+        if raw not in selected_names:
+            continue
+        top = grp.nlargest(per_layer_k, "Score")
+        top = top[top["Score"] > 0]
+        if len(top) > 0:
+            neurons[raw] = sorted(top["NeuronIndex"].tolist())
+
+    total = sum(len(v) for v in neurons.values())
+    logger.info("  Selected %d neurons across %d layers (from %d total layers)",
+                total, len(neurons), len(ranked))
+    return neurons
 
 
 # ── Activation collection ───────────────────────────────────────────
@@ -234,8 +423,9 @@ def compute_stratified_coverage(
     Returns dict with keys: 'early', 'middle', 'late', 'overall',
     'variability' (std across groups).
     """
-    group_active: Dict[str, int] = {"early": 0, "middle": 0, "late": 0}
-    group_total: Dict[str, int] = {"early": 0, "middle": 0, "late": 0}
+    gnames = get_group_names()
+    group_active: Dict[str, int] = {g: 0 for g in gnames}
+    group_total: Dict[str, int] = {g: 0 for g in gnames}
 
     for layer_name in target_neurons:
         if layer_name not in activations:
@@ -254,7 +444,7 @@ def compute_stratified_coverage(
         group_total[grp] += total
 
     coverages = {}
-    for g in ("early", "middle", "late"):
+    for g in gnames:
         if group_total[g] > 0:
             coverages[g] = group_active[g] / group_total[g]
         else:
@@ -264,7 +454,7 @@ def compute_stratified_coverage(
     total_neurons = sum(group_total.values())
     coverages["overall"] = total_active / max(total_neurons, 1)
 
-    grp_vals = [coverages[g] for g in ("early", "middle", "late") if group_total[g] > 0]
+    grp_vals = [coverages[g] for g in gnames if group_total[g] > 0]
     coverages["variability"] = float(np.std(grp_vals)) if len(grp_vals) > 1 else 0.0
 
     return coverages
@@ -281,7 +471,8 @@ def compute_magnitude_change(
     Unlike threshold-based coverage, this measures HOW MUCH activations
     shift, capturing subtle changes that don't cross a binary threshold.
     """
-    group_change: Dict[str, list] = {"early": [], "middle": [], "late": []}
+    gnames = get_group_names()
+    group_change: Dict[str, list] = {g: [] for g in gnames}
 
     for layer_name in target_neurons:
         if layer_name not in acts_clean or layer_name not in acts_perturbed:
@@ -297,11 +488,11 @@ def compute_magnitude_change(
         group_change[grp].extend(rel_change.tolist())
 
     result = {}
-    for g in ("early", "middle", "late"):
+    for g in gnames:
         result[g] = float(np.mean(group_change[g])) if group_change[g] else 0.0
     all_vals = sum(group_change.values(), [])
     result["overall"] = float(np.mean(all_vals)) if all_vals else 0.0
-    grp_vals = [result[g] for g in ("early", "middle", "late") if group_change[g]]
+    grp_vals = [result[g] for g in gnames if group_change[g]]
     result["variability"] = float(np.std(grp_vals)) if len(grp_vals) > 1 else 0.0
     return result
 
@@ -499,14 +690,15 @@ class ClusterCoverageComputer:
             else:
                 layer_covs[lname] = 0.0
 
-        group_covs: Dict[str, list] = {"early": [], "middle": [], "late": []}
+        gnames = get_group_names()
+        group_covs: Dict[str, list] = {g: [] for g in gnames}
         for lname, cov in layer_covs.items():
             grp = _layer_group(lname)
             group_covs[grp].append(cov)
 
         coverages: Dict[str, float] = {}
         all_covs = []
-        for g in ("early", "middle", "late"):
+        for g in gnames:
             if group_covs[g]:
                 coverages[g] = float(np.mean(group_covs[g]))
                 all_covs.extend(group_covs[g])
@@ -514,7 +706,7 @@ class ClusterCoverageComputer:
                 coverages[g] = 0.0
 
         coverages["overall"] = float(np.mean(all_covs)) if all_covs else 0.0
-        grp_vals = [coverages[g] for g in ("early", "middle", "late") if coverages[g] > 0]
+        grp_vals = [coverages[g] for g in gnames if coverages[g] > 0]
         coverages["variability"] = float(np.std(grp_vals)) if len(grp_vals) > 1 else 0.0
         return coverages
 
@@ -532,8 +724,10 @@ class ClusterCoverageComputer:
         """
         from wisdom.core.compute import combinations_coverage
 
+        gnames = get_group_names()
+
         # Partition neuron keys by group
-        group_keys: Dict[str, List[str]] = {"early": [], "middle": [], "late": []}
+        group_keys: Dict[str, List[str]] = {g: [] for g in gnames}
         all_keys_flat: Dict[str, str] = {}  # "layer:idx" -> group
         for lname in self.target_neurons:
             grp = _layer_group(lname)
@@ -550,12 +744,11 @@ class ClusterCoverageComputer:
                 break
 
         # Build per-group merged assignments
-        # Each element is a dict {neuron_key: cluster_id} across all layers in group
         group_assignments: Dict[str, List[Dict[str, int]]] = {
-            g: [] for g in ("early", "middle", "late")
+            g: [] for g in gnames
         }
         group_sizes: Dict[str, Dict[str, int]] = {
-            g: {} for g in ("early", "middle", "late")
+            g: {} for g in gnames
         }
 
         # Collect sizes
@@ -569,7 +762,7 @@ class ClusterCoverageComputer:
         # Merge assignments across layers within each group
         for img_i in range(n_images):
             merged: Dict[str, Dict[str, int]] = {
-                g: {} for g in ("early", "middle", "late")
+                g: {} for g in gnames
             }
             for lname in self.target_neurons:
                 grp = _layer_group(lname)
@@ -578,12 +771,12 @@ class ClusterCoverageComputer:
                     for key, cid in per_layer_dict.items():
                         if key in all_keys_flat:
                             merged[grp][key] = cid
-            for g in ("early", "middle", "late"):
+            for g in gnames:
                 group_assignments[g].append(merged[g])
 
         coverages: Dict[str, float] = {}
         all_covs = []
-        for g in ("early", "middle", "late"):
+        for g in gnames:
             if group_assignments[g] and group_sizes[g]:
                 r, t, _ = combinations_coverage(
                     group_assignments[g], group_sizes[g]
@@ -594,7 +787,7 @@ class ClusterCoverageComputer:
                 coverages[g] = 0.0
 
         coverages["overall"] = float(np.mean(all_covs)) if all_covs else 0.0
-        grp_vals = [coverages[g] for g in ("early", "middle", "late") if coverages[g] > 0]
+        grp_vals = [coverages[g] for g in gnames if coverages[g] > 0]
         coverages["variability"] = float(np.std(grp_vals)) if len(grp_vals) > 1 else 0.0
         return coverages
 
@@ -625,7 +818,7 @@ class ClusterCoverageComputer:
         cov_clean = self.coverage(clean_images, batch_size)
         cov_pert = self.coverage(perturbed_images, batch_size)
         delta = {}
-        for k in ("early", "middle", "late", "overall", "variability"):
+        for k in list(get_group_names()) + ["overall", "variability"]:
             delta[f"clean_{k}"] = cov_clean[k]
             delta[f"pert_{k}"] = cov_pert[k]
             delta[f"delta_{k}"] = abs(cov_pert[k] - cov_clean[k])
@@ -675,8 +868,9 @@ class UnionCoverageTracker:
 
     def coverage(self) -> Dict[str, float]:
         """Compute stratified union coverage from accumulated max activations."""
-        group_active: Dict[str, int] = {"early": 0, "middle": 0, "late": 0}
-        group_total: Dict[str, int] = {"early": 0, "middle": 0, "late": 0}
+        gnames = get_group_names()
+        group_active: Dict[str, int] = {g: 0 for g in gnames}
+        group_total: Dict[str, int] = {g: 0 for g in gnames}
         for l in self.target_neurons:
             thr = self.thresholds.get(l, torch.zeros(len(self.target_neurons[l])))
             active = (self.max_acts[l] > thr).sum().item()
@@ -685,10 +879,10 @@ class UnionCoverageTracker:
             group_active[grp] += active
             group_total[grp] += total
         result: Dict[str, float] = {}
-        for g in ("early", "middle", "late"):
+        for g in gnames:
             result[g] = group_active[g] / max(group_total[g], 1)
         result["overall"] = sum(group_active.values()) / max(sum(group_total.values()), 1)
-        grp_vals = [result[g] for g in ("early", "middle", "late") if group_total[g] > 0]
+        grp_vals = [result[g] for g in gnames if group_total[g] > 0]
         result["variability"] = float(np.std(grp_vals)) if len(grp_vals) > 1 else 0.0
         return result
 
@@ -763,3 +957,296 @@ class ClusterUnionTracker:
         for l in self.comp.target_neurons:
             self.layer_assignments[l] = []
             self.layer_sizes[l] = {}
+
+
+# ── Verbose logging helpers ─────────────────────────────────────────
+
+def _build_group_combo_sets(
+    tracker: ClusterUnionTracker,
+) -> Dict[str, dict]:
+    """Build per-group combo sets from a tracker's layer assignments.
+
+    Merges neuron assignments across layers within each group
+    (early/middle/late), mirroring _coverage_per_group logic.
+
+    Returns {group_name: {"seen_set": set, "total": int, "n_neurons": int,
+                          "neuron_keys": list}}.
+    """
+    comp = tracker.comp
+    gnames = get_group_names()
+
+    # Partition neuron keys by group
+    group_keys: Dict[str, List[str]] = {g: [] for g in gnames}
+    all_keys_flat: Dict[str, str] = {}
+    for lname in comp.target_neurons:
+        grp = _layer_group(lname)
+        for idx in comp.target_neurons[lname]:
+            key = f"{lname}:{idx}"
+            group_keys[grp].append(key)
+            all_keys_flat[key] = grp
+
+    # Determine number of images
+    n_images = 0
+    for lname in tracker.layer_assignments:
+        if tracker.layer_assignments[lname]:
+            n_images = len(tracker.layer_assignments[lname])
+            break
+
+    # Collect sizes per group
+    group_sizes: Dict[str, Dict[str, int]] = {g: {} for g in gnames}
+    for lname in tracker.layer_sizes:
+        grp = _layer_group(lname)
+        for key, sz in tracker.layer_sizes[lname].items():
+            nkey_grp = all_keys_flat.get(key)
+            if nkey_grp:
+                group_sizes[nkey_grp][key] = sz
+
+    # Build merged assignments per group (same logic as _coverage_per_group)
+    result: Dict[str, dict] = {}
+    for g in gnames:
+        if not group_sizes[g]:
+            result[g] = {"seen_set": set(), "total": 0,
+                         "n_neurons": 0, "neuron_keys": []}
+            continue
+
+        keys_sorted = sorted(group_sizes[g].keys())
+        total_possible = 1
+        for k in keys_sorted:
+            total_possible *= int(group_sizes[g][k])
+
+        seen = set()
+        for img_i in range(n_images):
+            merged: Dict[str, int] = {}
+            for lname in comp.target_neurons:
+                if _layer_group(lname) != g:
+                    continue
+                if img_i < len(tracker.layer_assignments.get(lname, [])):
+                    per_layer_dict = tracker.layer_assignments[lname][img_i]
+                    for key, cid in per_layer_dict.items():
+                        if key in all_keys_flat:
+                            merged[key] = cid
+            tup = tuple(merged.get(k, -1) for k in keys_sorted)
+            if -1 not in tup:
+                seen.add(tup)
+
+        result[g] = {
+            "seen_set": seen,
+            "total": total_possible,
+            "n_neurons": len(group_keys[g]),
+            "neuron_keys": group_keys[g],
+        }
+
+    return result
+
+
+def verbose_coverage_breakdown(
+    tracker: ClusterUnionTracker,
+    label: str = "U_O",
+) -> Dict[str, dict]:
+    """Log per-layer (or per-group) combo counts for a single tracker.
+
+    Automatically detects per-layer vs per-group mode from
+    tracker.comp.combo_mode.
+
+    Returns dict of {unit_name: {seen, total, ratio}} for further analysis.
+    """
+    from wisdom.core.compute import combinations_coverage
+
+    combo_mode = getattr(tracker.comp, "combo_mode", "per-layer")
+
+    if combo_mode == "per-group":
+        # ── Per-group: merge neurons across layers within each group
+        group_data = _build_group_combo_sets(tracker)
+        details: Dict[str, dict] = {}
+        for g in get_group_names():
+            gd = group_data[g]
+            if gd["total"] > 0:
+                seen = len(gd["seen_set"])
+                ratio = seen / gd["total"]
+                details[g] = {"seen": seen, "total": gd["total"],
+                              "ratio": ratio, "n_neurons": gd["n_neurons"]}
+                neuron_list = ", ".join(gd["neuron_keys"])
+                logger.info(
+                    f"  [{label}] group={g}: {seen}/{gd['total']} combos "
+                    f"({ratio:.4f}) | n_neurons={gd['n_neurons']} "
+                    f"[{neuron_list}]"
+                )
+            else:
+                details[g] = {"seen": 0, "total": 0, "ratio": 0.0,
+                              "n_neurons": 0}
+        active = [d for d in details.values() if d["total"] > 0]
+        overall = np.mean([d["ratio"] for d in active]) if active else 0.0
+        logger.info(
+            f"  [{label}] Overall: {overall:.6f} "
+            f"(mean of {len(active)} groups)"
+        )
+        return details
+
+    # ── Per-layer (original behavior)
+    details = {}
+    for lname in tracker.comp.target_neurons:
+        assigns = tracker.layer_assignments.get(lname, [])
+        sizes = tracker.layer_sizes.get(lname, {})
+        if assigns and sizes:
+            r, total, _ = combinations_coverage(assigns, sizes)
+            seen = int(round(r * total))
+            details[lname] = {"seen": seen, "total": total, "ratio": r}
+            logger.info(
+                f"  [{label}] {lname}: {seen}/{total} combos "
+                f"({r:.4f})"
+            )
+        else:
+            details[lname] = {"seen": 0, "total": 0, "ratio": 0.0}
+    overall = np.mean([d["ratio"] for d in details.values() if d["total"] > 0])
+    logger.info(
+        f"  [{label}] Overall: {overall:.6f} "
+        f"(mean of {sum(1 for d in details.values() if d['total'] > 0)} layers)"
+    )
+    return details
+
+
+def verbose_union_diff(
+    baseline: ClusterUnionTracker,
+    variant: ClusterUnionTracker,
+    label: str = "D_I",
+) -> Dict[str, dict]:
+    """Log per-layer or per-group combo diff between baseline and variant.
+
+    Automatically detects per-layer vs per-group mode.
+    Shows: baseline_seen, union_seen, new_from_variant, total_possible.
+    """
+    from wisdom.core.compute import combinations_coverage
+
+    combo_mode = getattr(baseline.comp, "combo_mode", "per-layer")
+
+    if combo_mode == "per-group":
+        # ── Per-group diff
+        base_data = _build_group_combo_sets(baseline)
+        var_data = _build_group_combo_sets(variant)
+        details: Dict[str, dict] = {}
+        total_new = 0
+        for g in get_group_names():
+            bd = base_data[g]
+            vd = var_data[g]
+            if bd["total"] == 0:
+                details[g] = {"base_seen": 0, "union_seen": 0, "new": 0,
+                              "total": 0, "base_ratio": 0.0,
+                              "union_ratio": 0.0}
+                continue
+            base_set = bd["seen_set"]
+            var_set = vd["seen_set"]
+            union_set = base_set | var_set
+            new_combos = var_set - base_set
+            base_ratio = len(base_set) / bd["total"]
+            union_ratio = len(union_set) / bd["total"]
+            details[g] = {
+                "base_seen": len(base_set),
+                "union_seen": len(union_set),
+                "new": len(new_combos),
+                "total": bd["total"],
+                "base_ratio": base_ratio,
+                "union_ratio": union_ratio,
+                "n_neurons": bd["n_neurons"],
+            }
+            total_new += len(new_combos)
+            sat = " [SATURATED]" if base_ratio > 0.85 else ""
+            neuron_list = ", ".join(bd["neuron_keys"])
+            logger.info(
+                f"  [{label}] group={g}: base={len(base_set)}, "
+                f"union={len(union_set)}, new={len(new_combos)}, "
+                f"total={bd['total']} "
+                f"({base_ratio:.4f} → {union_ratio:.4f}){sat}\n"
+                f"           neurons: [{neuron_list}]"
+            )
+        active = [d for d in details.values() if d["total"] > 0]
+        overall_base = np.mean([d["base_ratio"] for d in active]) if active else 0.0
+        overall_union = np.mean([d["union_ratio"] for d in active]) if active else 0.0
+        logger.info(
+            f"  [{label}] Summary: {len(active)} groups | "
+            f"total_new_combos={total_new} | "
+            f"coverage: {overall_base:.4f} → {overall_union:.4f} "
+            f"(Δ={overall_union - overall_base:+.6f})"
+        )
+        return details
+
+    # ── Per-layer diff (original behavior)
+    details = {}
+    total_new = 0
+    total_base_seen = 0
+    saturated_layers = []
+    variant_wins = 0
+    no_change = 0
+
+    for lname in baseline.comp.target_neurons:
+        b_assigns = baseline.layer_assignments.get(lname, [])
+        b_sizes = baseline.layer_sizes.get(lname, {})
+        v_assigns = variant.layer_assignments.get(lname, [])
+        v_sizes = variant.layer_sizes.get(lname, {})
+
+        if not (b_assigns and b_sizes):
+            details[lname] = {"base_seen": 0, "union_seen": 0, "new": 0,
+                              "total": 0, "base_ratio": 0.0, "union_ratio": 0.0}
+            continue
+
+        keys = sorted(b_sizes.keys())
+        total_possible = 1
+        for k in keys:
+            total_possible *= int(b_sizes[k])
+
+        base_set = set()
+        for a in b_assigns:
+            tup = tuple(a.get(k, -1) for k in keys)
+            if -1 not in tup:
+                base_set.add(tup)
+
+        v_set = set()
+        for a in v_assigns:
+            tup = tuple(a.get(k, -1) for k in keys)
+            if -1 not in tup:
+                v_set.add(tup)
+
+        union_set = base_set | v_set
+        new_combos = v_set - base_set
+
+        base_ratio = len(base_set) / total_possible if total_possible > 0 else 0.0
+        union_ratio = len(union_set) / total_possible if total_possible > 0 else 0.0
+
+        details[lname] = {
+            "base_seen": len(base_set),
+            "union_seen": len(union_set),
+            "new": len(new_combos),
+            "total": total_possible,
+            "base_ratio": base_ratio,
+            "union_ratio": union_ratio,
+        }
+
+        total_new += len(new_combos)
+        total_base_seen += len(base_set)
+        if base_ratio > 0.85:
+            saturated_layers.append(lname)
+        if len(new_combos) > 0:
+            variant_wins += 1
+        else:
+            no_change += 1
+
+        logger.info(
+            f"  [{label}] {lname}: base={len(base_set)}, "
+            f"union={len(union_set)}, new={len(new_combos)}, "
+            f"total={total_possible} "
+            f"({base_ratio:.4f} → {union_ratio:.4f})"
+            f"{' [SATURATED]' if base_ratio > 0.85 else ''}"
+        )
+
+    n_active = sum(1 for d in details.values() if d["total"] > 0)
+    overall_base = np.mean([d["base_ratio"] for d in details.values() if d["total"] > 0])
+    overall_union = np.mean([d["union_ratio"] for d in details.values() if d["total"] > 0])
+    logger.info(
+        f"  [{label}] Summary: {n_active} layers | "
+        f"total_new_combos={total_new} | "
+        f"layers_with_new={variant_wins}/{n_active} | "
+        f"no_change={no_change} | "
+        f"saturated={len(saturated_layers)} | "
+        f"coverage: {overall_base:.4f} → {overall_union:.4f} "
+        f"(Δ={overall_union - overall_base:+.6f})"
+    )
+    return details
