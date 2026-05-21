@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wisdom"
+version = "0.1.0"
+description = "WISDOM: importance-driven DNN testing with clean core, YOLO, and legacy compatibility flows."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Shenghao Qiu" }]
+license = { text = "Apache-2.0" }
+dependencies = [
+    "torch>=2.6,<2.9",
+    "torchvision>=0.16",
+    "numpy>=1.24",
+    "pandas",
+    "matplotlib",
+    "scikit-learn",
+    "scipy",
+    "pytest",
+    "setuptools",
+    "tqdm",
+    "captum",
+    "onnx",
+    "pyyaml",
+    "opencv-python",
+    "ultralytics",
+    "seaborn",
+    "torchattacks",
+    "pyflann-py3",
+    "torch-fidelity",
+    "torchmetrics",
+    "botorch",
+]
+
+[project.urls]
+Homepage = "https://github.com/JoshuaQSH/Wisdom"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wisdom*", "run_cases*"]

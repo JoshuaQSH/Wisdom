@@ -1,0 +1,34 @@
+"""Tests for run_rq4.py – correlation evaluation."""
+import os
+import tempfile
+import pytest
+
+WEIGHTS = os.path.join(os.path.dirname(__file__), "..", "weights", "yolo11n.pt")
+COCO_VAL = os.path.join(os.path.dirname(__file__), "..", "standalone", "data", "coco", "images", "val2017")
+SCORES_CSV = os.path.join(os.path.dirname(__file__), "..", "neuron_eval_out", "wisdom_yolo11n_scores.csv")
+
+skip_missing = pytest.mark.skipif(
+    not (os.path.isfile(WEIGHTS) and os.path.isdir(COCO_VAL) and os.path.isfile(SCORES_CSV)),
+    reason="Missing weights, data, or scores CSV",
+)
+
+
+@skip_missing
+def test_rq4_generates_csv():
+    import sys, pathlib, csv
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+    from run_cases.run_rq4 import run_rq4
+
+    device = "cuda:0" if __import__("torch").cuda.is_available() else "cpu"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = os.path.join(tmpdir, "rq4.csv")
+        result = run_rq4(
+            weights=WEIGHTS, img_dir=COCO_VAL, csv_file=SCORES_CSV,
+            out_csv=out, device=device, num_images=10, imgsz=320,
+        )
+        assert os.path.isfile(result)
+        with open(result) as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) > 0
+        assert "Pielou Evenness" in rows[0]
+        assert "WISDOM Coverage" in rows[0]
