@@ -184,7 +184,7 @@ def resolve_saved_model_path(saved_model: str) -> str:
     repo_root = Path(__file__).resolve().parents[2]
     home_env = os.getenv('HOME')
     home = Path(home_env).expanduser() if home_env else None
-    legacy_prefix = '/torch-deepimportance/'
+    legacy_prefix = '/Wisdom/'
     raw_path = Path(saved_model)
 
     candidates = []
@@ -197,7 +197,7 @@ def resolve_saved_model_path(saved_model: str) -> str:
         relative_path = Path(saved_model[len(legacy_prefix):])
         candidates.append(repo_root / relative_path)
         if home is not None:
-            candidates.append(home / 'torch-deepimportance' / relative_path)
+            candidates.append(home / 'Wisdom' / relative_path)
             candidates.append(Path(str(home) + saved_model))
 
     if home is not None and not raw_path.is_absolute():

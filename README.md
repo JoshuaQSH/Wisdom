@@ -1,148 +1,128 @@
-# WISDOM: Torch4DeepImportance and beyond
-
-A pytorch version for Deepimportance (test version). [TensorFlow version for DeepImportance](https://github.com/DeepImportance/deepimportance_code_release/tree/ga_modifications). 
+# WISDOM: Semantically Informed Coverage Testing for Deep Neural Networks
 
 For the paper, please refer [HERE](https://zenodo.org/records/3628024).
 
 ## Prerequest
 
-The Captum version demo is tested and should be fine for further developments. The docker is still pending.
-
-Use `conda` or `pyvenv` to build a virtual environment.
+We recommend using `uv` to create the virtual environment (`.venv`)  and control the Python libraries:
 
 ```shell
-# requriements
-$ pip -r install requirements.txt
-
-# If you are using anaconda or miniconda virtual environment, do:
-$ conda env create -f requirements_venv.yaml
+cd Wisdom
+uv sync
+source .venv/bin/activate
 ```
 
-## How to run
+## `run_cases/smoke.py` flag reference
 
-```shell
-# UC1 - Running IDC test with different attribution methods
-python run.py \
-      --model <model-name> \
-      --saved-model <path-to-the-pretrained-pt-file> \
-      --dataset <dataset-name> \
-      --data-path <path-to-dataset> \
-      --importance-file <path-to-save-importance-file-json> \
-      --device cpu \
-      # --use-silhouette \
-      --n-cluster 2 \ 
-      --top-m-neurons 5 \
-      # --test-image plane \
-      --idc-test-all \
-      --num-samples 1000 \
-      --attr lrp \
-      # --layer-index 1 \
-      --end2end \
-      --all-class \
-      # --class-iters \
-      --log-path './logs/TestLog' \
-      --logging
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--mode` | `score`, `rq2`, `dnn-bo`, `yolo-bo` | required | Select which smoke workflow to run. |
+| `--weights` | path | `weights/yolo11n.pt` | Detection checkpoint for `score`, `rq2`, and `yolo-bo`. |
+| `--img-dir` | path | `standalone/data/coco/images/val2017` | Detection image directory for `score`, `rq2`, and `yolo-bo`. |
+| `--device` | device string | `cuda:0` | Execution device. |
+| `--num-images` | integer | `4` | Number of YOLO images to use in detection smoke modes. |
+| `--batch-size` | integer | `1` | Batch size for the selected smoke run. |
+| `--imgsz` | integer | `320` | YOLO image size for detection smoke modes. |
+| `--out` | path | required | Output path or prefix. Meaning depends on `--mode`. |
+| `--csv-file` | path | empty string | Existing neuron-score CSV. Used by `rq2` and `yolo-bo`; can also point at a DNN score CSV for BO smoke. |
+| `--model-path` | path | repo DNN smoke model | Classification checkpoint used by `dnn-bo`. |
+| `--dataset` | dataset name | `mnist` | Classification dataset for `dnn-bo`. |
+| `--data-path` | path | repo default data root | Classification dataset root for `dnn-bo`. |
+| `--top-m` | integer | `4` | Number of monitored neurons for smoke BO/score flows. |
+| `--build-samples` | integer | `64` | Build subset size for BO smoke modes. |
+| `--eval-samples` | integer | `32` | Evaluation subset size for BO smoke modes. |
+| `--bo-backend` | `auto`, `sklearn`, `botorch` | `auto` | BO backend for `dnn-bo` and `yolo-bo`. |
+| `--bo-init` | integer | `2` | Initial BO evaluations for `dnn-bo` and `yolo-bo`. |
+| `--bo-iter` | integer | `2` | BO optimization iterations for `dnn-bo` and `yolo-bo`. |
 
-# Clustering, choose one
---use-silhouette # dynamic choose the cluster number
---n-cluster N # fixed cluster number
+## `run_wisdom.py` flag reference
 
-# Sampling test images
---num-sample N # Randomly pick N samples
---idc-test-all # Choose all the image in one batch
+### Core mode and input flags
 
-# Testing mode combinations
-# We currently have four modes:
-# 1. End2End with all classes [--end2end, --all-class]
-# 2. End2End with single class [--end2end, --test-image N]
-# 3. Single layer with all classes [--layer-index, --all-class]
-# 4. Single layer with single class [--layer-index, --test-image N]
---end2end       # Activate End2End test
---all-class     # Test all the classes (samples), equal to batch shuffle testing the whole testset
---layer-index N # A specific layer that would like to be tested (works when --end2end is OFF)
---test-image M  # A specific class that would like to be tested (works when --all-class is OFF)
---class-iters   # A class-wise testing following in-ordered class testing (i.e. similar to mode 2 and 4 but will give all the class results)
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--impl` | `wisdom`, `idc` | `wisdom` | Choose the packaged implementation. |
+| `--mode` | `wisdom`, `idc` | hidden alias | Backward-compatible alias for `--impl`. |
+| `--task` | `auto`, `classification`, `detection` | `auto` | Force the task type or let the script infer it from the inputs. |
+| `--model-path` | path | required | Classification `.pth` checkpoint or detection `.pt` weights. |
+| `--dataset` | `mnist`, `cifar10`, `cifar100`, `imagenet` | none | Classification dataset name. |
+| `--data-path` | path | none | Classification dataset root. |
+| `--img-dir` | path | none | Detection image directory. Required for detection runs. |
+| `--csv-file` | path | none | Reuse an existing neuron-score CSV instead of pretraining one. |
+| `--pretrain` | flag | off | Generate a neuron-score CSV before the coverage run. |
+| `--methods` | one or more attribution keys | none | Attribution methods used during pretraining. In `wisdom` mode this can be a consensus set; in `idc` mode it must resolve to a single method. |
+| `--attribution-method` | one attribution key | none | Convenience single-method selector, especially for `idc`. |
+| `--voting-mode` | `fine-grained`, `coarse` | `fine-grained` | WISDOM consensus voting mode for pretraining. |
 
-# Logging
---log-path  '<path>/<name>' # log file path and name: e.g., './logs/TestLog'
---logging                   # Save the log file
+### Runtime, sampling, and selection flags
 
-# UC-1: IDC results with different attribution methods
-## An LeNet Example - CIFAR10 with layer index: 1 - LRP
-python3 run.py \
-      --model lenet \
-      --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
-      --dataset cifar10 \
-      --data-path './dataset/' \
-      --use-silhouette \
-      --device cpu \
-      --n-cluster 2 \
-      --top-m-neurons 5 \
-      --test-image plane \
-      --idc-test-all \
-      --num-samples 0  \
-      --attr lrp \
-      --layer-index 1 \
-      --log-path './logs/TestLog' \
-      --logging
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--device` | device string | auto | Execution device. |
+| `--batch-size` | integer | `16` | Batch size for build, eval, and optional pretraining. |
+| `--build-samples` | integer | full dataset | Optional build-data subset size. Omit for the full build dataset. |
+| `--eval-samples` | integer | full dataset | Optional evaluation subset size. Omit for the full evaluation dataset. |
+| `--top-m-neurons` | integer | `10` | Number of monitored neurons used by the run. |
+| `--per-group [N]` | integer, optional value | `3` when flag is present without a value | Average coverage across `N` contiguous layer groups. |
+| `--per-layer` | flag | off | Average coverage across layers, selecting top-k neurons separately per layer. |
+| `--seed` | integer | `42` | Random seed for clustering and subset workflows. |
+| `--imgsz` | integer | `640` | Detection image size. |
+| `--noise-std` | float | `0.3` | Gaussian noise standard deviation used by `--plot-pixels` perturbation diagnostics. |
+| `--pixel-frac` | float | `0.02` | Fraction of important pixels perturbed for `--plot-pixels` diagnostics. |
 
-## An LeNet end2end example - CIFAR10 - LRP
-python3 run.py \
-      --model lenet \
-      --saved-model '/torch-deepimportance/models_info/saved_models/lenet_CIFAR10_whole.pth' \
-      --dataset cifar10 \
-      --data-path './dataset/' \
-      --device cpu \
-      --n-cluster 2 \
-      --top-m-neurons 10 \
-      --end2end \
-      --all-class \
-      --idc-test-all \
-      --num-samples 0  \
-      --attr lrp \
-      --log-path './logs/TestLog' \
-      --logging
+### Clustering and BO flags
 
-# UC-2: WISDOM data for specific model
-## Example: LeNet - MNIST - top/6
-python3 prepare_data.py \
-        --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' \
-        --dataset mnist \
-        --batch-size 32 \
-        --end2end \
-        --model lenet \
-        --device 'cuda:0' \
-        --top-m-neurons 6 \
-        --n-clusters 2 \
-        --csv-file lenet_mnist_b32 \
-        --logging \
-        --log-path './logs/PreLeNetMNISTTopNew-6'
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--cluster-method` | clustering method name | `KMeans` | Final clustering backend when BO is not used. |
+| `--n-clusters` | integer | `2` | Final cluster count when BO is not used. |
+| `--cache-path` | path | none | Optional cluster-cache directory. |
+| `--bo` | flag | off | Tune clustering hyperparameters before the final run. |
+| `--bo-backend` | `auto`, `sklearn`, `botorch` | `auto` | BO backend. |
+| `--bo-init` | integer | `3` | Initial BO evaluations. |
+| `--bo-iter` | integer | `3` | BO optimization iterations. |
+| `--bo-cluster-methods` | comma-separated method list | `KMeans,MiniBatchKMeans,Birch` | Discrete BO search space for clustering methods. |
+| `--bo-n-clusters` | comma-separated integer list | `2,3,4` | Discrete BO search space for cluster counts. |
+| `--corr-points` | integer | `5` | Number of suite sizes used for coverage/F1 correlation. |
 
-# Uc - 3
-# Apply the WISDOM 
-python3 run_wisdom.py \
-      --model lenet \
-      --saved-model '/torch-deepimportance/models_info/saved_models/lenet_MNIST_whole.pth' \
-      --dataset mnist \
-      --data-path './dataset/' \
-      --device cpu \
-      --n-cluster 2 \
-      --top-m-neurons 6 \
-      --end2end \
-      --num-samples 0 \
-      --csv-file './saved_files/pre_csv/lenet_mnist_b32.csv' \
-      --idc-test-all 
+### Testing mode, logging, and outputs
 
-```
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--end2end` | flag | on | End-to-end testing for the whole model. |
+| `--all-class` | flag | on | Evaluate the full evaluation set across all classes. |
+| `--class-iters` | flag | off | Iterate by class and compute coverage/F1 correlation across classes. |
+| `--combo-log` | flag | off | Write per-sample activated combinations plus counts. |
+| `--plot-neurons` | flag | off | Save the top-neuron score plot. |
+| `--plot-pixels` | flag | off | Save pixel-importance heatmaps and perturbed-image diffs. |
+| `--out-dir` | path | `results/run_wisdom` | Output directory. |
+| `--run-name` | string | `run_wisdom` | Prefix used for output artifacts. |
 
-### Running script
 
-```shell
-# End2end testing the deepimportance with LeNet-5 in MNIST dataset, with fixed cluster number (=2)
-$ ./script.sh test
+### Classification example
 
-# Run with Use Case N: `./script.sh caseN`, e.g.:
-$ ./script.sh case1
+```bash
+python run_wisdom.py \
+  --impl wisdom \
+  --task classification \
+  --model-path /path/to/lenet_MNIST_whole.pth \
+  --dataset mnist \
+  --data-path /scratch/staff/lrr550/datasets \
+  --csv-file /path/to/lenet_mnist.csv \
+  --device cpu \
+  --batch-size 8 \
+  --build-samples 16 \
+  --eval-samples 8 \
+  --top-m-neurons 4 \
+  --bo \
+  --bo-init 1 \
+  --bo-iter 1 \
+  --voting-mode fine-grained \
+  --all-class \
+  --bo-cluster-methods KMeans,Birch \
+  --bo-n-clusters 2,3 \
+  --out-dir results/run_wisdom_doc \
+  --run-name mnist_doc_smoke
 ```
 
 ## Routes
@@ -156,13 +136,13 @@ $ ./script.sh case1
 
 ## TODO
 
-- [x] [**YOLO**] Implement the [YOLOv8](https://github.com/jahongir7174/YOLOv8-pt/tree/master) (or [YOLOv5](https://github.com/mihir135/yolov5)) in pytorch, with COCO dataset
-- [x] [**CI**] Pytest Running with a small demo (MNIST)
-- [ ] [**CI**] Docker building
-- [ ] [**Lib**] Refine the codes (Now: v0.1 -> v0.2)
-- [ ] [**Lib**] pip package ready
-- [ ] [**IDC**] runtime version + attention
-- [ ] [**YOLO**] YOLO v11
+- [x] Per-group / per-layer testing 
+      - [x] Support YOLOv11
+      - [x] Support YOLOv5
+- [ ] Circuits-based path testing
+      - [ ] Support BERT
+      - [ ] Support LLMs (QWen, LLaMa, DeepSeek, etc.)
+- [ ] Docker building
 
 ## Research Questions
 
@@ -174,19 +154,37 @@ Metrics:
 - Top n in (6, 8, 10, 15, 20) neurons
 - Accuracy drop based on the neurons pruning
 
-How to run
-```shell
-# MODELNAME: [lenet, vgg16, resnet18]
-# DATASET: [mnist, cifar10]
-# Pretrained relevant scores: ./saved_files/pre_csv/<MODELNAME>_<DATASET>.csv
-python run_rq_1_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu  --csv-file /path/to/wisdom/weights/csv
 
-# Or simply run the script we prepared
-./run_rq.sh --rq 1
-
-# Train from scratch
-./run_rq.sh --rq 1 --pretrain 1
+```bash
+python run_cases/run_rq1.py --weights /path/to/yolo11n.pt --img-dir /path/to/coco/images/val2017 --csv-file /path/to/wisdom_yolo11n_scores.csv --out-prefix results/rq1/yolo11n
 ```
+
+Outputs:
+
+- `results/rq1/yolo11n_relevance.csv`
+- `results/rq1/yolo11n_acc_drop.csv`
+- `results/rq1/yolo11n_<model-tag>_acc_drop.pdf`
+
+Flag reference:
+
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--weights` | path | `weights/yolo11n.pt` | Detection checkpoint to evaluate. |
+| `--img-dir` | path | `standalone/data/coco/images/val2017` | Detection image directory. |
+| `--csv-file` | path | `neuron_eval_out/wisdom_yolo11n_scores.csv` | WISDOM neuron-score CSV. |
+| `--out-prefix` | path prefix | `results/rq1_yolo11n` | Output prefix used for CSVs and plots. |
+| `--device` | device string | `cuda:0` | Execution device. |
+| `--num-images` | integer | `50` | Number of labeled images to evaluate. |
+| `--batch-size` | integer | `2` | Batch size for inference and pruning checks. |
+| `--imgsz` | integer | `320` | Detection image size. |
+| `--methods` | one or more attribution keys | empty | Single-method baselines to compare against WISDOM. Requires matching `--single-csv` entries. |
+| `--single-csv` | `method=path` entries | empty | Pretrained single-method CSVs paired with `--methods`. |
+| `--num-runs` | integer | `1` | Number of repeated RQ1 runs. |
+| `--seed` | integer | `42` | Base seed for repeatable subset sampling. |
+| `--sample-mode` | `auto`, `first`, `random` | `auto` | Subset selection strategy. |
+| `--no-random` | flag | off | Disable the shared random pruning baseline. |
+| `--eval-map` | flag | off | Also compute `mAP50` and `mAP50-95` drops with Ultralytics validation. |
+
 
 ### RQ 2: Diversity
 
@@ -201,19 +199,33 @@ Notes:
 - $U_I$: Noise for important pixels
 - $U_R$: Noise for random pixels
 
-How to run
-```shell
-# MODELNAME: [lenet, vgg16, resnet18]
-# DATASET: [mnist, cifar10]
-# Pretrained relevant scores: ./saved_files/pre_csv/<MODELNAME>_<DATASET>.csv
-python run_rq_2_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu  --csv-file /path/to/wisdom/weights/csv --idc-test-all --attr wisdom --top-m-neurons 10 --device 'cuda:0'
 
-# With WISDOM-based pertubation
-./run_rq.sh --rq 2 --wisdom 1
-
-# With LRP-based pertubation
-./run_rq.sh --rq 2 
+```bash
+python run_cases/run_rq2.py \
+  --weights weights/yolo11n.pt \
+  --img-dir /path/to/coco/images/val2017 \
+  --csv-file path/to/wisdom_yolo11n_scores.csv \
+  --out-csv results/rq2/yolo11n_coverage.csv
 ```
+
+Outputs:
+
+- `results/rq2/yolo11n_coverage.csv`
+- a companion log under a sibling `logs/` directory
+
+Flag reference:
+
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--weights` | path | `weights/yolo11n.pt` | Detection checkpoint to evaluate. |
+| `--img-dir` | path | `standalone/data/coco/images/val2017` | Detection image directory. |
+| `--csv-file` | path | `neuron_eval_out/wisdom_yolo11n_scores.csv` | WISDOM neuron-score CSV. |
+| `--out-csv` | path | `results/rq2_yolo11n_coverage.csv` | Output CSV path. |
+| `--device` | device string | `cuda:0` | Execution device. |
+| `--num-images` | integer | `20` | Number of images evaluated. |
+| `--batch-size` | integer | `2` | Batch size. |
+| `--imgsz` | integer | `320` | Detection image size. |
+| `--n-iterations` | integer | `3` | Number of repeated perturbation iterations. |
 
 ### RQ 3: Effectiveness (or sensitivity)
 
@@ -225,16 +237,31 @@ Metrics:
 $NCov(s) = \frac{Cov(s) - Cov(s_0)}{max(\Delta) - min(\Delta)}$ <br>
 $\Delta = \{Cov(s) - Cov(s_0) | s \in S\}$
 
-How to run
-```shell
-# MODELNAME: [lenet, vgg16, resnet18]
-# DATASET: [mnist, cifar10, imagenet]
-# Pretrained relevant scores: ./saved_files/pre_csv/<MODELNAME>_<DATASET>.csv
-python run_rq_3_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu --csv-file /path/to/wisdom/weights/csv --idc-test-all --attr lrp --top-m-neurons 10
-
-# With WISDOM-based pertubation
-./run_rq.sh --rq 3
+```bash
+python run_cases/run_rq3.py \
+  --weights /path/to/yolo11n.pt \
+  --img-dir /path/to/coco/images/val2017 \
+  --csv-file /path/to/wisdom_yolo11n_scores.csv \
+  --out-csv results/rq3/yolo11n_effectiveness.csv
 ```
+
+Outputs:
+
+- `results/rq3/yolo11n_effectiveness.csv`
+- `results/rq3/yolo11n_effectiveness_plot.pdf`
+
+Flag reference:
+
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--weights` | path | `weights/yolo11n.pt` | Detection checkpoint to evaluate. |
+| `--img-dir` | path | `standalone/data/coco/images/val2017` | Detection image directory. |
+| `--csv-file` | path | `neuron_eval_out/wisdom_yolo11n_scores.csv` | WISDOM neuron-score CSV. |
+| `--out-csv` | path | `results/rq3_yolo11n_effectiveness.csv` | Output CSV path. |
+| `--device` | device string | `cuda:0` | Execution device. |
+| `--num-images` | integer | `20` | Number of images evaluated. |
+| `--batch-size` | integer | `2` | Batch size. |
+| `--imgsz` | integer | `320` | Detection image size. |
 
 ### RQ 4: Correlation
 
@@ -251,21 +278,62 @@ Metrics:
 - Output impartiality: $J = \frac{H}{log(k)}$, $J \in [0, 1]$
 - Record Pearson correlation coefficient: $r = \frac{\sum_i(c_i - \bar{c})(p_i - \bar{p})}{\sqrt{(\sum_i(c_i - \bar{c})^2} \sqrt{\sum_i(p_i - \bar{p})^2}}$
 
-How to run
-```shell
-# MODELNAME: [lenet, vgg16, resnet18]
-# DATASET: [mnist, cifar10, imagenet]
-# Pretrained relevant scores: ./saved_files/pre_csv/<MODELNAME>_<DATASET>.csv
-python run_rq_4_demo.py --model MODELNAME --saved-model /path/to/saved/model/pth --dataset DATASET --data-path /path/to/saved/datasets/ --batch-size 32 --device cpu --csv-file /path/to/wisdom/weights/csv --idc-test-all --top-m-neurons 10
-
-# With WISDOM-based pertubation
-./run_rq.sh --rq 4
+```bash
+python run_cases/run_rq4.py \
+  --weights /path/to/yolo11n.pt \
+  --img-dir /path/to/coco/images/val2017 \
+  --csv-file /path/to/wisdom_yolo11n_scores.csv \
+  --out-csv results/rq4/yolo11n_correlation.csv
 ```
+
+Outputs:
+
+- `results/rq4/yolo11n_correlation.csv`
+- a summary log at a sibling `logs/rq4_results.log`
+
+Flag reference:
+
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--weights` | path | `weights/yolo11n.pt` | Detection checkpoint to evaluate. |
+| `--img-dir` | path | `standalone/data/coco/images/val2017` | Detection image directory. |
+| `--csv-file` | path | `neuron_eval_out/wisdom_yolo11n_scores.csv` | WISDOM neuron-score CSV. |
+| `--out-csv` | path | `results/rq4_yolo11n_correlation.csv` | Output CSV path. |
+| `--device` | device string | `cuda:0` | Execution device. |
+| `--num-images` | integer | `30` | Number of images evaluated per trial. |
+| `--imgsz` | integer | `320` | Detection image size. |
+| `--num-trials` | integer | `3` | Number of repeated correlation trials. |
 
 ### RQ 5: Efficiency (overhead)
 
 Record the time overhead on different models.
 
+```bash
+python run_cases/run_rq5.py \
+  --weights /path/to/yolo11n.pt \
+  --img-dir /path/to/coco/images/val2017 \
+  --csv-file /path/to/wisdom_yolo11n_scores.csv \
+  --out-csv results/rq5/yolo11n_efficiency.csv
+```
+
+Outputs:
+
+- `results/rq5/yolo11n_efficiency.csv`
+
+Flag reference:
+
+| Flag | Values / type | Default | Usage |
+|---|---|---:|---|
+| `--weights` | path | `weights/yolo11n.pt` | Detection checkpoint to evaluate. |
+| `--img-dir` | path | `standalone/data/coco/images/val2017` | Detection image directory. |
+| `--csv-file` | path | `neuron_eval_out/wisdom_yolo11n_scores.csv` | WISDOM neuron-score CSV. |
+| `--out-csv` | path | `results/rq5_yolo11n_efficiency.csv` | Output CSV path. |
+| `--device` | device string | `cuda:0` | Execution device. |
+| `--num-images` | integer | `4` | Number of images used for timing. |
+| `--batch-size` | integer | `2` | Batch size. |
+| `--imgsz` | integer | `320` | Detection image size. |
+| `--wisdom-only` | flag | off | Skip single-method and random baselines and time only the WISDOM path. |
+| `--wisdom-methods` | comma-separated attribution keys | `lgxa,lig` | Consensus method list used for WISDOM timing. |
 
 ### Notes for the Adversarial (attack) methods
 
@@ -300,7 +368,7 @@ python ./fuzz_guide/run_fuzz.py \
       --device 'cuda:0'
 
 # Coverage method guided fuzzing is not used in this script, but can be enabled by setting the --guided flag.
-$ python ./fuzz_guide/run_fuzz.py \
+python ./fuzz_guide/run_fuzz.py \
       --dataset CIFAR10 \
       --model vgg16 \
       --saved-model /torch-deepimportance/models_info/saved_models/vgg16_CIFAR10_whole.pth \
@@ -342,14 +410,14 @@ Other implmentation for the baseline should include:
 - Likelihood Surprise Coverage (LSC) [4]
 - Distance-ratio Surprise Coverage (DSC) [5]
 - Mahalanobis Distance Surprise Coverage (MDSC) [5]
+- DeepImportance [6] (**Main reference**) 
 
 [1] DeepXplore: Automated whitebox testing of deep learning systems, SOSP 2017. <br>
 [2] DeepGauge: Comprehensive and multi granularity testing criteria for gauging the robustness of deep learning systems, ASE 2018. <br>
 [3] Tensorfuzz: Debugging neural networks with coverage-guided fuzzing, ICML 2019. <br>
 [4] Guiding deep learning system testing using surprise adequacy, ICSE 2019. <br>
-[5] Reducing dnn labelling cost using surprise adequacy: An industrial case study for autonomous driving, FSE Industry Track 2020.
-
-Implementation repo: [NeuraL-Coverage](https://github.com/Yuanyuan-Yuan/NeuraL-Coverage/tree/main)
+[5] Reducing dnn labelling cost using surprise adequacy: An industrial case study for autonomous driving, FSE Industry Track 2020. <br>
+[6] Importance-driven deep learning system testing. ICSE 2020.
 
 ## Potential improvement and extensions
 

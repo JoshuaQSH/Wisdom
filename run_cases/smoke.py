@@ -22,9 +22,9 @@ from wisdom.utils.common import get_model
 from wisdom_yolo_train import COCOImageDataset, train_wisdom_yolo
 
 
-DEFAULT_DNN_MODEL = '/scratch/staff/lrr550/Wisdom-writing/Wisdom/models_info/saved_models/lenet_MNIST_whole.pth'
-DEFAULT_DNN_CSV = '/scratch/staff/lrr550/Wisdom-writing/Wisdom/saved_files/pre_csv/lenet_mnist.csv'
-DEFAULT_DATA_ROOT = '/scratch/staff/lrr550/datasets'
+DEFAULT_DNN_MODEL = './models_info/saved_models/lenet_MNIST_whole.pth'
+DEFAULT_DNN_CSV = './saved_files/pre_csv/lenet_mnist.csv'
+DEFAULT_DATA_ROOT = '../../datasets'
 
 
 def _load_top_neurons(csv_file: str, top_m: int = 4, strip_yolo_prefix: bool = False) -> Dict[str, list[int]]:
