@@ -1,13 +1,15 @@
 # core/wisdom_train.py
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Iterable, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-import math
 from tqdm import tqdm
+from PIL import Image
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms
 
 from wisdom.utils.io_cache import save_layer_scores_csv
 from wisdom.utils.detection_loader import detect_head_prefixes as infer_detect_head_prefixes
@@ -31,6 +33,59 @@ class WisdomTrainConfig:
     num_classes: int = 80  # COCO classes for YOLO
 
 
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+
+
+def _resolve_image_paths(image_source: str | Path) -> list[Path]:
+    source = Path(image_source)
+    if source.is_dir():
+        paths = [path for path in sorted(source.iterdir()) if path.suffix.lower() in _IMAGE_EXTENSIONS]
+    elif source.is_file() and source.suffix.lower() == ".txt":
+        paths = []
+        for raw_line in source.read_text().splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            path = Path(line)
+            if not path.is_absolute():
+                path = (source.parent / path).resolve()
+            paths.append(path)
+    elif source.is_file() and source.suffix.lower() in _IMAGE_EXTENSIONS:
+        paths = [source]
+    else:
+        raise FileNotFoundError(f"Unsupported image source: {image_source}")
+    return paths
+
+
+class DetectionImageDataset(Dataset):
+    """Returns unlabeled RGB image tensors from a directory, image list, or single image."""
+
+    def __init__(self, image_source: str, max_images: int | None = None, imgsz: int = 640):
+        self.paths = _resolve_image_paths(image_source)
+        if max_images is not None:
+            self.paths = self.paths[:max_images]
+        self.transform = transforms.Compose([
+            transforms.Resize((imgsz, imgsz)),
+            transforms.ToTensor(),
+        ])
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, idx):
+        img = Image.open(self.paths[idx]).convert("RGB")
+        return self.transform(img),
+
+
+COCOImageDataset = DetectionImageDataset
+
+
+def collate_image_tuples(batch):
+    """Stack single-element image tuples into a single image batch tuple."""
+    imgs = torch.stack([b[0] for b in batch])
+    return (imgs,)
+
+
 # -----------------------------
 # Helper functions
 # -----------------------------
@@ -47,6 +102,14 @@ def _trainable_modules(model: nn.Module) -> Tuple[List[str], List[nn.Module]]:
 
 def _criterion():
     return nn.CrossEntropyLoss()
+
+
+def _emit_training_summary(layer_scores: Dict[str, torch.Tensor], csv_path: str) -> None:
+    print(f"Saved layer scores to {csv_path}")
+    print(f"Layers scored: {len(layer_scores)}")
+    total_scored = sum(t.numel() for t in layer_scores.values())
+    non_zero = sum((t != 0).sum().item() for t in layer_scores.values())
+    print(f"Total neurons: {total_scored}, non-zero scores: {non_zero}")
 
 def _eval_loss(model: nn.Module, x: torch.Tensor, y: torch.Tensor, device: str) -> float:
     """Evaluate classification loss for a batch."""
@@ -674,3 +737,91 @@ class ConsensusWisdom:
             os.remove(checkpoint_path)
         out_csv = save_layer_scores_csv(layer_scores, cfg.out_csv)
         return layer_scores, out_csv
+
+
+def train_wisdom_classification(
+    model: nn.Module,
+    train_loader: DataLoader,
+    out_csv: str,
+    top_m: int = 20,
+    methods: list[str] | None = None,
+    voting_mode: str = "fine-grained",
+    device: str = "cuda:0",
+    final_layer: str | None = None,
+    checkpoint_path: str | None = None,
+    checkpoint_every: int = 50,
+) -> str:
+    """Run WISDOM consensus training on a classification model and save layer scores."""
+    if methods is None:
+        methods = ["lrp", "ldl", "lig"]
+
+    cfg = WisdomTrainConfig(
+        methods=methods,
+        device=device,
+        voting_mode=voting_mode,
+        out_csv=out_csv,
+    )
+    trainer = ConsensusWisdom(model.eval(), device=device)
+    layer_scores, csv_path = trainer.fit(
+        train_loader,
+        cfg,
+        top_m_neurons=top_m,
+        final_layer=final_layer,
+        prune_mode="mask",
+        checkpoint_path=checkpoint_path,
+        checkpoint_every=checkpoint_every,
+    )
+    _emit_training_summary(layer_scores, csv_path)
+    return csv_path
+
+
+def train_wisdom_yolo(
+    weights: str,
+    img_dir: str,
+    out_csv: str,
+    batch_size: int = 4,
+    num_images: int = 100,
+    top_m: int = 20,
+    methods: list[str] | None = None,
+    voting_mode: str = "fine-grained",
+    selection_mode: str = "global",
+    device: str = "cuda:0",
+    imgsz: int = 640,
+    checkpoint_path: str | None = None,
+    checkpoint_every: int = 50,
+) -> str:
+    """Run WISDOM consensus training on a YOLO detection model and save layer scores."""
+    from wisdom.utils.detection_loader import load_detection_model
+
+    if methods is None:
+        methods = ["lgxa", "lig", "lgs"]
+
+    bundle = load_detection_model(weights, device=device)
+    torch_model = bundle.model.eval()
+
+    ds = DetectionImageDataset(img_dir, max_images=num_images, imgsz=imgsz)
+    if len(ds) == 0:
+        raise FileNotFoundError(f"No images found in {img_dir}")
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate_image_tuples)
+
+    cfg = WisdomTrainConfig(
+        methods=methods,
+        device=device,
+        voting_mode=voting_mode,
+        selection_mode=selection_mode,
+        out_csv=out_csv,
+        is_yolo=True,
+        num_classes=bundle.num_classes,
+    )
+
+    trainer = ConsensusWisdom(torch_model, device=device)
+    layer_scores, csv_path = trainer.fit(
+        loader,
+        cfg,
+        top_m_neurons=top_m,
+        prune_mode="mask",
+        checkpoint_path=checkpoint_path,
+        checkpoint_every=checkpoint_every,
+    )
+    _emit_training_summary(layer_scores, csv_path)
+    return csv_path

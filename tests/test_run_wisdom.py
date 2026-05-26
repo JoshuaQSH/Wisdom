@@ -64,9 +64,9 @@ def _base_args(tmp_path, *, impl='wisdom'):
         bo_cluster_methods='KMeans,Birch',
         bo_n_clusters='2,3',
         corr_points=4,
-        end2end=True,
         all_class=True,
         class_iters=False,
+        single_layer=None,
         per_group=None,
         per_layer=False,
         combo_log=False,
@@ -303,7 +303,7 @@ def test_resolve_testing_mode_class_iters_disables_all_class(tmp_path):
     args = _base_args(tmp_path, impl='wisdom')
     args.class_iters = True
     mode = run_wisdom._resolve_testing_mode(args)
-    assert mode == {'end2end': True, 'all_class': False, 'class_iters': True}
+    assert mode == {'all_class': False, 'class_iters': True}
 
 
 def test_resolve_selection_mode_defaults_to_global(tmp_path):
@@ -314,6 +314,19 @@ def test_resolve_selection_mode_defaults_to_global(tmp_path):
         'n_groups': None,
         'label': 'Global',
         'aggregation_label': None,
+    }
+
+
+def test_resolve_selection_mode_single_layer(tmp_path):
+    args = _base_args(tmp_path, impl='wisdom')
+    args.single_layer = 'features.3'
+    mode = run_wisdom._resolve_selection_mode(args)
+    assert mode == {
+        'mode': 'single-layer',
+        'n_groups': None,
+        'label': 'Single-Layer (features.3)',
+        'aggregation_label': None,
+        'layer_name': 'features.3',
     }
 
 
@@ -402,3 +415,90 @@ def test_resolve_selected_neurons_per_layer_filters_layers(tmp_path):
         'model.0.conv': [0],
         'model.1.conv': [1],
     }
+
+
+def test_resolve_selected_neurons_single_layer_normalizes_detection_prefix(tmp_path):
+    args = _base_args(tmp_path, impl='wisdom')
+    args.task = 'detection'
+    args.single_layer = 'yolo_model.model.1.conv'
+    prepared = {
+        'task': 'detection',
+        'csv_path': None,
+        'layer_scores': {
+            'model.0.conv': torch.tensor([0.1, 0.4, 0.2]),
+            'model.1.conv': torch.tensor([0.3, 0.7, 0.5]),
+        },
+        'exclude_last': None,
+    }
+
+    selected = run_wisdom._resolve_selected_neurons(args, prepared, DummyEngine())
+    assert selected == {'model.1.conv': [0, 1, 2]}
+
+
+def test_run_wisdom_class_iters_averages_summary_and_prints_class_scores(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(run_wisdom, '_build_engine', lambda *args, **kwargs: DummyEngine())
+    monkeypatch.setattr(
+        run_wisdom,
+        '_compute_correlation_workflow',
+        lambda args, prepared, engine, selected: (
+            [
+                {
+                    'suite_label': 'class:0',
+                    'suite_name': 'cat',
+                    'suite_size': 3,
+                    'testing_mode': 'class-iters',
+                    'row_type': 'aggregate',
+                    'scope_name': 'overall',
+                    'coverage_rate': 0.2,
+                    'max_coverage': 0.75,
+                    'total_combinations': 4,
+                    'f1_score': 0.5,
+                },
+                {
+                    'suite_label': 'class:1',
+                    'suite_name': 'dog',
+                    'suite_size': 2,
+                    'testing_mode': 'class-iters',
+                    'row_type': 'aggregate',
+                    'scope_name': 'overall',
+                    'coverage_rate': 0.6,
+                    'max_coverage': 0.75,
+                    'total_combinations': 4,
+                    'f1_score': 0.9,
+                },
+            ],
+            1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        run_wisdom,
+        '_prepare_classification',
+        lambda args, csv_path: {
+            'csv_path': str(tmp_path / 'scores.csv'),
+            'eval_loader': DummyLoader(4),
+            'build_loader': DummyLoader(8),
+            'exclude_last': 'fc',
+            'layer_scores': {'layer': torch.tensor([1.0])},
+            'model': object(),
+            'model_path': 'dummy_model.pth',
+            'dataset_name': 'mnist',
+            'task': 'classification',
+        },
+    )
+
+    args = _base_args(tmp_path, impl='wisdom')
+    args.class_iters = True
+    args.all_class = False
+    args.attribution_method = None
+
+    result = run_wisdom.run(args)
+
+    assert result['summary']['coverage_rate'] == 0.4
+    assert result['summary']['f1_score'] == 0.7
+    assert result['summary']['suite_aggregation'] == 'Average across classes'
+    assert result['summary']['suite_coverage_log'].endswith('demo_suite_coverage.log')
+
+    stdout = capsys.readouterr().out
+    assert 'Class Coverage Scores' in stdout
+    assert 'cat' in stdout
+    assert 'dog' in stdout

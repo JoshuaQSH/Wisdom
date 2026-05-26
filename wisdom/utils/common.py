@@ -22,34 +22,6 @@ def stable_selection_hash(selected, impl, cluster_cfg) -> str:
     h.update(repr(cluster_cfg).encode())
     return h.hexdigest()[:16]
         
-# Decide which testing mode is active
-def _select_testing_mode(args) -> dict:
-    # Return a dictionary with boolean values for each mode
-    testing_mode =  {
-        'end2end': bool(args.end2end),
-        'all_class': bool(args.all_class),
-        'class_iters': bool(args.class_iters)
-    }
-    
-    # Build list of active modes with alternative descriptions for False cases
-    mode_descriptions = []
-    if testing_mode['end2end']:
-        mode_descriptions.append('End2End-Testing')
-    else:
-        mode_descriptions.append('Single-Layer-Testing')
-        
-    if testing_mode['all_class']:
-        mode_descriptions.append('All-Class-Testing')
-    else:
-        mode_descriptions.append('Class-Wise-Testing')
-        
-    if testing_mode['class_iters']:
-        mode_descriptions.append('Iterating-All-Class: On')
-    else:
-        mode_descriptions.append('Iterating-All-Class: Off')
-        
-    return testing_mode, mode_descriptions
-
 def convert_tensors(obj):
     """Recursively convert Tensors to lists"""
     if isinstance(obj, torch.Tensor):

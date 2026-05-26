@@ -22,10 +22,14 @@ from run_cases.run_rq2 import (
 )
 from run_cases.support import get_data, resolve_saved_model_path
 from wisdom import (
+    ConsensusWisdom,
+    COCOImageDataset,
     ClusteringConfig,
     run_bo as run_search_bo,
+    train_wisdom_yolo,
     WisdomConfig,
     WisdomIDC,
+    WisdomTrainConfig,
     get_group_names,
     load_groupwise_top_neurons,
     load_layerwise_top_neurons,
@@ -33,13 +37,11 @@ from wisdom import (
 from wisdom.attribution.captum_backend import ATTRS
 from wisdom.clustering.assign import assign_clusters
 from wisdom.core.activation import collect_per_neuron_once
-from wisdom.core.wisdom_train import ConsensusWisdom, WisdomTrainConfig
 from wisdom.utils.common import eval_model_dataloder, get_model, get_trainable_modules_main
 from wisdom.utils.detection_loader import detect_head_prefixes, load_detection_model
 from wisdom.utils.io_cache import read_layer_scores_csv
 from wisdom.utils.visulization import viz_attr, viz_attr_diff, viz_topk_neurons_score
 from wisdom.utils.yolo_wrapper import YOLOWrapper
-from wisdom_yolo_train import COCOImageDataset, train_wisdom_yolo
 
 
 ATTRIBUTION_METHODS = sorted(ATTRS)
@@ -174,13 +176,21 @@ def _resolve_testing_mode(args) -> dict[str, bool]:
     if class_iters:
         all_class = False
     return {
-        'end2end': bool(getattr(args, 'end2end', True)),
         'all_class': all_class,
         'class_iters': class_iters,
     }
 
 
 def _resolve_selection_mode(args) -> dict[str, Any]:
+    single_layer = getattr(args, 'single_layer', None)
+    if single_layer:
+        return {
+            'mode': 'single-layer',
+            'n_groups': None,
+            'label': f'Single-Layer ({single_layer})',
+            'aggregation_label': None,
+            'layer_name': str(single_layer),
+        }
     if getattr(args, 'per_layer', False):
         return {
             'mode': 'per-layer',
@@ -221,10 +231,53 @@ def _filter_selected_layers(prepared, selected: dict[str, list[int]]) -> dict[st
     }
 
 
+def _resolve_requested_layer_name(prepared, requested: str) -> str:
+    raw = str(requested)
+    normalized = raw
+    if prepared.get('task') == 'detection' and raw.startswith('yolo_model.'):
+        normalized = raw[len('yolo_model.'):]
+    available_layers = set(prepared['layer_scores'].keys())
+    if prepared.get('exclude_last'):
+        available_layers.discard(prepared['exclude_last'])
+    if normalized in available_layers:
+        return normalized
+    if raw in available_layers:
+        return raw
+    available_preview = ', '.join(sorted(available_layers)[:10])
+    raise ValueError(
+        f'Layer {requested!r} was not found in the selected layer scores. '
+        f'Available layers include: {available_preview}'
+    )
+
+
+def _select_top_neurons_from_layer(scores: torch.Tensor, top_k: int) -> list[int]:
+    if scores.dim() == 1:
+        flattened = scores.detach().cpu()
+    else:
+        flattened = scores.mean(dim=tuple(range(1, scores.dim()))).detach().cpu()
+    if flattened.numel() == 0:
+        return []
+    take = flattened.numel() if top_k <= 0 else min(int(top_k), int(flattened.numel()))
+    indices = torch.topk(flattened, k=take).indices.tolist()
+    return sorted(int(index) for index in indices)
+
+
 def _resolve_selected_neurons(args, prepared, selector_engine: WisdomIDC) -> dict[str, list[int]]:
     selection_mode = _resolve_selection_mode(args)
     if selection_mode['mode'] == 'global':
         return selector_engine.select_top_neurons_all(prepared['layer_scores'], exclude_last=prepared['exclude_last'])
+    if selection_mode['mode'] == 'single-layer':
+        layer_name = _resolve_requested_layer_name(prepared, selection_mode['layer_name'])
+        selected = {
+            layer_name: _select_top_neurons_from_layer(
+                prepared['layer_scores'][layer_name],
+                args.top_m_neurons,
+            )
+        }
+        filtered = _filter_selected_layers(prepared, selected)
+        if not filtered:
+            raise ValueError(f'No neurons were selected for {selection_mode["label"]} coverage.')
+        return filtered
 
     if not prepared.get('csv_path'):
         raise ValueError('Per-group and per-layer coverage require a resolved neuron-score CSV.')
@@ -278,6 +331,28 @@ def _build_coverage_breakdown_log(
             f'coverage={row["coverage_rate"]:.6f} '
             f'combos={int(row["total_combinations"])} '
             f'max={row["max_coverage"]:.6f}'
+        )
+    lines.append('=' * 88)
+    return '\n'.join(lines)
+
+
+def _build_suite_aggregate_log(suite_rows: list[dict[str, Any]], testing_mode_label: str) -> str:
+    aggregate_rows = [row for row in suite_rows if row.get('row_type', 'aggregate') == 'aggregate']
+    if not aggregate_rows:
+        return ''
+
+    title = 'Class Coverage Scores' if testing_mode_label == 'Class-Iters' else 'Suite Coverage Scores'
+    lines = ['=' * 88, title, '=' * 88]
+    for row in aggregate_rows:
+        suite_display = row.get('suite_name') if testing_mode_label == 'Class-Iters' else row.get('suite_label')
+        if not suite_display:
+            suite_display = row.get('suite_label') or row.get('suite_name') or f"size:{row.get('suite_size', 'unknown')}"
+        lines.append(
+            f'{suite_display:<24} '
+            f'coverage={row["coverage_rate"]:.6f} '
+            f'combos={int(row["total_combinations"])} '
+            f'max={row["max_coverage"]:.6f} '
+            f'f1={row["f1_score"]:.6f}'
         )
     lines.append('=' * 88)
     return '\n'.join(lines)
@@ -671,6 +746,26 @@ def _coverage_objective(args, *, model, build_loader, eval_loader, selected):
     return objective
 
 
+def _summarize_aggregate_rows(aggregate_rows: list[dict[str, Any]], *, class_iters: bool) -> dict[str, float | int]:
+    if not aggregate_rows:
+        raise ValueError('No aggregate suite rows were produced.')
+    if not class_iters:
+        final_row = aggregate_rows[-1]
+        return {
+            'coverage_rate': float(final_row['coverage_rate']),
+            'total_combinations': int(final_row['total_combinations']),
+            'max_coverage': float(final_row['max_coverage']),
+            'f1_score': float(final_row['f1_score']),
+        }
+
+    return {
+        'coverage_rate': float(np.mean([row['coverage_rate'] for row in aggregate_rows])),
+        'total_combinations': int(round(float(np.mean([row['total_combinations'] for row in aggregate_rows])))),
+        'max_coverage': float(np.mean([row['max_coverage'] for row in aggregate_rows])),
+        'f1_score': float(np.mean([row['f1_score'] for row in aggregate_rows])),
+    }
+
+
 def _write_combo_log(engine: WisdomIDC, model, eval_loader: DataLoader, selected: dict[str, list[int]], device: str, out_path: Path):
     seen = Counter()
     rows = []
@@ -760,8 +855,12 @@ def _format_terminal_summary(summary: dict[str, Any], *, summary_csv: Path, summ
         rows.append(('Voting Mode', summary['pretrain_voting_mode']))
     if summary.get('coverage_aggregation'):
         rows.append(('Coverage Aggregation', summary['coverage_aggregation']))
+    if summary.get('suite_aggregation'):
+        rows.append(('Suite Aggregation', summary['suite_aggregation']))
     if summary.get('coverage_breakdown_log'):
         rows.append(('Coverage Breakdown Log', summary['coverage_breakdown_log']))
+    if summary.get('suite_coverage_log'):
+        rows.append(('Suite Coverage Log', summary['suite_coverage_log']))
     if summary.get('bo_result'):
         rows.append(('BO Result', summary['bo_result']))
 
@@ -793,6 +892,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--eval-samples', type=int, default=None, help='Optional evaluation-data subset size. Omit to use the full evaluation dataset.')
     parser.add_argument('--top-m-neurons', type=int, default=10)
     selection_group = parser.add_mutually_exclusive_group()
+    selection_group.add_argument('--single-layer', default=None, help='Compute coverage for one chosen layer name using the top-k neurons within that layer.')
     selection_group.add_argument('--per-group', nargs='?', const=3, type=int, default=None, help='Average coverage across N contiguous layer groups (default: 3 when provided without a value).')
     selection_group.add_argument('--per-layer', action='store_true', help='Average coverage across layers, with top-k neurons selected separately per layer.')
     parser.add_argument('--cluster-method', default='KMeans')
@@ -809,7 +909,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--bo-cluster-methods', default='KMeans,MiniBatchKMeans,Birch')
     parser.add_argument('--bo-n-clusters', default='2,3,4')
     parser.add_argument('--corr-points', type=int, default=5, help='Number of evaluation suite sizes used for F1/coverage correlation.')
-    parser.add_argument('--end2end', action='store_true', default=True, help='End-to-end testing for the whole model.')
     parser.add_argument('--all-class', action='store_true', default=True, help='Evaluate the full evaluation set across all classes.')
     parser.add_argument('--class-iters', action='store_true', help='Iterate over each class separately and compute coverage/F1 correlation across classes.')
     parser.add_argument('--combo-log', action='store_true', help='Write per-sample activated combinations.')
@@ -864,16 +963,16 @@ def run(args) -> dict[str, Any]:
     selected = engine.fit_selected(prepared['build_loader'], selected, device=args.device)
     suite_rows, pearson_correlation = _compute_correlation_workflow(args, prepared, engine, selected)
     aggregate_rows = [row for row in suite_rows if row.get('row_type', 'aggregate') == 'aggregate']
-    final_row = aggregate_rows[-1]
-    coverage_rate = final_row['coverage_rate']
-    total_combinations = final_row['total_combinations']
-    max_coverage = final_row['max_coverage']
-    final_f1 = final_row['f1_score']
     build_samples_used = _loader_sample_count(prepared['build_loader'], args.build_samples)
     eval_samples_used = _loader_sample_count(prepared['eval_loader'], args.eval_samples)
     methods = _resolve_methods(args, task)
     testing_mode = _resolve_testing_mode(args)
     testing_mode_label = 'Class-Iters' if testing_mode['class_iters'] else 'All-Class'
+    aggregated_metrics = _summarize_aggregate_rows(aggregate_rows, class_iters=testing_mode['class_iters'])
+    coverage_rate = float(aggregated_metrics['coverage_rate'])
+    total_combinations = int(aggregated_metrics['total_combinations'])
+    max_coverage = float(aggregated_metrics['max_coverage'])
+    final_f1 = float(aggregated_metrics['f1_score'])
     attribution_label = 'WISDOM' if args.impl == 'wisdom' else methods[0]
 
     summary = {
@@ -885,6 +984,7 @@ def run(args) -> dict[str, Any]:
         'pretrain_voting_mode': args.voting_mode if args.impl == 'wisdom' else None,
         'testing_mode': testing_mode,
         'testing_mode_label': testing_mode_label,
+        'suite_aggregation': 'Average across classes' if testing_mode['class_iters'] else 'Largest evaluation suite',
         'selection_mode': selection_mode['mode'],
         'selection_mode_label': selection_mode['label'],
         'coverage_aggregation': selection_mode['aggregation_label'],
@@ -917,6 +1017,12 @@ def run(args) -> dict[str, Any]:
         breakdown_path.write_text(breakdown_log + '\n')
         summary['coverage_breakdown_log'] = str(breakdown_path)
 
+    suite_aggregate_log = _build_suite_aggregate_log(suite_rows, testing_mode_label)
+    if suite_aggregate_log:
+        suite_aggregate_path = out_dir / f'{args.run_name}_suite_coverage.log'
+        suite_aggregate_path.write_text(suite_aggregate_log + '\n')
+        summary['suite_coverage_log'] = str(suite_aggregate_path)
+
     if args.combo_log:
         combo_log, combo_counts, unique_combos = _write_combo_log(
             engine,
@@ -945,6 +1051,8 @@ def run(args) -> dict[str, Any]:
     summary_json.write_text(json.dumps(summary, indent=2))
 
     print(_format_terminal_summary(summary, summary_csv=summary_csv, summary_json=summary_json))
+    if testing_mode['class_iters'] and suite_aggregate_log:
+        print(suite_aggregate_log)
     if breakdown_log:
         print(breakdown_log)
     return {

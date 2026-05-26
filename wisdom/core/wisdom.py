@@ -290,7 +290,7 @@ class WisdomIDC:
         }
 
     def _scope_keys(self, selected: Dict[str, List[int]]) -> Dict[str, List[str]]:
-        if self.cfg.selection_mode == 'per-layer':
+        if self.cfg.selection_mode in {'per-layer', 'single-layer'}:
             return {
                 layer_name: [f'{layer_name}:{index}' for index in indices]
                 for layer_name, indices in selected.items()

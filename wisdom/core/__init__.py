@@ -12,17 +12,30 @@ from .wisdom import (
     split_selected_by_group,
     split_selected_by_layer,
 )
-from .wisdom_train import ConsensusWisdom, WisdomTrainConfig
+from .wisdom_train import (
+    COCOImageDataset,
+    DetectionImageDataset,
+    collate_image_tuples,
+    ConsensusWisdom,
+    train_wisdom_classification,
+    train_wisdom_yolo,
+    WisdomTrainConfig,
+)
 
 __all__ = [
     'build_layer_groups',
+    'COCOImageDataset',
+    'DetectionImageDataset',
     'ClusteringConfig',
+    'collate_image_tuples',
     'ConsensusWisdom',
     'get_group_names',
     'load_groupwise_top_neurons',
     'load_layerwise_top_neurons',
     'split_selected_by_group',
     'split_selected_by_layer',
+    'train_wisdom_classification',
+    'train_wisdom_yolo',
     'WisdomConfig',
     'WisdomIDC',
     'WisdomTrainConfig',
