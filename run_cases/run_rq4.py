@@ -47,21 +47,17 @@ SUITE_SIZES = [10, 50, 100, 200]
 
 
 # ── Pielou's evenness ─────────────────────────────────────────────
-def pielou_evenness(predictions: List[int]) -> float:
-    """
-    J' = H' / ln(S)
-    H' = -Σ(p_i * ln(p_i))  (Shannon entropy)
-    S  = number of unique classes observed
-    """
+def pielou_evenness(predictions: List[int], num_classes: int | None = None) -> float:
+    """Pielou evenness normalized by the task's class count."""
     if not predictions:
         return 0.0
     counts = Counter(predictions)
-    S = len(counts)
-    if S <= 1:
-        return 1.0
+    class_count = int(num_classes or len(counts))
+    if class_count <= 1:
+        return 0.0
     N = len(predictions)
     H = -sum((c / N) * math.log(c / N) for c in counts.values())
-    return H / math.log(S)
+    return H / math.log(class_count)
 
 
 # ── Coverage metrics ───────────────────────────────────────────────
@@ -184,7 +180,7 @@ def run_rq4(
 
             # Diversity (Pielou's evenness)
             preds = get_yolo_predictions(torch_model, suite, device, num_classes=bundle.num_classes)
-            J = pielou_evenness(preds)
+            J = pielou_evenness(preds, num_classes=bundle.num_classes)
 
             # WISDOM coverage
             w_cov = wisdom_coverage(torch_model, suite, device, top_neurons)

@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--data", default="standalone/data/coco128.yaml", help="Dataset YAML whose train entry resolves the image source.")
     p.add_argument("--img-dir", default=None, help="Override image source: directory, txt list, or single image path.")
     p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--num-workers", type=int, default=0, help="DataLoader workers for image decoding")
     p.add_argument("--num-images", type=int, default=100, help="Max images to use")
     p.add_argument("--top-m", type=int, default=20, help="Top-M neurons per method")
     p.add_argument("--methods", nargs="+", default=["lgxa", "lig", "lgs"])
@@ -56,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Path to .pt checkpoint file for resume support")
     p.add_argument("--checkpoint-every", type=int, default=50,
                    help="Save checkpoint every N batches (default 50)")
+    p.add_argument(
+        "--method-out-csv",
+        nargs="*",
+        default=[],
+        help="Optional method-level CSV outputs in method=path form.",
+    )
     return p
 
 
@@ -76,9 +83,23 @@ def parse_args():
     return build_parser().parse_args()
 
 
+def parse_method_out_csvs(items: list[str]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for item in items:
+        if "=" not in item:
+            raise ValueError(f"Invalid --method-out-csv value '{item}'. Expected method=path.")
+        method, path = item.split("=", 1)
+        method = method.strip().lower()
+        if not method:
+            raise ValueError(f"Invalid --method-out-csv value '{item}'. Empty method.")
+        mapping[method] = path
+    return mapping
+
+
 def main() -> str:
     args = parse_args()
     image_source = _resolve_image_source(args)
+    method_out_csvs = parse_method_out_csvs(args.method_out_csv)
 
     csv_path = train_wisdom_yolo(
         weights=args.weights,
@@ -94,6 +115,8 @@ def main() -> str:
         imgsz=args.imgsz,
         checkpoint_path=args.checkpoint,
         checkpoint_every=args.checkpoint_every,
+        method_out_csvs=method_out_csvs or None,
+        num_workers=args.num_workers,
     )
     print(f"\nDone. CSV: {csv_path}")
     return csv_path

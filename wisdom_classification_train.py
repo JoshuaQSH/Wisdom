@@ -13,7 +13,7 @@ import argparse
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 
 from run_cases.support import get_data, resolve_saved_model_path
@@ -78,6 +78,30 @@ def _load_legacy_torch_model(model_path: str):
     return model.eval(), str(model_file)
 
 
+def _parse_method_csvs(items: list[str] | None) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for item in items or []:
+        if "=" not in item:
+            raise ValueError(f"Invalid --method-out-csv value '{item}'. Expected method=path.")
+        method, path = item.split("=", 1)
+        method = method.strip().lower()
+        if not method:
+            raise ValueError(f"Invalid --method-out-csv value '{item}'. Empty method.")
+        mapping[method] = path
+    return mapping
+
+
+def _read_index_file(path: str | None) -> list[int] | None:
+    if not path:
+        return None
+    indices: list[int] = []
+    for raw in Path(path).read_text().splitlines():
+        line = raw.strip()
+        if line:
+            indices.append(int(line))
+    return indices
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="WISDOM consensus training for classification models")
     parser.add_argument("--model-path", required=True, help="Classification .pth checkpoint")
@@ -108,6 +132,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default=_default_device())
     parser.add_argument("--checkpoint", default=None, help="Path to .pt checkpoint file for resume support")
     parser.add_argument("--checkpoint-every", type=int, default=50, help="Save checkpoint every N batches")
+    parser.add_argument("--index-file", default=None, help="Optional newline-delimited dataset indices for sharded runs.")
+    parser.add_argument(
+        "--method-out-csv",
+        nargs="*",
+        default=[],
+        help="Optional method-level CSV outputs in method=path form.",
+    )
     return parser
 
 
@@ -123,8 +154,13 @@ def main() -> str:
             args.batch_size,
             args.data_path,
         )
+        indices = _read_index_file(args.index_file)
+        if indices is not None:
+            train_dataset = Subset(train_dataset, indices)
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
     else:
+        if args.index_file:
+            raise ValueError("--index-file is only supported for packaged datasets.")
         train_loader = _build_imagefolder_loader(
             root=args.imagefolder_root,
             batch_size=args.batch_size,
@@ -144,6 +180,7 @@ def main() -> str:
         final_layer=final_layer,
         checkpoint_path=args.checkpoint,
         checkpoint_every=args.checkpoint_every,
+        method_out_csvs=_parse_method_csvs(args.method_out_csv),
     )
     print(f"\nDone. CSV: {csv_path}")
     return csv_path

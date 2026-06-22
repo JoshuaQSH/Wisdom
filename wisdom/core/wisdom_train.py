@@ -28,6 +28,7 @@ class WisdomTrainConfig:
     selection_mode: str = "global"  # "global" | "per-group"
     pruning_augmentations: Optional[List[Dict]] = None
     out_csv: Optional[str] = None
+    method_out_csvs: Optional[Dict[str, str]] = None
     # YOLO-specific: when True, use detection surrogate loss instead of CE
     is_yolo: bool = False
     num_classes: int = 80  # COCO classes for YOLO
@@ -73,7 +74,8 @@ class DetectionImageDataset(Dataset):
         return len(self.paths)
 
     def __getitem__(self, idx):
-        img = Image.open(self.paths[idx]).convert("RGB")
+        with Image.open(self.paths[idx]) as img:
+            img = img.convert("RGB")
         return self.transform(img),
 
 
@@ -608,6 +610,7 @@ class ConsensusWisdom:
             wrapper_names, wrapper_mods = _trainable_modules(wrapper)
 
         layer_scores: Dict[str, torch.Tensor] = {}
+        method_layer_scores: Dict[str, Dict[str, torch.Tensor]] = {}
         init_done = False
 
         # Checkpoint resume
@@ -615,6 +618,10 @@ class ConsensusWisdom:
         if checkpoint_path and os.path.isfile(checkpoint_path):
             ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             layer_scores = {k: v.clone() for k, v in ckpt["layer_scores"].items()}
+            method_layer_scores = {
+                method: {k: v.clone() for k, v in scores.items()}
+                for method, scores in ckpt.get("method_layer_scores", {}).items()
+            }
             start_batch = ckpt["batch_idx"] + 1
             init_done = bool(layer_scores)
             print(f"[WISDOM] Resuming from checkpoint batch {start_batch}")
@@ -705,7 +712,52 @@ class ConsensusWisdom:
                         layer_scores, self.trainable_names, self.trainable_mods,
                         excluded_layer=final_layer,
                     )
+                if cfg.method_out_csvs:
+                    for method in cfg.methods:
+                        if method not in cfg.method_out_csvs:
+                            continue
+                        if cfg.is_yolo:
+                            method_layer_scores[method] = _voting_init(
+                                {},
+                                wrapper_names,
+                                wrapper_mods,
+                                excluded_layer=final_layer,
+                                excluded_prefixes=detect_head_prefix_list,
+                            )
+                        else:
+                            method_layer_scores[method] = _voting_init(
+                                {},
+                                self.trainable_names,
+                                self.trainable_mods,
+                                excluded_layer=final_layer,
+                            )
                 init_done = True
+
+            if cfg.method_out_csvs:
+                for method in cfg.methods:
+                    if method not in cfg.method_out_csvs or method in method_layer_scores:
+                        continue
+                    if cfg.is_yolo:
+                        method_layer_scores[method] = _voting_init(
+                            {},
+                            wrapper_names,
+                            wrapper_mods,
+                            excluded_layer=final_layer,
+                            excluded_prefixes=detect_head_prefix_list,
+                        )
+                    else:
+                        method_layer_scores[method] = _voting_init(
+                            {},
+                            self.trainable_names,
+                            self.trainable_mods,
+                            excluded_layer=final_layer,
+                        )
+                for method, triplets in important_neurons_dict.items():
+                    if method not in method_layer_scores:
+                        continue
+                    ranked_triplets = sorted(triplets, key=lambda t: t[1], reverse=True)
+                    layer_index_pairs = [(layer, idx) for (layer, _score, idx) in ranked_triplets]
+                    _voting_neurons(layer_index_pairs, method_layer_scores[method])
 
             # 4) Vote according to mode
             if cfg.voting_mode == "coarse":
@@ -727,7 +779,11 @@ class ConsensusWisdom:
             # Periodic checkpoint
             if checkpoint_path and (batch_idx + 1) % checkpoint_every == 0:
                 torch.save(
-                    {"layer_scores": layer_scores, "batch_idx": batch_idx},
+                    {
+                        "layer_scores": layer_scores,
+                        "method_layer_scores": method_layer_scores,
+                        "batch_idx": batch_idx,
+                    },
                     checkpoint_path,
                 )
 
@@ -736,6 +792,10 @@ class ConsensusWisdom:
         if checkpoint_path and os.path.isfile(checkpoint_path):
             os.remove(checkpoint_path)
         out_csv = save_layer_scores_csv(layer_scores, cfg.out_csv)
+        if cfg.method_out_csvs:
+            for method, csv_path in cfg.method_out_csvs.items():
+                if method in method_layer_scores:
+                    save_layer_scores_csv(method_layer_scores[method], csv_path)
         return layer_scores, out_csv
 
 
@@ -750,6 +810,7 @@ def train_wisdom_classification(
     final_layer: str | None = None,
     checkpoint_path: str | None = None,
     checkpoint_every: int = 50,
+    method_out_csvs: dict[str, str] | None = None,
 ) -> str:
     """Run WISDOM consensus training on a classification model and save layer scores."""
     if methods is None:
@@ -760,6 +821,7 @@ def train_wisdom_classification(
         device=device,
         voting_mode=voting_mode,
         out_csv=out_csv,
+        method_out_csvs=method_out_csvs,
     )
     trainer = ConsensusWisdom(model.eval(), device=device)
     layer_scores, csv_path = trainer.fit(
@@ -789,6 +851,8 @@ def train_wisdom_yolo(
     imgsz: int = 640,
     checkpoint_path: str | None = None,
     checkpoint_every: int = 50,
+    method_out_csvs: dict[str, str] | None = None,
+    num_workers: int = 0,
 ) -> str:
     """Run WISDOM consensus training on a YOLO detection model and save layer scores."""
     from wisdom.utils.detection_loader import load_detection_model
@@ -802,7 +866,16 @@ def train_wisdom_yolo(
     ds = DetectionImageDataset(img_dir, max_images=num_images, imgsz=imgsz)
     if len(ds) == 0:
         raise FileNotFoundError(f"No images found in {img_dir}")
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate_image_tuples)
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "collate_fn": collate_image_tuples,
+        "num_workers": max(0, int(num_workers)),
+        "pin_memory": str(device).startswith("cuda"),
+    }
+    if loader_kwargs["num_workers"] > 0:
+        loader_kwargs["persistent_workers"] = True
+    loader = DataLoader(ds, **loader_kwargs)
 
     cfg = WisdomTrainConfig(
         methods=methods,
@@ -810,6 +883,7 @@ def train_wisdom_yolo(
         voting_mode=voting_mode,
         selection_mode=selection_mode,
         out_csv=out_csv,
+        method_out_csvs=method_out_csvs,
         is_yolo=True,
         num_classes=bundle.num_classes,
     )

@@ -67,6 +67,7 @@ class COCOLabeledDataset(Dataset):
         imgsz: int = 320,
         sample_mode: str = "first",
         seed: Optional[int] = None,
+        cache_images: bool = False,
     ):
         from torchvision import transforms
 
@@ -99,11 +100,22 @@ class COCOLabeledDataset(Dataset):
                 transforms.ToTensor(),
             ]
         )
+        self._cache = None
+        if cache_images:
+            self._cache = []
+            for img_path, label_path in self.pairs:
+                from PIL import Image
+
+                img = Image.open(img_path).convert("RGB")
+                self._cache.append((self.transform(img), self._parse_labels(label_path)))
 
     def __len__(self):
         return len(self.pairs)
 
     def __getitem__(self, idx):
+        if self._cache is not None:
+            return self._cache[idx]
+
         from PIL import Image
 
         img_path, label_path = self.pairs[idx]
@@ -414,6 +426,8 @@ def run_rq1(
     sample_mode: str = "auto",
     include_random: bool = True,
     eval_map: bool = False,
+    num_workers: int = 0,
+    cache_images: bool = False,
 ) -> Tuple[str, str]:
     """Run RQ1 experiment. Returns (relevance_csv_path, acc_drop_csv_path)."""
     if num_runs < 1:
@@ -490,12 +504,15 @@ def run_rq1(
             imgsz=imgsz,
             sample_mode=effective_sample_mode,
             seed=run_seed,
+            cache_images=cache_images,
         )
         labeled_loader = DataLoader(
             labeled_ds,
             batch_size=batch_size,
             shuffle=False,
             collate_fn=_collate_labeled,
+            num_workers=num_workers,
+            pin_memory=device.startswith("cuda"),
         )
 
         subset_ctx = tempfile.TemporaryDirectory(prefix=f"rq1_val_run{run_id}_") if eval_map else nullcontext(None)
@@ -744,6 +761,12 @@ def parse_args():
         action="store_true",
         help="Also compute mAP50 and mAP50-95 drops via Ultralytics val().",
     )
+    p.add_argument("--num-workers", type=int, default=0, help="DataLoader workers for full RQ1 evaluation.")
+    p.add_argument(
+        "--cache-images",
+        action="store_true",
+        help="Cache transformed evaluation images in RAM for repeated full-dataset passes.",
+    )
     return p.parse_args()
 
 
@@ -781,4 +804,6 @@ if __name__ == "__main__":
         sample_mode=args.sample_mode,
         include_random=not args.no_random,
         eval_map=args.eval_map,
+        num_workers=args.num_workers,
+        cache_images=args.cache_images,
     )

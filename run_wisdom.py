@@ -580,7 +580,7 @@ def _pearson_correlation(xs: list[float], ys: list[float]) -> float:
         return 0.0
     x = np.asarray(xs, dtype=np.float64)
     y = np.asarray(ys, dtype=np.float64)
-    if np.allclose(x, x[0]) or np.allclose(y, y[0]):
+    if np.ptp(x) == 0.0 or np.ptp(y) == 0.0:
         return 0.0
     corr = float(np.corrcoef(x, y)[0, 1])
     if not np.isfinite(corr):
