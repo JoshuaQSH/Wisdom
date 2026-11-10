@@ -5,6 +5,7 @@ A pytorch version for Deepimportance (test version). [TensorFlow version for Dee
 For the paper, please refer [HERE](https://zenodo.org/records/3628024).
 
 > God, grant me the serenity to accept the things I cannot change, courage to change the things I can and the WISDOM to know the difference.
+>
 > The Serenity Prayer (Reinhold Niebuhr, 1892-1971)
 
 ## Prerequest
