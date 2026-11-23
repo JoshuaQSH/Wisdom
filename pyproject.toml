@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wisdom"
+version = "0.1.0"
+description = "WISDOM is a PyTorch-based library for importance-driven deep neural networks system testing. It implements both the original IDC (DeepImportance) and an enhanced WISDOM pipeline with flexible attribution and clustering."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Shenghao Qiu" }]
+license = "Apache-2.0"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+        "torch>=2.1",
+        "torchvision>=0.16",
+        "scikit-learn",
+        "numpy>=1.24",
+        "tqdm",
+        "pandas",
+        "captum",
+        "pillow>=12.3.0",
+        "scipy>=1.15.3",
+        "matplotlib>=3.10.9",
+        "pyyaml>=6.0.3",
+        "ultralytics>=8.4.137,<8.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/JoshuaQSH/Wisdom"
+
+[project.optional-dependencies]
+bo = [
+    "botorch>=0.16.1",
+]
+
+[tool.setuptools]
+include-package-data = true
+py-modules = [
+    "convert_torchvision_dataset",
+    "run_wisdom",
+    "wisdom_classification_train",
+    "wisdom_yolo_train",
+    "wisdom_pose_train",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wisdom*", "models_info", "models_info.trt_pose*"]
+exclude = ["wisdom_package*", "tests*", "models_info.models_cv*", "models_info.train_from_scratch*"]
+
+[tool.setuptools.package-data]
+"models_info.trt_pose" = ["LICENSE.md"]
+
+[tool.pytest.ini_options]
+markers = [
+    "bo: exercises the real optional BoTorch backend",
+    "local_trt_pose: exercises the adjacent NVIDIA trt_pose source tree",
+    "ultralytics: exercises the Ultralytics detection integration",
+    "slow: CPU-heavy integration coverage",
+]
+
+[dependency-groups]
+test = [
+    "pytest>=9.1.1",
+]

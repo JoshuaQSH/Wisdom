@@ -11,4 +11,8 @@ captum
 onnx
 pyyaml
 opencv-python
-kagglehub
+torchattacks
+pyflann-py3
+torch-fidelity
+torchmetrics
+botorch

@@ -10,11 +10,14 @@ import torchvision.transforms as transforms
 
 import os
 import argparse
-
-from models import *
 from utils import progress_bar, Logger
-import time
 
+import sys
+sys.path.append('..')  # Add parent directory to path
+
+# from models import *
+from models_cv import *
+import time
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
@@ -127,7 +130,6 @@ def save_model(model, model_name):
     
 def load_model(model, model_path):
     model.load_state_dict(torch.load(model_path))
-    breakpoint()
     model.eval()  # Set the model to evaluation mode
     print("Model loaded from", model_path)
     return model
