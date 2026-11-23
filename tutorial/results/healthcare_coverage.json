@@ -1,0 +1,72 @@
+{
+  "dataset": "healthcare",
+  "model": "healthcare_dnn.pt",
+  "target": "stress_index",
+  "testing_mode": "cross-layer",
+  "attribution": "WISDOM",
+  "selection": "top-k per hidden layer",
+  "top_k_per_layer": 3,
+  "selected_layers": 3,
+  "train_rows": 1919,
+  "test_rows": 771,
+  "train_participants": 15,
+  "test_participants": 4,
+  "cluster_method": "KMeans",
+  "requested_clusters_per_neuron": 2,
+  "coverage_rate": 0.060546875,
+  "total_combinations": 512,
+  "max_coverage": 1.0,
+  "monitored_neurons": 9,
+  "acc_at_5": 0.4345006485084306,
+  "acc_at_10": 0.8184176394293126,
+  "suite": "held-out participant split",
+  "weights_path": "tutorial/weights/healthcare_dnn.pt",
+  "test_data_path": "tutorial/healthcare_datasets/ai4work_healthcare_completed.csv",
+  "wisdom_csv": "tutorial/importances/healthcare_wisdom.csv",
+  "seed": 42,
+  "feature_names": [
+    "minHr",
+    "maxHr",
+    "avgHr",
+    "medianHr"
+  ],
+  "consensus_methods": [
+    "ldl",
+    "lig",
+    "lgxa"
+  ],
+  "voting_mode": "fine-grained",
+  "selected_neurons": {
+    "0": [
+      0,
+      31,
+      32
+    ],
+    "3": [
+      2,
+      11,
+      28
+    ],
+    "6": [
+      3,
+      6,
+      9
+    ]
+  },
+  "scope_details": {
+    "overall": {
+      "coverage_rate": 0.060546875,
+      "total_combinations": 512,
+      "max_coverage": 1.0,
+      "monitored_neurons": 9
+    }
+  },
+  "prediction_metrics": {
+    "acc_at_5": 0.4345006485084306,
+    "acc_at_10": 0.8184176394293126,
+    "nominal_interval_coverage": 0.9,
+    "mean_interval_width": 26.155963897705078,
+    "midpoint_mae": 7.466184934235609,
+    "mean_pinball_loss": 1.2220032660133373
+  }
+}

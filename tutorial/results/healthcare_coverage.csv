@@ -1,0 +1,2 @@
+dataset,model,target,testing_mode,attribution,selection,top_k_per_layer,selected_layers,train_rows,test_rows,train_participants,test_participants,cluster_method,requested_clusters_per_neuron,coverage_rate,total_combinations,max_coverage,monitored_neurons,acc_at_5,acc_at_10
+healthcare,healthcare_dnn.pt,stress_index,cross-layer,WISDOM,top-k per hidden layer,3,3,1919,771,15,4,KMeans,2,0.060546875,512,1.0,9,0.4345006485084306,0.8184176394293126
