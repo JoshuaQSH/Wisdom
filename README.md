@@ -9,18 +9,14 @@ testing of classification, YOLO detection and pose-estimation (optional) models.
 
 ## Prerequisites
 
-Use the uv-managed `pyproject.toml` / `uv.lock` environment below for current
-WISDOM development and testing. `requirements.txt` and `requirements_venv.yaml`
-are legacy environment snapshots, not the authoritative package dependencies.
+Use the uv-managed `pyproject.toml` / `uv.lock` environment below for WISDOM
+development and testing. `requirements.txt` is a legacy environment snapshot.
 
 Use conda or pyvenv to build a virtual environment：
 
 ```shell
 # Legacy requirements (prefer uv sync below)
 python -m pip install -r requirements.txt
-
-# (Deprecated) If you are using anaconda or miniconda virtual environment, do:
-conda env create -f requirements_venv.yaml
 ```
 
 ### How to get `uv`
